@@ -54,8 +54,7 @@ async def _read_json_dict(request):
 
 
 async def _scan_async(force=False):
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, lambda: local_index.scan(force=force))
+    return await local_index.run_bg(local_index.scan, force)
 
 
 def _annotate_version(version, index):
@@ -121,12 +120,13 @@ async def set_config(request):
             partial[key] = str(body.get(key) or "").strip()
     if "api_key" in body:
         partial["api_key"] = str(body.get("api_key") or "").strip()
-    for key in ("nsfw", "max_concurrent"):
+    for key, (lo, hi) in (("nsfw", (0, 2)), ("max_concurrent", (1, 4))):
         if key in body:
             try:
-                partial[key] = int(body.get(key))
+                value = int(body.get(key))
             except (TypeError, ValueError):
                 return _json_error(f"{key} 必须是整数", 400)
+            partial[key] = max(lo, min(hi, value))
     for key in ("proxy_images", "verify_hash"):
         if key in body:
             partial[key] = bool(body.get(key))
@@ -219,7 +219,7 @@ async def image_proxy(request):
         raise web.HTTPFound(url)
     if not url.startswith(("http://", "https://")) or not civitai_client.host_allowed_image(url):
         return _json_error("不允许的图片地址", 400)
-    timeout = aiohttp.ClientTimeout(total=30, connect=10)
+    timeout = aiohttp.ClientTimeout(total=15, connect=8)  # 单跳 15s,5 跳留在会话退役窗口内
     current = url
     try:
         # 逐跳手动跟随重定向,每一跳(含跳转后)都过域名白名单,鉴权头按目标主机自动决定
@@ -252,7 +252,8 @@ async def destinations(request):
     ctype = request.query.get("type", "Checkpoint")
     keys = local_index.TYPE_TO_FOLDERS.get(ctype)
     if keys is None:
-        return _json_error(f"未知的模型类型: {ctype}", 400)
+        # 未映射类型(Other/Poses 等)回退全部注册目录,保证仍可下载
+        keys = local_index.categories()
     out = []
     seen_roots = set()
     for key in keys:

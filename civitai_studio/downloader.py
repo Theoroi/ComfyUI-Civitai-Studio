@@ -76,9 +76,11 @@ def _unique_dest(path):
     return path + f".{int(time.time())}.bin"
 
 
-def _active_same_version(version_id):
+def _active_same_task(version_id, file_index):
     return any(
-        str(j.get("version_id")) == str(version_id) and j.get("status") in ACTIVE_STATUSES
+        str(j.get("version_id")) == str(version_id)
+        and int(j.get("file_index", 0) or 0) == int(file_index)
+        and j.get("status") in ACTIVE_STATUSES
         for j in _jobs.values()
     )
 
@@ -91,8 +93,9 @@ def enqueue(payload):
     version_id = payload.get("version_id")
     if not version_id:
         raise ValueError("缺少 version_id")
-    if _active_same_version(version_id):
-        raise ValueError("该模型版本已在下载队列中,请勿重复添加")
+    file_index = max(0, int(payload.get("file_index", 0) or 0))
+    if _active_same_task(version_id, file_index):
+        raise ValueError("该模型版本的同名文件已在下载队列中,请勿重复添加")
     root = _validate_root(payload.get("root"))
     if root is None:
         raise ValueError("目标目录不在已注册的模型目录内")
@@ -113,7 +116,7 @@ def enqueue(payload):
         "type": payload.get("type") or "",
         "base_model": payload.get("base_model") or "",
         "category": payload.get("category") or "",
-        "file_index": max(0, int(payload.get("file_index", 0) or 0)),
+        "file_index": file_index,
         "filename": filename,
         "subfolder": sub,
         "root": root,
@@ -155,29 +158,53 @@ def _trim_finished():
         _jobs.pop(jid, None)
 
 
+_slot_sem = None
+_slot_want = None
+
+
+def _slot():
+    """并发闸门:worker 池常驻,实际并发由信号量实时对齐 max_concurrent 配置."""
+    global _slot_sem, _slot_want
+    try:
+        want = int(config.load().get("max_concurrent", 1))
+    except (TypeError, ValueError):
+        want = 1
+    want = max(1, min(4, want))
+    global _slot_sem, _slot_want
+    if _slot_sem is None or _slot_want != want:
+        _slot_sem = asyncio.Semaphore(want)
+        _slot_want = want
+    return _slot_sem
+
+
 async def _worker():
     while True:
         job_id = await _queue.get()
         job = _jobs.get(job_id)
         if job is None or job["status"] == "cancelled":
             continue
-        job["status"] = "downloading"
-        try:
-            await _run_job(job)
-        except asyncio.CancelledError:
-            job["status"] = "cancelled"
-        except civitai_client.CivitaiError as e:
-            job["status"] = "error"
-            job["error"] = str(e)
-        except (asyncio.TimeoutError, aiohttp.ClientError) as e:
-            job["status"] = "error"
-            job["error"] = civitai_client.net_error_message(e)
-        except Exception as e:
-            job["status"] = "error"
-            job["error"] = str(e)
-        finally:
-            _cancel_flags.discard(job_id)
-            job["finished"] = time.time()
+        async with _slot():
+            if job["status"] == "cancelled":
+                _cancel_flags.discard(job_id)
+                job["finished"] = time.time()
+                continue
+            job["status"] = "downloading"
+            try:
+                await _run_job(job)
+            except asyncio.CancelledError:
+                job["status"] = "cancelled"
+            except civitai_client.CivitaiError as e:
+                job["status"] = "error"
+                job["error"] = str(e)
+            except (asyncio.TimeoutError, aiohttp.ClientError) as e:
+                job["status"] = "error"
+                job["error"] = civitai_client.net_error_message(e)
+            except Exception as e:
+                job["status"] = "error"
+                job["error"] = str(e)
+            finally:
+                _cancel_flags.discard(job_id)
+                job["finished"] = time.time()
 
 
 def _sha256_file(path):
@@ -257,8 +284,8 @@ async def _run_job(job):
         append_mode = resp.status == 206 and resume_from > 0
         if append_mode:
             start = _content_range_start(resp)
-            if start is not None and start != resume_from:
-                # 服务器给的续传起点与本地不符,放弃续传从头下
+            if start is None or start != resume_from:
+                # 起点缺失/不符都不盲续:206 而无 Content-Range 同样从头下
                 append_mode = False
         if append_mode:
             received = resume_from
@@ -287,7 +314,7 @@ async def _run_job(job):
             raise asyncio.CancelledError()
         job["status"] = "verifying"
         loop = asyncio.get_running_loop()
-        actual = await loop.run_in_executor(None, _sha256_file, tmp)
+        actual = await loop.run_in_executor(local_index._EXECUTOR, _sha256_file, tmp)
         if job["id"] in _cancel_flags:
             try:
                 os.remove(tmp)
@@ -304,7 +331,13 @@ async def _run_job(job):
     else:
         job["verified"] = None
 
-    # 目标名可能被并发任务占掉,落盘前最后再排重
+    # 目标名可能被并发任务占掉,落盘前最后再排重;此时再响应一次取消
+    if job["id"] in _cancel_flags:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise asyncio.CancelledError()
     final = _unique_dest(dest)
     os.replace(tmp, final)
     job["dest"] = final
@@ -326,7 +359,7 @@ async def _run_job(job):
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
     }):
         job["warning"] = "模型已下载,但写入 .civitai.json 元数据失败(权限/磁盘?),本地库将无法关联该版本"
-    asyncio.get_running_loop().run_in_executor(None, local_index.scan, True)
+    local_index.schedule_rescan()  # 去抖合并:2s 窗口内多个完成只触发一次重扫
 
 
 def cancel(job_id):

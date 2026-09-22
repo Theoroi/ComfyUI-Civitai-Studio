@@ -4,12 +4,21 @@
 或文件名与 Civitai 文件名一致。
 """
 
+import asyncio
 import json
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import folder_paths
+
+# 专用线程池:scan/sha256 等重活不挤占 ComfyUI 共享默认线程池
+_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="civitai-studio")
+
+
+def run_bg(fn, *args):
+    return asyncio.get_running_loop().run_in_executor(_EXECUTOR, fn, *args)
 
 # Civitai 模型类型 -> ComfyUI 模型目录 key(按优先级排列)
 TYPE_TO_FOLDERS = {
@@ -31,7 +40,7 @@ MAX_FILES = 20000
 SCAN_TTL = 30.0
 
 _lock = threading.Lock()
-_cache = {"models": [], "by_version": {}, "by_name": {}, "by_id": {}, "ts": 0.0, "truncated": False}
+_cache = None  # 索引快照(dict):整体原子替换,读端拿到的引用永远自洽
 
 
 def categories():
@@ -70,9 +79,7 @@ def write_sidecar(model_path, meta):
 
 
 def _scan_unlocked(force):
-    now = time.time()
-    if not force and now - _cache["ts"] < SCAN_TTL:  # 空库同样受 TTL 保护,避免每请求全扫
-        return _cache
+    global _cache
     models = []
     seen = set()
     truncated = False
@@ -125,14 +132,39 @@ def _scan_unlocked(force):
             if vid:
                 by_version.setdefault(vid, m)
         by_name.setdefault(m["name"].lower(), []).append(m)
-    _cache.update({"models": models, "by_version": by_version, "by_name": by_name,
-                   "by_id": by_id, "ts": now, "truncated": truncated})
+    # ts 取扫描完成时刻(慢盘上扫描耗时不计入 TTL);整体原子替换快照
+    _cache = {"models": models, "by_version": by_version, "by_name": by_name,
+              "by_id": by_id, "ts": time.time(), "truncated": truncated}
     return _cache
 
 
 def scan(force=False):
+    global _cache
     with _lock:
+        if _cache is not None and not force and time.time() - _cache["ts"] < SCAN_TTL:
+            return _cache  # 空库同样受 TTL 保护,避免每请求全扫
         return _scan_unlocked(force)
+
+
+_rescan_dirty = False
+_rescan_handle = None
+
+
+def schedule_rescan(delay=2.0):
+    """下载完成后的重扫:去抖合并,2s 窗口内多个完成只触发一次全扫."""
+    global _rescan_dirty, _rescan_handle
+    _rescan_dirty = True
+    if _rescan_handle is not None:
+        return
+
+    def _fire():
+        global _rescan_handle, _rescan_dirty
+        _rescan_handle = None
+        if _rescan_dirty:
+            _rescan_dirty = False
+            asyncio.ensure_future(run_bg(scan, True))
+
+    _rescan_handle = asyncio.get_running_loop().call_later(delay, _fire)
 
 
 def resolve(category, rel):

@@ -90,7 +90,9 @@ function fmtNum(n) {
 }
 
 function civitaiPage() {
-    return (S.cfg.mirror || "https://civitai.red").replace(/\/$/, "");
+    let base = (S.cfg.mirror || "https://civitai.red").trim().replace(/\/+$/, "");
+    if (!/^https?:\/\//i.test(base)) base = "https://" + base; // 裸域名兜底,防相对链接
+    return base;
 }
 
 function imgSrc(url) {
@@ -306,10 +308,11 @@ async function openDetail(modelId) {
     const listView = $("#cs-list-view");
     const detailView = $("#cs-detail-view");
     if (!detailView) return;
+    S.ui.detailId = String(modelId); // 先置,状态行立刻让位
+    updateStatusLine();
     listView.style.display = "none";
     detailView.style.display = "block";
     detailView.innerHTML = '<div class="cs-empty">加载详情中…</div>';
-    updateStatusLine();
     try {
         const model = await apiGet(`/civitai_studio/model/${encodeURIComponent(String(modelId))}`);
         S.browse.detail = model;
@@ -317,6 +320,7 @@ async function openDetail(modelId) {
         renderDetail(model);
     } catch (e) {
         S.ui.detailId = null;
+        updateStatusLine();
         detailView.innerHTML = `<div class="cs-empty">详情加载失败: ${esc(e.message)}</div>
             <div style="text-align:center"><button class="cs-btn" id="cs-detail-err-back">返回列表</button></div>`;
         $("#cs-detail-err-back", detailView).onclick = backToList;
@@ -368,13 +372,14 @@ function renderDetail(model) {
 }
 
 function rewriteDescImages(root) {
-    // 模型说明里的外链图也走代理开关,并禁 referrer(防打点/防直连失败)
+    // 模型说明里的外链图也走代理开关,并禁 referrer(防打点/防直连失败);挂图直接隐藏
     $$(".cs-desc-body img", root).forEach((img) => {
         const orig = img.getAttribute("src") || "";
         if (!orig) return;
         img.dataset.direct = orig;
         img.setAttribute("referrerpolicy", "no-referrer");
         img.loading = "lazy";
+        img.addEventListener("error", () => { img.style.display = "none"; }, { once: true });
         img.src = imgSrc(orig);
     });
 }
@@ -407,7 +412,8 @@ function renderVersion(version, model) {
             <div class="cs-section-title">预览图 (${images.length}) — 点击查看生成参数</div>
             <div class="cs-gallery">${images.map((img) => `
                 <div class="cs-gallery-item">
-                    <img loading="lazy" src="${esc(imgSrc(img.url))}" data-direct="${esc(img.url)}"/>
+                    <img loading="lazy" src="${esc(imgSrc(img.url))}" data-direct="${esc(img.url)}"
+                         onerror="this.style.display='none'"/>
                 </div>`).join("")}
             </div>
         </div>` : ""}
@@ -464,7 +470,10 @@ function showImageMeta(image) {
 
 // ---------- 下载对话框 ----------
 async function openDownloadDialog({ model, version, fileIndex = null, defaultRoot = "", defaultSub = "" }) {
-    if (!version) return;
+    if (!version) {
+        toast("error", "无法下载", "未找到该版本,请重新检查更新后再试");
+        return;
+    }
     let destinations = [];
     let destError = "";
     try {
@@ -479,7 +488,10 @@ async function openDownloadDialog({ model, version, fileIndex = null, defaultRoo
     }
     const files = version.files || [];
     const selIdx = fileIndex !== null ? fileIndex : Math.max(0, files.findIndex((f) => f.primary));
-    const preRoot = defaultRoot && destinations.find((d) => d.root === defaultRoot) ? defaultRoot : destinations[0].root;
+    // 目录归一后比较(斜杠/大小写/尾斜杠),命中时采用 destinations 的原串,保证 option 选中一致
+    const normPath = (p) => String(p || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+    const matched = defaultRoot && destinations.find((d) => normPath(d.root) === normPath(defaultRoot));
+    const preRoot = matched ? matched.root : destinations[0].root;
     const m = showModal(`
         <h3 class="cs-modal-title">下载 — ${esc(version.name || model.name)}</h3>
         <div class="cs-form">
@@ -531,10 +543,13 @@ async function openDownloadDialog({ model, version, fileIndex = null, defaultRoo
                 subfolder: $("#cs-dl-sub", m.box).value.trim(),
                 filename: $("#cs-dl-name", m.box).value.trim(),
             };
-            await apiPost("/civitai_studio/download", body);
+            const res = await apiPost("/civitai_studio/download", body);
             m.close();
             toast("success", "已加入下载队列", `${model.name} — ${version.name}`);
+            if (res.job) S.dl.jobs.unshift(res.job); // 立即入列,不等下一次轮询
+            lastPollTs = 0;
             switchTab("downloads");
+            pollDownloads();
         } catch (e) {
             toast("error", "下载任务创建失败", e.message);
             btn.disabled = false;
@@ -684,8 +699,14 @@ async function runUpdateCheck(items) {
     if (btn) { btn.disabled = true; btn.textContent = "检查中…"; }
     try {
         const data = await apiPost("/civitai_studio/local/check_updates", { items });
+        const batch = !items?.length;
+        let failCount = 0;
         for (const r of data.results || []) {
-            if (r.error) { if (items?.length) toast("error", "更新检查失败", `${r.id}: ${r.error}`); continue; }
+            if (r.error) {
+                failCount += 1;
+                if (!batch) toast("error", "更新检查失败", `${r.id}: ${r.error}`);
+                continue;
+            }
             st.updates[r.id] = r;
         }
         renderLocalList();
@@ -693,7 +714,8 @@ async function runUpdateCheck(items) {
         const scope = data.total_linked > data.checked
             ? `已检查 ${data.checked}/${data.total_linked} 个(单次上限 30,可对单个模型点"查更新")`
             : `已检查 ${data.checked} 个`;
-        toast("info", "更新检查完成", hasUpdate ? "发现可更新的模型 — " + scope : scope);
+        const failNote = failCount ? `,${failCount} 个查询失败(多为模型已在站方删除)` : "";
+        toast("info", "更新检查完成", (hasUpdate ? "发现可更新的模型 — " : "") + scope + failNote);
     } catch (e) {
         toast("error", "更新检查失败", e.message);
     } finally {
@@ -717,6 +739,8 @@ function renderDownloads(force) {
         head = '<div class="cs-banner cs-banner-warn">下载状态刷新失败(已连续多次),请检查 ComfyUI 后端;恢复后此提示会自动消失。</div>';
     }
     if (!S.dl.jobs.length) {
+        const clrBtn = $("#cs-dl-clear");
+        if (clrBtn) clrBtn.style.display = "none";
         list.innerHTML = head + '<div class="cs-empty">暂无下载任务。去「浏览」页面挑个模型吧。</div>';
         return;
     }
@@ -844,7 +868,7 @@ function switchTab(tab) {
     S.ui.tab = tab;
     $$(".cs-tab-btn", S.ui.root).forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
     $$(".cs-view", S.ui.root).forEach((v) => v.classList.toggle("active", v.dataset.view === tab));
-    if (tab === "local" && !S.local.models.length && !S.local.loading) loadLocal(false);
+    if (tab === "local") loadLocal(false); // TTL 在后端,重复加载代价极小,保证不陈旧
     if (tab === "downloads") renderDownloads(true);
 }
 
@@ -887,6 +911,7 @@ function buildBrowseView(root) {
             st[key] = key === "nsfw" ? parseInt(e.target.value, 10) : e.target.value;
             backToListIfOpen();
             triggerBrowseRefresh();
+            if (key === "nsfw") apiPost("/civitai_studio/config", { nsfw: st[key] }).catch(() => {}); // 偏好持久化
         });
     }
     // 无限滚动(页码推进在 fetchBrowse 成功后提交,失败自动重试同一页)
@@ -1105,6 +1130,7 @@ app.registerExtension({
         }
         try {
             S.cfg = { ...S.cfg, ...(await apiGet("/civitai_studio/config")) };
+            S.browse.nsfw = Number(S.cfg.nsfw ?? 1); // 恢复持久化的 NSFW 偏好
         } catch (e) {
             console.warn("[Civitai-Studio] 读取配置失败:", e);
         }

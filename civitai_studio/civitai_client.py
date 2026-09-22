@@ -9,6 +9,7 @@
 """
 
 import asyncio
+import time
 import urllib.parse
 from contextlib import asynccontextmanager
 
@@ -34,6 +35,7 @@ _session = None
 _session_key = None
 _session_lock = asyncio.Lock()
 _retire_handles = set()
+_cooldown_until = 0.0  # 429/WAF 全局退避:并发批次共享一次退避,避免逐请求换连接的 TLS churn
 
 try:
     from aiohttp_socks import ProxyConnector
@@ -264,9 +266,13 @@ _RETRYABLE_STATUS = (429, 500, 502, 503, 504)
 
 
 async def get_json(path, params=None, timeout=None):
+    global _cooldown_until
     url = api_root() + path
     if timeout is None:
         timeout = aiohttp.ClientTimeout(total=30, connect=10)
+    wait = _cooldown_until - time.time()
+    if wait > 0:
+        await asyncio.sleep(wait)  # 已有并发请求触发限流:先共享退避再发
     last_error = None
     for attempt in range(3):  # WAF 拦截/限流/网络抖动:换连接重试
         try:
@@ -308,6 +314,7 @@ async def get_json(path, params=None, timeout=None):
                 return data
         except HtmlChallengeError as e:
             last_error = e
+            _cooldown_until = max(_cooldown_until, time.time() + min(e.delay, 5))
             await close_session()  # 强制换新连接,负载均衡场景下换一个出口
             await asyncio.sleep(e.delay)
         except (asyncio.TimeoutError, aiohttp.ClientError) as e:
