@@ -1,0 +1,15 @@
+[project]
+name = "comfyui-civitai-studio"
+description = "Civitai browser + local model manager for ComfyUI — search & download models into ComfyUI model folders, track installed versions, check updates. (Civitai 模型浏览器与本地管理器:搜索下载、版本跟踪、更新检查)"
+version = "0.1.0"
+license = {file = "LICENSE"}
+requires-python = ">=3.10"
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/BAIKEMARK/ComfyUI-Civitai-Toolkit"
+
+[tool.comfy]
+PublisherId = ""
+DisplayName = "Civitai Studio"
+Icon = ""

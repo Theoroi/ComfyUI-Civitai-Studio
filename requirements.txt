@@ -1,0 +1,2 @@
+# SOCKS 代理支持(aiohttp_socks)。未安装时 HTTP 代理仍可用,插件会提示安装。
+aiohttp-socks>=0.8.4

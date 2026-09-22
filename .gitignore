@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# 下载临时文件 / 运行产物
+*.part
+user/
+
+# IDE / 系统
+.idea/
+.vscode/
+Thumbs.db
