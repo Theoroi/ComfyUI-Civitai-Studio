@@ -4,12 +4,10 @@ description = "Civitai browser + local model manager for ComfyUI — search & do
 version = "0.1.0"
 license = {file = "LICENSE"}
 requires-python = ">=3.10"
-dependencies = []
+dependencies = ["aiohttp-socks>=0.8.4"]
 
-[project.urls]
-Repository = "https://github.com/BAIKEMARK/ComfyUI-Civitai-Toolkit"
-
-[tool.comfy]
-PublisherId = ""
-DisplayName = "Civitai Studio"
-Icon = ""
+# 发布到 ComfyUI Registry 前需填入在 registry.comfy.org 注册的发布者 ID
+# [tool.comfy]
+# PublisherId = ""
+# DisplayName = "Civitai Studio"
+# Icon = ""

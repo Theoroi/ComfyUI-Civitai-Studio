@@ -38,11 +38,11 @@ const S = {
     cfg: { proxy_images: false, nsfw: 1, verify_hash: true },
     browse: {
         query: "", type: "", base: "", sort: "Most Downloaded", period: "AllTime",
-        nsfw: 1, page: 1, items: [], loading: false, dirty: true, view: "list",
+        nsfw: 1, page: 1, items: [], loading: false, dirty: true, pendingReset: false,
     },
-    local: { models: [], search: "", type: "", loading: false, updates: {}, checking: false, truncated: false },
-    dl: { jobs: [], lastSig: "" },
-    ui: { tab: "browse", root: null },
+    local: { models: [], search: "", type: "", loading: false, updates: {}, truncated: false },
+    dl: { jobs: [], lastSig: "", failStreak: 0 },
+    ui: { tab: "browse", root: null, scrollTop: 0, detailId: null },
 };
 
 // ---------- 小工具 ----------
@@ -56,10 +56,14 @@ function esc(s) {
 function sanitizeHtml(html) {
     const div = document.createElement("div");
     div.innerHTML = String(html || "");
-    $$("script,style,iframe,object,embed,link,meta,form,base", div).forEach((n) => n.remove());
+    $$("script,style,iframe,object,embed,link,meta,form,base,svg,math", div).forEach((n) => n.remove());
     $$("*", div).forEach((n) => {
         for (const attr of Array.from(n.attributes)) {
-            if (/^on/i.test(attr.name) || (/^javascript:/i.test(attr.value.trim()))) n.removeAttribute(attr.name);
+            const name = attr.name.toLowerCase();
+            const value = String(attr.value).replace(/[\s\x00-\x20]+/g, ""); // 剥空白防 java\tscript: 混淆
+            if (name.startsWith("on") || /^(javascript|vbscript|data:text\/html)/i.test(value) || name === "style") {
+                n.removeAttribute(attr.name);
+            }
         }
     });
     return div.innerHTML;
@@ -133,12 +137,15 @@ function showModal(innerHTML, cls) {
     overlay.className = "cs-modal " + (cls || "");
     overlay.innerHTML = `<div class="cs-modal-box">${innerHTML}</div>`;
     document.body.appendChild(overlay);
-    const close = () => overlay.remove();
     // 只有按下和松开都发生在遮罩上才关闭,避免框内选中文本拖出窗外时误关
     let pressedOnOverlay = false;
+    const escHandler = (e) => { if (e.key === "Escape") close(); };
+    const close = () => {
+        document.removeEventListener("keydown", escHandler);
+        overlay.remove();
+    };
     overlay.addEventListener("mousedown", (e) => { pressedOnOverlay = e.target === overlay; });
     overlay.addEventListener("click", (e) => { if (e.target === overlay && pressedOnOverlay) close(); });
-    const escHandler = (e) => { if (e.key === "Escape") { close(); document.removeEventListener("keydown", escHandler); } };
     document.addEventListener("keydown", escHandler);
     return { overlay, box: $(".cs-modal-box", overlay), close };
 }
@@ -155,8 +162,7 @@ function confirmModal(title, message, onOk) {
     $("[data-act=ok]", m.box).onclick = () => { m.close(); onOk(); };
 }
 
-// ---------- 数据加载 ----------
-
+// ---------- 在线浏览:数据加载 ----------
 function browseParams(page) {
     const p = new URLSearchParams();
     if (S.browse.query) p.set("query", S.browse.query);
@@ -172,30 +178,90 @@ function browseParams(page) {
 
 async function fetchBrowse(reset) {
     const st = S.browse;
-    if (st.loading) return;
-    if (!reset && st.meta && !st.meta.nextPage) return;
+    if (st.loading) {
+        // 在途请求未完成:记住"必须重发 reset",等它结束后补发,避免新筛选被旧响应覆盖
+        if (reset) st.pendingReset = true;
+        return;
+    }
+    const attemptedPage = reset ? 1 : st.page + 1; // 页码只在成功后提交,失败可重试同一页
     st.loading = true;
     updateStatusLine();
     try {
-        const data = await apiGet("/civitai_studio/search?" + browseParams(reset ? 1 : st.page));
+        const data = await apiGet("/civitai_studio/search?" + browseParams(attemptedPage));
+        if (reset) st.items = [];
         st.items = reset ? (data.items || []) : st.items.concat(data.items || []);
-        const cur = data.metadata?.currentPage ?? 1;
+        const cur = data.metadata?.currentPage ?? attemptedPage;
         const total = data.metadata?.totalPages ?? 1;
         st.meta = { page: cur, totalPages: total, nextPage: cur < total, total: data.metadata?.totalItem };
-        st.page = cur;
+        st.page = attemptedPage;
         st.dirty = false;
         st.error = "";
     } catch (e) {
         st.error = "加载失败: " + e.message;
-        if (reset) st.items = [];
+        if (reset) st.dirty = true; // 失败不清空已有结果;标记 dirty 让重开面板时自动重拉
     } finally {
+        const needReset = st.pendingReset;
+        st.pendingReset = false;
         st.loading = false;
         renderResults(reset);
         updateStatusLine();
+        if (needReset) fetchBrowse(true);
     }
 }
 
-// ---------- 在线浏览:卡片与结果 ----------
+function triggerBrowseRefresh() {
+    S.browse.items.forEach((m) => { m.__rendered = false; });
+    fetchBrowse(true);
+}
+
+// ---------- 在线浏览:渲染 ----------
+function renderResults(reset) {
+    const grid = $("#cs-grid");
+    if (!grid) return;
+    $$(".cs-error, .cs-empty", grid).forEach((n) => n.remove());
+    if (reset) {
+        grid.innerHTML = "";
+        for (const m of S.browse.items) m.__rendered = false;
+    }
+    const frag = document.createDocumentFragment();
+    for (const model of S.browse.items) {
+        if (!model.__rendered) {
+            model.__rendered = true;
+            const card = makeCard(model);
+            if (card) frag.appendChild(card);
+        }
+    }
+    grid.appendChild(frag);
+    if (S.browse.error) {
+        const err = document.createElement("div");
+        err.className = "cs-empty cs-error";
+        err.innerHTML = `${esc(S.browse.error)} <button class="cs-btn cs-btn-mini" id="cs-retry-btn">重试</button>`;
+        grid.appendChild(err);
+        $("#cs-retry-btn", err).onclick = () => triggerBrowseRefresh();
+    } else if (!S.browse.items.length && !S.browse.loading) {
+        const empty = document.createElement("div");
+        empty.className = "cs-empty";
+        empty.textContent = "没有找到模型,换个关键词试试。";
+        grid.appendChild(empty);
+    }
+}
+
+function updateStatusLine() {
+    const el = $("#cs-status");
+    if (!el) return;
+    if (S.ui.detailId) { el.textContent = ""; return; }
+    const st = S.browse;
+    if (st.loading) {
+        el.textContent = "加载中…";
+    } else if (st.meta) {
+        el.textContent = st.meta.nextPage
+            ? `第 ${st.meta.page}/${st.meta.totalPages} 页 — 向下滚动加载更多`
+            : `已加载全部 (共 ${fmtNum(st.meta.total)} 个模型)`;
+    } else {
+        el.textContent = "";
+    }
+}
+
 function makeCard(model) {
     const version = model.modelVersions?.[0];
     if (!version) return null;
@@ -225,6 +291,7 @@ function makeCard(model) {
         img.className = "cs-card-img";
         img.loading = "lazy";
         img.alt = model.name;
+        img.dataset.direct = cover.url;
         img.onload = () => { $(".cs-card-placeholder", card).style.display = "none"; img.style.display = "block"; };
         img.onerror = () => img.remove();
         img.src = imgSrc(cover.url);
@@ -234,70 +301,34 @@ function makeCard(model) {
     return card;
 }
 
-function renderResults(reset) {
-    const grid = $("#cs-grid");
-    if (!grid) return;
-    if (reset) {
-        grid.innerHTML = "";
-        for (const m of S.browse.items) m.__rendered = false;
-    }
-    const frag = document.createDocumentFragment();
-    for (const model of S.browse.items) {
-        if (!model.__rendered) {
-            model.__rendered = true;
-            const card = makeCard(model);
-            if (card) frag.appendChild(card);
-        }
-    }
-    grid.appendChild(frag);
-    if (S.browse.error) {
-        const err = document.createElement("div");
-        err.className = "cs-empty";
-        err.textContent = S.browse.error;
-        grid.appendChild(err);
-    } else if (!S.browse.items.length && !S.browse.loading) {
-        grid.innerHTML = '<div class="cs-empty">没有找到模型,换个关键词试试。</div>';
-    }
-}
-
-function updateStatusLine() {
-    const el = $("#cs-status");
-    if (!el) return;
-    const st = S.browse;
-    if (st.loading) {
-        el.textContent = "加载中…";
-    } else if (st.meta) {
-        el.textContent = st.meta.nextPage
-            ? `第 ${st.meta.page}/${st.meta.totalPages} 页 — 向下滚动加载更多`
-            : `已加载全部 (共 ${fmtNum(st.meta.total)} 个模型)`;
-    } else {
-        el.textContent = "";
-    }
-}
-
 // ---------- 详情页 ----------
 async function openDetail(modelId) {
-    const wrap = $("#cs-browse-content");
     const listView = $("#cs-list-view");
     const detailView = $("#cs-detail-view");
     if (!detailView) return;
     listView.style.display = "none";
     detailView.style.display = "block";
     detailView.innerHTML = '<div class="cs-empty">加载详情中…</div>';
+    updateStatusLine();
     try {
-        const model = await apiGet(`/civitai_studio/model/${modelId}`);
+        const model = await apiGet(`/civitai_studio/model/${encodeURIComponent(String(modelId))}`);
         S.browse.detail = model;
+        S.ui.detailId = String(model.id);
         renderDetail(model);
     } catch (e) {
+        S.ui.detailId = null;
         detailView.innerHTML = `<div class="cs-empty">详情加载失败: ${esc(e.message)}</div>
-            <div style="text-align:center"><button class="cs-btn" onclick="this.closest('#cs-detail-view').style.display='none';document.querySelector('#cs-list-view').style.display='block'">返回列表</button></div>`;
+            <div style="text-align:center"><button class="cs-btn" id="cs-detail-err-back">返回列表</button></div>`;
+        $("#cs-detail-err-back", detailView).onclick = backToList;
     }
 }
 
 function backToList() {
     S.browse.detail = null;
+    S.ui.detailId = null;
     $("#cs-detail-view").style.display = "none";
     $("#cs-list-view").style.display = "block";
+    updateStatusLine();
 }
 
 function renderDetail(model) {
@@ -308,7 +339,7 @@ function renderDetail(model) {
     detailView.innerHTML = `
         <div class="cs-detail-head">
             <button class="cs-btn" id="cs-detail-back">← 返回</button>
-            <a class="cs-btn" href="${civitaiPage()}/models/${model.id}" target="_blank">在 Civitai 打开 ↗</a>
+            <a class="cs-btn" href="${esc(civitaiPage())}/models/${esc(String(model.id))}" target="_blank" rel="noopener noreferrer">在 Civitai 打开 ↗</a>
         </div>
         <h3 class="cs-detail-title" title="${esc(model.name)}">${esc(model.name)}</h3>
         <div class="cs-detail-meta">
@@ -319,13 +350,14 @@ function renderDetail(model) {
         <div class="cs-detail-row">
             <label>版本</label>
             <select id="cs-version-sel">${versions.map((v, i) =>
-                `<option value="${v.id}" data-idx="${i}">${esc(v.name)} (${esc(v.baseModel || "?")})${v.local ? " ✔已装" : ""}</option>`).join("")}
+                `<option value="${esc(String(v.id))}" data-idx="${i}">${esc(v.name)} (${esc(v.baseModel || "?")})${v.local ? " ✔已装" : ""}</option>`).join("")}
             </select>
         </div>
         <div id="cs-version-body"></div>
         ${desc ? `<details class="cs-desc"><summary>模型说明</summary><div class="cs-desc-body">${desc}</div></details>` : ""}
     `;
     $("#cs-detail-back", detailView).onclick = backToList;
+    rewriteDescImages(detailView);
     const sel = $("#cs-version-sel", detailView);
     const renderVer = () => {
         const idx = parseInt(sel.selectedOptions[0]?.dataset.idx || "0", 10);
@@ -333,6 +365,18 @@ function renderDetail(model) {
     };
     sel.onchange = renderVer;
     renderVer();
+}
+
+function rewriteDescImages(root) {
+    // 模型说明里的外链图也走代理开关,并禁 referrer(防打点/防直连失败)
+    $$(".cs-desc-body img", root).forEach((img) => {
+        const orig = img.getAttribute("src") || "";
+        if (!orig) return;
+        img.dataset.direct = orig;
+        img.setAttribute("referrerpolicy", "no-referrer");
+        img.loading = "lazy";
+        img.src = imgSrc(orig);
+    });
 }
 
 function renderVersion(version, model) {
@@ -361,8 +405,8 @@ function renderVersion(version, model) {
         ${images.length ? `
         <div class="cs-section">
             <div class="cs-section-title">预览图 (${images.length}) — 点击查看生成参数</div>
-            <div class="cs-gallery">${images.map((img, i) => `
-                <div class="cs-gallery-item" data-img-idx="${i}">
+            <div class="cs-gallery">${images.map((img) => `
+                <div class="cs-gallery-item">
                     <img loading="lazy" src="${esc(imgSrc(img.url))}" data-direct="${esc(img.url)}"/>
                 </div>`).join("")}
             </div>
@@ -378,8 +422,9 @@ function renderVersion(version, model) {
     });
     $$(".cs-gallery-item img", body).forEach((img) => {
         img.onclick = () => {
-            const idx = parseInt(img.closest(".cs-gallery-item").dataset.imgIdx, 10);
-            showImageMeta(images[idx]);
+            const direct = img.dataset.direct || "";
+            const image = images.find((i) => i.url === direct) || images[0];
+            showImageMeta(image);
         };
     });
 }
@@ -421,12 +466,15 @@ function showImageMeta(image) {
 async function openDownloadDialog({ model, version, fileIndex = null, defaultRoot = "", defaultSub = "" }) {
     if (!version) return;
     let destinations = [];
+    let destError = "";
     try {
         const data = await apiGet(`/civitai_studio/destinations?type=${encodeURIComponent(model.type || "Other")}`);
         destinations = data.destinations || [];
-    } catch (e) { /* 忽略,下面兜底 */ }
+    } catch (e) {
+        destError = e.message;
+    }
     if (!destinations.length) {
-        toast("error", "没有可用的模型目录", "未找到已注册的模型文件夹");
+        toast("error", "无法打开下载", destError ? `获取目录失败: ${destError}` : "未找到已注册的模型文件夹");
         return;
     }
     const files = version.files || [];
@@ -518,10 +566,6 @@ function renderLocalList() {
     const list = $("#cs-local-list");
     if (!list) return;
     const st = S.local;
-    if (st.loading && !st.models.length) {
-        list.innerHTML = '<div class="cs-empty">扫描模型目录中…</div>';
-        return;
-    }
     if (st.error) {
         list.innerHTML = `<div class="cs-empty">${esc(st.error)}</div>`;
         return;
@@ -544,11 +588,16 @@ function renderLocalList() {
             chip.onclick = () => { st.type = chip.dataset.cat; renderLocalList(); };
         });
     }
+    if (st.loading && !st.models.length) {
+        list.innerHTML = '<div class="cs-empty">扫描模型目录中…</div>';
+        return;
+    }
     if (!models.length) {
         list.innerHTML = '<div class="cs-empty">没有找到模型文件。</div>' + (st.truncated ? '<div class="cs-empty">注意:文件数超过扫描上限。</div>' : "");
         return;
     }
-    list.innerHTML = models.map((m) => {
+    const scanning = st.loading ? '<div class="cs-banner">正在重新扫描模型目录…</div>' : "";
+    list.innerHTML = scanning + models.map((m) => {
         const civ = m.civitai || {};
         const upd = st.updates[m.id];
         const updHtml = upd && upd.update
@@ -558,7 +607,7 @@ function renderLocalList() {
         return `
         <div class="cs-local-row" data-id="${esc(m.id)}">
             <div class="cs-local-main">
-                <div class="cs-local-name" title="${esc(m.path)}">${esc(civ.model_name || m.name)}</div>
+                <div class="cs-local-name" title="${esc(m.path || m.rel)}">${esc(civ.model_name || m.name)}</div>
                 <div class="cs-local-sub">
                     <span class="cs-badge">${esc(m.category)}</span>
                     ${civ.base_model ? `<span class="cs-badge">${esc(civ.base_model)}</span>` : ""}
@@ -570,7 +619,7 @@ function renderLocalList() {
                 ${updHtml}
             </div>
             <div class="cs-local-actions">
-                ${civ.model_id ? `<a class="cs-btn cs-btn-mini" href="${civitaiPage()}/models/${esc(civ.model_id)}" target="_blank">页面</a>` : ""}
+                ${civ.model_id ? `<a class="cs-btn cs-btn-mini" href="${esc(civitaiPage())}/models/${esc(String(civ.model_id))}" target="_blank" rel="noopener noreferrer">页面</a>` : ""}
                 ${civ.version_id ? `<button class="cs-btn cs-btn-mini" data-check="${esc(m.id)}">查更新</button>` : ""}
                 <button class="cs-btn cs-btn-mini" data-reveal="${esc(m.id)}">定位</button>
                 <button class="cs-btn cs-btn-mini cs-btn-danger" data-delete="${esc(m.id)}">删除</button>
@@ -631,40 +680,47 @@ function findLocalModel(id) {
 
 async function runUpdateCheck(items) {
     const st = S.local;
-    st.checking = true;
     const btn = $("#cs-check-updates");
     if (btn) { btn.disabled = true; btn.textContent = "检查中…"; }
     try {
         const data = await apiPost("/civitai_studio/local/check_updates", { items });
         for (const r of data.results || []) {
-            if (r.error) { toast("error", "更新检查失败", `${r.id}: ${r.error}`); continue; }
+            if (r.error) { if (items?.length) toast("error", "更新检查失败", `${r.id}: ${r.error}`); continue; }
             st.updates[r.id] = r;
         }
         renderLocalList();
         const hasUpdate = (data.results || []).some((r) => r.update);
-        toast("info", "更新检查完成", hasUpdate ? "发现可更新的模型" : "全部为最新版本");
+        const scope = data.total_linked > data.checked
+            ? `已检查 ${data.checked}/${data.total_linked} 个(单次上限 30,可对单个模型点"查更新")`
+            : `已检查 ${data.checked} 个`;
+        toast("info", "更新检查完成", hasUpdate ? "发现可更新的模型 — " + scope : scope);
     } catch (e) {
         toast("error", "更新检查失败", e.message);
     } finally {
-        st.checking = false;
         if (btn) { btn.disabled = false; btn.textContent = "检查更新"; }
     }
 }
 
 // ---------- 下载队列 ----------
 let pollTimer = null;
+let lastPollTs = 0;
 
 function renderDownloads(force) {
     const list = $("#cs-dl-list");
     if (!list) return;
-    const sig = JSON.stringify(S.dl.jobs.map((j) => [j.id, j.status, j.progress, j.received, j.speed, j.error]));
+    const activeCount = S.dl.jobs.filter((j) => ["queued", "downloading", "verifying"].includes(j.status)).length;
+    const sig = JSON.stringify([activeCount, S.dl.failStreak, S.dl.jobs.map((j) => [j.id, j.status, j.progress, j.received, j.speed, j.error, j.warning])]);
     if (!force && sig === S.dl.lastSig) return;
     S.dl.lastSig = sig;
+    let head = "";
+    if (S.dl.failStreak >= 3) {
+        head = '<div class="cs-banner cs-banner-warn">下载状态刷新失败(已连续多次),请检查 ComfyUI 后端;恢复后此提示会自动消失。</div>';
+    }
     if (!S.dl.jobs.length) {
-        list.innerHTML = '<div class="cs-empty">暂无下载任务。去「浏览」页面挑个模型吧。</div>';
+        list.innerHTML = head + '<div class="cs-empty">暂无下载任务。去「浏览」页面挑个模型吧。</div>';
         return;
     }
-    list.innerHTML = S.dl.jobs.map((j) => {
+    list.innerHTML = head + S.dl.jobs.map((j) => {
         const pct = Math.round((j.progress || 0) * 100);
         const statusText = {
             queued: "排队中…", downloading: `下载中 ${pct}% ${fmtSpeed(j.speed)}`,
@@ -681,6 +737,7 @@ function renderDownloads(force) {
                     <span class="cs-status-${esc(j.status)}">${esc(statusText)}</span>
                     <span class="cs-dim">${fmtSize(j.received)}${j.total ? " / " + fmtSize(j.total) : ""}</span>
                 </div>
+                ${j.warning ? `<div class="cs-local-update">${esc(j.warning)}</div>` : ""}
             </div>
             ${active ? `<button class="cs-btn cs-btn-mini cs-btn-danger" data-cancel="${esc(j.id)}">取消</button>` : ""}
         </div>`;
@@ -696,9 +753,18 @@ function renderDownloads(force) {
 }
 
 async function pollDownloads() {
+    if (document.hidden && S.dl.failStreak === 0) {
+        const anyActive = S.dl.jobs.some((j) => ["queued", "downloading", "verifying"].includes(j.status));
+        if (!anyActive) return; // 页面隐藏且无活动任务:不打扰
+    }
+    const now = Date.now();
+    const hasActive = S.dl.jobs.some((j) => ["queued", "downloading", "verifying"].includes(j.status));
+    if (now - lastPollTs < (hasActive ? 1500 : 8000)) return; // 空闲时降频
+    lastPollTs = now;
     try {
         const data = await apiGet("/civitai_studio/downloads");
         S.dl.jobs = data.jobs || [];
+        S.dl.failStreak = 0;
         const active = S.dl.jobs.filter((j) => ["queued", "downloading", "verifying"].includes(j.status)).length;
         const badge = $("#cs-dl-badge");
         if (badge) {
@@ -706,7 +772,10 @@ async function pollDownloads() {
             badge.style.display = active ? "" : "none";
         }
         if (S.ui.tab === "downloads") renderDownloads();
-    } catch (e) { /* 服务未就绪时静默 */ }
+    } catch (e) {
+        S.dl.failStreak += 1;
+        if (S.ui.tab === "downloads") renderDownloads(true);
+    }
 }
 
 // ---------- 设置 ----------
@@ -714,6 +783,7 @@ async function openSettings() {
     let cfg;
     try { cfg = await apiGet("/civitai_studio/config"); }
     catch (e) { toast("error", "读取配置失败", e.message); return; }
+    const oldProxyImages = !!cfg.proxy_images;
     const m = showModal(`
         <h3 class="cs-modal-title">⚙ Civitai Studio 设置</h3>
         <div class="cs-form">
@@ -722,7 +792,7 @@ async function openSettings() {
             </label>
             <label>网络代理(HTTP / SOCKS 均可,裸地址自动按 HTTP 处理)
                 <input id="cs-set-proxy" type="text" value="${esc(cfg.proxy || "")}" placeholder="http://127.0.0.1:10808 或 socks5://127.0.0.1:10808,留空 = 直连"/>
-                <span class="cs-form-hint">填 127.0.0.1 而非 localhost。v2rayN 混合端口 10808 直接填 http://127.0.0.1:10808 即可;API、下载、图片全部走此代理。</span>
+                <span class="cs-form-hint">填 127.0.0.1 而非 localhost。v2rayN 混合端口 10808:优先填 socks5://127.0.0.1:10808(实测最稳),http://127.0.0.1:10808 亦可;API、下载、图片全部走此代理。</span>
             </label>
             <label>API 站点(默认 civitai.red,被拦时可改回 https://civitai.com)
                 <input id="cs-set-mirror" type="text" value="${esc(cfg.mirror || "")}" placeholder="留空 = https://civitai.red"/>
@@ -732,7 +802,7 @@ async function openSettings() {
             </label>
             <label class="cs-check"><input id="cs-set-pimg" type="checkbox" ${cfg.proxy_images ? "checked" : ""}/> 预览图经服务端中转(直连打不开图片时开启)</label>
             <label class="cs-check"><input id="cs-set-hash" type="checkbox" ${cfg.verify_hash ? "checked" : ""}/> 下载完成后校验 SHA256</label>
-            <div class="cs-modal-msg">API Key 在 <a href="https://civitai.com/user/account" target="_blank">Civitai 账户设置</a> 页生成,仅保存在本机 ComfyUI user 目录。</div>
+            <div class="cs-modal-msg">API Key 在 <a href="https://civitai.com/user/account" target="_blank" rel="noopener noreferrer">Civitai 账户设置</a> 页生成,仅保存在本机 ComfyUI user 目录;Key 只会下发给官方站点,不会发给镜像。</div>
             <div class="cs-modal-actions">
                 <button class="cs-btn" data-act="cancel">取消</button>
                 <button class="cs-btn cs-btn-primary" data-act="ok">保存</button>
@@ -754,17 +824,26 @@ async function openSettings() {
             S.cfg = { ...S.cfg, ...body };
             m.close();
             toast("success", "设置已保存", "");
+            if (body.proxy_images !== oldProxyImages) refreshAllImages();
         } catch (e) {
             toast("error", "保存失败", e.message);
         }
     };
 }
 
+function refreshAllImages() {
+    // 代理图片开关切换后,把已渲染的全部远端图换源,而不是只影响之后的节点
+    $$("img[data-direct]", S.ui.root || document).forEach((img) => {
+        const direct = img.dataset.direct || "";
+        if (direct) img.src = imgSrc(direct);
+    });
+}
+
 // ---------- 布局 ----------
 function switchTab(tab) {
     S.ui.tab = tab;
     $$(".cs-tab-btn", S.ui.root).forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
-    $$(".cs-view", S.ui.root).forEach((v) => { v.style.display = v.dataset.view === tab ? "block" : "none"; });
+    $$(".cs-view", S.ui.root).forEach((v) => v.classList.toggle("active", v.dataset.view === tab));
     if (tab === "local" && !S.local.models.length && !S.local.loading) loadLocal(false);
     if (tab === "downloads") renderDownloads(true);
 }
@@ -785,8 +864,8 @@ function buildBrowseView(root) {
             <select id="cs-f-period">${PERIODS.map((p) => `<option value="${p}" ${st.period === p ? "selected" : ""}>${PERIOD_LABELS[p]}</option>`).join("")}</select>
             <select id="cs-f-nsfw">${NSFW_LEVELS.map((n) => `<option value="${n.v}" ${st.nsfw === n.v ? "selected" : ""}>${n.label}</option>`).join("")}</select>
         </div>
-        <div id="cs-browse-content" class="cs-browse-content">
-            <div id="cs-list-view">
+        <div id="cs-browse-content" class="cs-scroll">
+            <div id="cs-list-view" style="display:block">
                 <div id="cs-grid" class="cs-grid"></div>
             </div>
             <div id="cs-detail-view" style="display:none"></div>
@@ -799,27 +878,29 @@ function buildBrowseView(root) {
         clearTimeout(deb);
         deb = setTimeout(() => {
             st.query = e.target.value.trim();
-            st.items.forEach((m) => { m.__rendered = false; });
-            fetchBrowse(true);
+            backToListIfOpen();
+            triggerBrowseRefresh();
         }, 500);
     });
     for (const [sel, key] of [["#cs-f-type", "type"], ["#cs-f-base", "base"], ["#cs-f-sort", "sort"], ["#cs-f-period", "period"], ["#cs-f-nsfw", "nsfw"]]) {
         $(sel, view).addEventListener("change", (e) => {
             st[key] = key === "nsfw" ? parseInt(e.target.value, 10) : e.target.value;
-            st.items.forEach((m) => { m.__rendered = false; });
-            fetchBrowse(true);
+            backToListIfOpen();
+            triggerBrowseRefresh();
         });
     }
-    // 无限滚动
+    // 无限滚动(页码推进在 fetchBrowse 成功后提交,失败自动重试同一页)
     $("#cs-browse-content", view).addEventListener("scroll", (e) => {
         const el = e.target;
+        S.ui.scrollTop = el.scrollTop;
         if (el.scrollTop + el.clientHeight >= el.scrollHeight - 400) {
-            if (!st.loading && st.meta?.nextPage && !st.dirty) {
-                st.page += 1;
-                fetchBrowse(false);
-            }
+            if (!st.loading && st.meta?.nextPage && !st.dirty) fetchBrowse(false);
         }
     });
+}
+
+function backToListIfOpen() {
+    if (S.ui.detailId) backToList();
 }
 
 function buildLocalView(root) {
@@ -833,7 +914,7 @@ function buildLocalView(root) {
             <button class="cs-btn" id="cs-local-refresh" title="重新扫描">🔄</button>
         </div>
         <div id="cs-local-chips" class="cs-chips"></div>
-        <div id="cs-local-list" class="cs-local-list"></div>`;
+        <div id="cs-local-list" class="cs-scroll"></div>`;
     root.appendChild(view);
     $("#cs-local-refresh", view).onclick = () => { S.local.updates = {}; loadLocal(true); };
     $("#cs-check-updates", view).onclick = () => runUpdateCheck([]);
@@ -853,7 +934,7 @@ function buildDownloadsView(root) {
             <span class="cs-dim">下载到 ComfyUI 模型目录,支持断点续传</span>
             <button class="cs-btn" id="cs-dl-clear" style="display:none">清除已完成</button>
         </div>
-        <div id="cs-dl-list" class="cs-dl-list"></div>`;
+        <div id="cs-dl-list" class="cs-scroll"></div>`;
     root.appendChild(view);
     $("#cs-dl-clear", view).onclick = async () => {
         try { await apiPost("/civitai_studio/downloads/clear", {}); pollDownloads(); }
@@ -870,7 +951,7 @@ function buildRoot(el) {
             <button class="cs-tab-btn active" data-tab="browse">🌐 浏览</button>
             <button class="cs-tab-btn" data-tab="local">📁 本地库</button>
             <button class="cs-tab-btn" data-tab="downloads">⬇ 下载 <span id="cs-dl-badge" class="cs-dl-badge" style="display:none"></span></button>
-            <span style="flex:1"></span>
+            <span class="cs-topbar-spacer"></span>
             <button class="cs-tab-btn" id="cs-settings-btn" title="设置">⚙</button>
         </div>
         <div class="cs-body"></div>`;
@@ -884,28 +965,46 @@ function buildRoot(el) {
     switchTab("browse");
 }
 
+function restoreBrowseState() {
+    // 重开面板:恢复滚动位置与打开中的详情,避免全量重建丢状态
+    if (S.ui.detailId && S.browse.detail && !S.browse.dirty) {
+        const listView = $("#cs-list-view");
+        const detailView = $("#cs-detail-view");
+        if (listView && detailView) {
+            listView.style.display = "none";
+            detailView.style.display = "block";
+            renderDetail(S.browse.detail);
+            updateStatusLine();
+        }
+    }
+    const content = $("#cs-browse-content");
+    if (content) content.scrollTop = S.ui.scrollTop || 0;
+}
+
 // ---------- 样式 ----------
 function injectStyles() {
     if (document.getElementById("civitai-studio-styles")) return;
     const style = document.createElement("style");
     style.id = "civitai-studio-styles";
     style.textContent = `
-.cs-root { display:flex; flex-direction:column; height:100%; color:var(--fg-color); font-size:13px; }
-.cs-topbar { display:flex; gap:4px; align-items:center; padding:6px; border-bottom:1px solid var(--border-color); flex-shrink:0; }
-.cs-tab-btn { background:transparent; border:1px solid transparent; color:var(--fg-color); border-radius:6px; padding:4px 10px; cursor:pointer; font-size:12px; }
-.cs-tab-btn:hover { border-color:var(--border-color); }
-.cs-tab-btn.active { background:var(--comfy-input-bg); border-color:var(--accent-color); }
+.cs-root { display:flex; flex-direction:column; height:100%; color:var(--fg-color,#eee); font-size:13px; }
+.cs-topbar { display:flex; flex-wrap:wrap; gap:4px; align-items:center; padding:6px; border-bottom:1px solid var(--border-color,#444); flex-shrink:0; }
+.cs-topbar-spacer { flex:1; min-width:8px; }
+.cs-tab-btn { background:transparent; border:1px solid transparent; color:var(--fg-color,#eee); border-radius:6px; padding:3px 8px; cursor:pointer; font-size:12px; }
+.cs-tab-btn:hover { border-color:var(--border-color,#444); }
+.cs-tab-btn.active { background:var(--comfy-input-bg,#333); border-color:var(--accent-color,#4a90e2); }
 .cs-dl-badge { background:#e2543f; color:#fff; border-radius:8px; padding:0 5px; font-size:10px; margin-left:2px; }
 .cs-body { flex:1; min-height:0; position:relative; }
-.cs-view { display:none; height:100%; overflow:hidden; }
+.cs-view { display:none; height:100%; flex-direction:column; overflow:hidden; }
+.cs-view.active { display:flex; }
 .cs-toolbar { display:flex; gap:6px; padding:6px; flex-shrink:0; align-items:center; }
 .cs-toolbar input[type=search] { flex:1; min-width:0; }
 .cs-filters { display:grid; grid-template-columns:1fr 1fr; gap:4px; padding:0 6px 6px; flex-shrink:0; }
 .cs-filters select { width:100%; padding:3px; font-size:12px; }
-.cs-browse-content { height:calc(100% - 96px); overflow-y:auto; padding:0 6px; }
+.cs-scroll { flex:1; min-height:0; overflow-y:auto; padding:0 6px; }
 .cs-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:8px; padding-bottom:20px; }
-.cs-card { background:var(--comfy-box-bg, var(--comfy-input-bg)); border:1px solid var(--border-color); border-radius:6px; overflow:hidden; cursor:pointer; transition:transform .15s, border-color .15s; }
-.cs-card:hover { border-color:var(--accent-color); transform:translateY(-2px); }
+.cs-card { background:var(--comfy-box-bg, var(--comfy-input-bg,#333)); border:1px solid var(--border-color,#444); border-radius:6px; overflow:hidden; cursor:pointer; transition:transform .15s, border-color .15s; }
+.cs-card:hover { border-color:var(--accent-color,#4a90e2); transform:translateY(-2px); }
 .cs-card-installed { border-color:#4caf50; }
 .cs-card-cover { position:relative; width:100%; padding-top:130%; background:#222; }
 .cs-card-img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; display:none; }
@@ -916,78 +1015,79 @@ function injectStyles() {
 .cs-badge-dim { opacity:.7; }
 .cs-card-info { padding:6px; }
 .cs-card-name { font-weight:600; font-size:12px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; min-height:2.4em; }
-.cs-card-sub { display:flex; justify-content:space-between; font-size:10px; color:var(--desc-text-color); margin-top:3px; gap:4px; }
-.cs-card-creator { font-size:10px; color:var(--desc-text-color); opacity:.7; margin-top:2px; }
-.cs-status { padding:4px 8px; font-size:11px; color:var(--desc-text-color); border-top:1px solid var(--border-color); flex-shrink:0; }
-.cs-empty { text-align:center; color:var(--desc-text-color); padding:30px 10px; grid-column:1/-1; white-space:pre-line; }
-.cs-btn { background:var(--comfy-input-bg); border:1px solid var(--border-color); color:var(--fg-color); border-radius:5px; padding:4px 10px; cursor:pointer; font-size:12px; text-decoration:none; display:inline-block; white-space:nowrap; }
-.cs-btn:hover { border-color:var(--accent-color); }
+.cs-card-sub { display:flex; justify-content:space-between; font-size:10px; color:var(--desc-text-color,#999); margin-top:3px; gap:4px; }
+.cs-card-creator { font-size:10px; color:var(--desc-text-color,#999); opacity:.7; margin-top:2px; }
+.cs-status { padding:4px 8px; font-size:11px; color:var(--desc-text-color,#999); border-top:1px solid var(--border-color,#444); flex-shrink:0; min-height:22px; }
+.cs-empty { text-align:center; color:var(--desc-text-color,#999); padding:30px 10px; grid-column:1/-1; white-space:pre-line; }
+.cs-error { color:#e2a23f; }
+.cs-banner { background:rgba(74,144,226,.15); border:1px solid var(--accent-color,#4a90e2); color:var(--fg-color,#eee); border-radius:6px; padding:6px 10px; margin-bottom:6px; font-size:12px; }
+.cs-banner-warn { border-color:#e2a23f; background:rgba(226,162,63,.12); }
+.cs-btn { background:var(--comfy-input-bg,#333); border:1px solid var(--border-color,#444); color:var(--fg-color,#eee); border-radius:5px; padding:4px 10px; cursor:pointer; font-size:12px; text-decoration:none; display:inline-block; white-space:nowrap; }
+.cs-btn:hover { border-color:var(--accent-color,#4a90e2); }
 .cs-btn:disabled { opacity:.5; cursor:not-allowed; }
-.cs-btn-primary { background:var(--accent-color); color:#fff; border-color:var(--accent-color); }
+.cs-btn-primary { background:var(--accent-color,#4a90e2); color:#fff; border-color:var(--accent-color,#4a90e2); }
 .cs-btn-danger { color:#e2543f; border-color:rgba(226,84,63,.5); }
 .cs-btn-mini { padding:2px 7px; font-size:11px; }
 .cs-detail-head { display:flex; gap:6px; padding:8px 0 4px; }
 .cs-detail-title { margin:4px 0; font-size:15px; }
-.cs-detail-meta { font-size:11px; color:var(--desc-text-color); margin-bottom:6px; }
+.cs-detail-meta { font-size:11px; color:var(--desc-text-color,#999); margin-bottom:6px; }
 .cs-detail-row { display:flex; gap:8px; align-items:center; margin:8px 0; }
 .cs-detail-row label { flex-shrink:0; font-size:12px; }
 .cs-detail-row select { flex:1; padding:3px; }
 .cs-tags { display:flex; flex-wrap:wrap; gap:4px; margin:4px 0; }
-.cs-tag { background:var(--comfy-input-bg); border-radius:8px; padding:1px 8px; font-size:10px; }
-.cs-trigger { background:var(--comfy-input-bg); border:1px solid var(--border-color); border-radius:4px; padding:2px 7px; font-size:11px; cursor:pointer; }
-.cs-trigger:hover { border-color:var(--accent-color); }
+.cs-tag { background:var(--comfy-input-bg,#333); border-radius:8px; padding:1px 8px; font-size:10px; }
+.cs-trigger { background:var(--comfy-input-bg,#333); border:1px solid var(--border-color,#444); border-radius:4px; padding:2px 7px; font-size:11px; cursor:pointer; }
+.cs-trigger:hover { border-color:var(--accent-color,#4a90e2); }
 .cs-section { margin:8px 0; }
 .cs-section-title { font-weight:600; font-size:12px; margin-bottom:4px; display:flex; align-items:center; gap:8px; }
 .cs-files { display:flex; flex-direction:column; gap:6px; }
 .cs-file { display:flex; align-items:center; gap:8px; background:var(--comfy-box-bg, rgba(0,0,0,.2)); padding:6px 8px; border-radius:6px; }
 .cs-file-info { flex:1; min-width:0; }
 .cs-file-name { font-size:12px; word-break:break-all; }
-.cs-file-meta { font-size:10px; color:var(--desc-text-color); }
+.cs-file-meta { font-size:10px; color:var(--desc-text-color,#999); }
 .cs-gallery { display:grid; grid-template-columns:repeat(auto-fill, minmax(105px, 1fr)); gap:6px; }
 .cs-gallery-item img { width:100%; aspect-ratio:3/4; object-fit:cover; border-radius:4px; cursor:pointer; border:2px solid transparent; }
-.cs-gallery-item img:hover { border-color:var(--accent-color); }
+.cs-gallery-item img:hover { border-color:var(--accent-color,#4a90e2); }
 .cs-desc { margin:8px 0; }
 .cs-desc summary { cursor:pointer; font-weight:600; font-size:12px; }
 .cs-desc-body { font-size:12px; background:rgba(0,0,0,.2); border-radius:6px; padding:8px; margin-top:4px; overflow-wrap:break-word; }
 .cs-desc-body img { max-width:100%; height:auto; }
 .cs-kv-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin:8px 0; font-size:12px; }
-.cs-kv-grid b { color:var(--desc-text-color); display:block; font-size:10px; }
+.cs-kv-grid b { color:var(--desc-text-color,#999); display:block; font-size:10px; }
 .cs-meta-block { margin:10px 0; }
-.cs-meta-block textarea { width:100%; background:var(--comfy-input-bg); color:var(--input-text-color); border:1px solid var(--border-color); border-radius:4px; padding:6px; font-size:12px; }
+.cs-meta-block textarea { width:100%; background:var(--comfy-input-bg,#333); color:var(--input-text-color,#ddd); border:1px solid var(--border-color,#444); border-radius:4px; padding:6px; font-size:12px; }
 .cs-chips { display:flex; flex-wrap:wrap; gap:4px; padding:0 8px 6px; flex-shrink:0; }
-.cs-chip { background:var(--comfy-input-bg); border:1px solid var(--border-color); color:var(--fg-color); border-radius:10px; padding:2px 10px; font-size:11px; cursor:pointer; }
-.cs-chip.active { background:var(--accent-color); color:#fff; border-color:var(--accent-color); }
-.cs-local-list { height:calc(100% - 84px); overflow-y:auto; padding:0 6px; }
-.cs-local-row { display:flex; gap:8px; background:var(--comfy-box-bg, var(--comfy-input-bg)); border:1px solid transparent; border-radius:6px; padding:8px; margin-bottom:6px; align-items:flex-start; }
-.cs-local-row:hover { border-color:var(--border-color); }
+.cs-chip { background:var(--comfy-input-bg,#333); border:1px solid var(--border-color,#444); color:var(--fg-color,#eee); border-radius:10px; padding:2px 10px; font-size:11px; cursor:pointer; }
+.cs-chip.active { background:var(--accent-color,#4a90e2); color:#fff; border-color:var(--accent-color,#4a90e2); }
+.cs-local-row { display:flex; gap:8px; background:var(--comfy-box-bg, var(--comfy-input-bg,#333)); border:1px solid transparent; border-radius:6px; padding:8px; margin-bottom:6px; align-items:flex-start; }
+.cs-local-row:hover { border-color:var(--border-color,#444); }
 .cs-local-main { flex:1; min-width:0; }
 .cs-local-name { font-weight:600; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .cs-local-sub { display:flex; gap:4px; align-items:center; flex-wrap:wrap; margin:3px 0; }
-.cs-local-path { font-size:10px; color:var(--desc-text-color); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.cs-local-path { font-size:10px; color:var(--desc-text-color,#999); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .cs-local-actions { display:flex; flex-direction:column; gap:4px; flex-shrink:0; }
 .cs-local-update { font-size:11px; margin-top:4px; color:#e2a23f; display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
 .cs-local-update.cs-ok { color:#4caf50; }
-.cs-dim { color:var(--desc-text-color); font-size:11px; }
-.cs-dl-list { height:calc(100% - 46px); overflow-y:auto; padding:0 6px; }
-.cs-dl-row { background:var(--comfy-box-bg, var(--comfy-input-bg)); border-radius:6px; padding:8px; margin-bottom:6px; display:flex; gap:8px; align-items:center; }
+.cs-dim { color:var(--desc-text-color,#999); font-size:11px; }
+.cs-dl-row { background:var(--comfy-box-bg, var(--comfy-input-bg,#333)); border-radius:6px; padding:8px; margin-bottom:6px; display:flex; gap:8px; align-items:center; }
 .cs-dl-info { flex:1; min-width:0; }
 .cs-dl-name { font-size:12px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .cs-dl-bar { height:6px; background:rgba(0,0,0,.3); border-radius:3px; margin:5px 0; overflow:hidden; }
-.cs-dl-fill { height:100%; background:var(--accent-color); border-radius:3px; transition:width .4s; }
+.cs-dl-fill { height:100%; background:var(--accent-color,#4a90e2); border-radius:3px; transition:width .4s; }
 .cs-dl-fill.done { background:#4caf50; }
 .cs-dl-fill.error { background:#e2543f; }
 .cs-dl-sub { display:flex; justify-content:space-between; gap:6px; font-size:11px; }
-.cs-status-done { color:#4caf50; } .cs-status-error { color:#e2543f; } .cs-status-cancelled { color:var(--desc-text-color); }
+.cs-status-done { color:#4caf50; } .cs-status-error { color:#e2543f; } .cs-status-cancelled { color:var(--desc-text-color,#999); }
 .cs-modal { position:fixed; inset:0; background:rgba(0,0,0,.7); z-index:99999; display:flex; align-items:center; justify-content:center; backdrop-filter:blur(2px); }
-.cs-modal-box { background:var(--comfy-menu-bg, #2a2a2a); border:1px solid var(--border-color); border-radius:10px; padding:16px; width:min(92vw, 520px); max-height:88vh; overflow-y:auto; box-shadow:0 10px 40px rgba(0,0,0,.5); }
+.cs-modal-box { background:var(--comfy-menu-bg,#2a2a2a); border:1px solid var(--border-color,#444); border-radius:10px; padding:16px; width:min(92vw, 520px); max-height:88vh; overflow-y:auto; box-shadow:0 10px 40px rgba(0,0,0,.5); }
 .cs-modal-title { margin:0 0 10px; font-size:15px; }
-.cs-modal-msg { font-size:12px; color:var(--desc-text-color); white-space:pre-line; }
+.cs-modal-msg { font-size:12px; color:var(--desc-text-color,#999); white-space:pre-line; }
 .cs-modal-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:14px; }
 .cs-form { display:flex; flex-direction:column; gap:10px; }
 .cs-form label { display:flex; flex-direction:column; gap:4px; font-size:12px; }
-.cs-form input[type=text], .cs-form input[type=password], .cs-form input[type=number], .cs-form select { background:var(--comfy-input-bg); color:var(--input-text-color); border:1px solid var(--border-color); border-radius:5px; padding:6px; font-size:12px; }
+.cs-form input[type=text], .cs-form input[type=password], .cs-form input[type=number], .cs-form select { background:var(--comfy-input-bg,#333); color:var(--input-text-color,#ddd); border:1px solid var(--border-color,#444); border-radius:5px; padding:6px; font-size:12px; }
 .cs-check { flex-direction:row !important; align-items:center; gap:6px !important; }
-.cs-form-hint { font-size:11px; color:var(--desc-text-color); opacity:.8; }
+.cs-form-hint { font-size:11px; color:var(--desc-text-color,#999); opacity:.8; }
 .cs-dl-hint { background:rgba(0,0,0,.2); border-radius:6px; padding:6px 8px; }
 `;
     document.head.appendChild(style);
@@ -1015,13 +1115,20 @@ app.registerExtension({
             tooltip: "Civitai 模型浏览器与本地管理器",
             render(el) {
                 buildRoot(el);
-                if (S.browse.dirty) fetchBrowse(true);
-                else renderResults(true);
+                if (S.browse.dirty) {
+                    // 重拉分支不恢复详情(数据将失效),同步清理残留的详情态
+                    S.ui.detailId = null;
+                    S.browse.detail = null;
+                    fetchBrowse(true);
+                } else {
+                    renderResults(true);
+                    restoreBrowseState();
+                }
                 pollDownloads();
             },
         });
         if (pollTimer) clearInterval(pollTimer);
-        pollTimer = setInterval(pollDownloads, 1500);
+        pollTimer = setInterval(pollDownloads, 2000);
         console.log("[Civitai-Studio] 已就绪");
     },
 });

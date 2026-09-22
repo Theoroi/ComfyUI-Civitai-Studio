@@ -71,7 +71,7 @@ def write_sidecar(model_path, meta):
 
 def _scan_unlocked(force):
     now = time.time()
-    if not force and _cache["models"] and now - _cache["ts"] < SCAN_TTL:
+    if not force and now - _cache["ts"] < SCAN_TTL:  # 空库同样受 TTL 保护,避免每请求全扫
         return _cache
     models = []
     seen = set()

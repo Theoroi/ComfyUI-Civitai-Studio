@@ -2,7 +2,7 @@
 
 ComfyUI 侧边栏插件:Civitai **在线浏览器 + 本地模型管理器 + 下载队列**。搜索 Civitai 上的模型直接下载进 ComfyUI 模型目录,跟踪已安装版本、检查更新、删除/定位本地文件。
 
-> 灵感来自 [ComfyUI-Civitai-Toolkit](https://github.com/BAIKEMARK/ComfyUI-Civitai-Toolkit)(MIT),为其重写的轻量版:不需要数据库、不需要哈希全库扫描,新增**真实下载队列(断点续传 + SHA256 校验)**。
+> 灵感来自 [ComfyUI-Civitai-Toolkit](https://github.com/BAIKEMARK/ComfyUI-Civitai-Toolkit)(MIT)与其实践脚本 `civitai_pull.py`,为其重写的轻量版:不需要数据库、不需要哈希全库扫描,新增**真实下载队列(断点续传 + SHA256 校验)**。
 
 ## 功能
 
@@ -33,7 +33,7 @@ git clone <本仓库> ComfyUI-Civitai-Studio
 
 ### 网络问题(国内用户)
 
-- **默认 API 站点为 `civitai.red`**(与 [docs/civitai/civitai_pull.py](../../docs/civitai/civitai_pull.py) 实测一致):API 与下载端点齐全,基本不被 Cloudflare 拦截;被拦时可在设置里改回 `https://civitai.com`。
+- **默认 API 站点为 `civitai.red`**(参考上游 Toolkit 仓库的 `civitai_pull.py` 实践):API 与下载端点齐全,基本不被 Cloudflare 拦截;被拦时可在设置里改回 `https://civitai.com`。
 - 设置里可配 **HTTP 或 SOCKS5 代理**:`http://127.0.0.1:10808`(v2rayN 混合端口)、`socks5://127.0.0.1:10808`,裸地址自动按 HTTP 处理,`localhost` 自动换成 `127.0.0.1`。API、下载、预览图全部走后端,代理对整条链路生效。
 - SOCKS 支持依赖 `aiohttp-socks`(requirements.txt 已声明;未安装时 HTTP 代理仍可用,SOCKS 会给出安装提示)。
 - 偶发「返回网页而非 JSON」= 代理出口 IP 被 Cloudflare 挑战,插件会自动重建连接重试 3 次;仍失败就换个节点。

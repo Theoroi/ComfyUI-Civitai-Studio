@@ -23,52 +23,61 @@ DEFAULTS = {
 }
 
 
-def load():
+def _load_locked():
     global _CACHE
+    if _CACHE is not None:
+        return _CACHE
+    cfg = dict(DEFAULTS)
+    try:
+        with open(_CONFIG_FILE, "r", encoding="utf-8") as f:
+            stored = json.load(f)
+        if isinstance(stored, dict):
+            for key in DEFAULTS:
+                if key in stored:
+                    cfg[key] = stored[key]
+    except (OSError, ValueError):
+        pass
+    try:
+        cfg["nsfw"] = int(cfg.get("nsfw", 1))
+    except (TypeError, ValueError):
+        cfg["nsfw"] = 1
+    try:
+        cfg["max_concurrent"] = max(1, min(4, int(cfg.get("max_concurrent", 1))))
+    except (TypeError, ValueError):
+        cfg["max_concurrent"] = 1
+    _CACHE = cfg
+    return cfg
+
+
+def _save_locked(cfg):
+    global _CACHE
+    os.makedirs(_CONFIG_DIR, exist_ok=True)
+    tmp = _CONFIG_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, _CONFIG_FILE)
+    _CACHE = cfg
+
+
+def load():
     with _LOCK:
-        if _CACHE is not None:
-            return _CACHE
-        cfg = dict(DEFAULTS)
-        try:
-            with open(_CONFIG_FILE, "r", encoding="utf-8") as f:
-                stored = json.load(f)
-            if isinstance(stored, dict):
-                for key in DEFAULTS:
-                    if key in stored:
-                        cfg[key] = stored[key]
-        except (OSError, ValueError):
-            pass
-        try:
-            cfg["nsfw"] = int(cfg.get("nsfw", 1))
-        except (TypeError, ValueError):
-            cfg["nsfw"] = 1
-        try:
-            cfg["max_concurrent"] = max(1, min(4, int(cfg.get("max_concurrent", 1))))
-        except (TypeError, ValueError):
-            cfg["max_concurrent"] = 1
-        _CACHE = cfg
-        return cfg
+        return _load_locked()
 
 
 def save(cfg):
-    global _CACHE
     with _LOCK:
-        os.makedirs(_CONFIG_DIR, exist_ok=True)
-        tmp = _CONFIG_FILE + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, _CONFIG_FILE)
-        _CACHE = cfg
+        _save_locked(cfg)
 
 
 def update(partial):
-    """合并更新部分字段,返回最新配置."""
-    cfg = load()
-    changed = False
-    for key, value in (partial or {}).items():
-        if key in DEFAULTS and cfg.get(key) != value:
-            cfg[key] = value
-            changed = True
-    if changed:
-        save(cfg)
-    return cfg
+    """合并更新部分字段,返回最新配置(读-改-写全程持锁)."""
+    with _LOCK:
+        cfg = _load_locked()
+        changed = False
+        for key, value in (partial or {}).items():
+            if key in DEFAULTS and cfg.get(key) != value:
+                cfg[key] = value
+                changed = True
+        if changed:
+            _save_locked(cfg)
+        return cfg

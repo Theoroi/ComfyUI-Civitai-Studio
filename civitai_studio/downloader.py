@@ -1,4 +1,11 @@
-"""下载队列 — 串行 worker(可配并发)、断点续传、SHA256 校验、进度跟踪."""
+"""下载队列 — 串行 worker(可配并发)、断点续传、SHA256 校验、进度跟踪.
+
+评审 R1 加固点:
+- 同一版本已有进行中的任务时拒绝重复入队;临时文件按 job id 独占,防并发交错写。
+- subfolder 逐段剥离尾随点/空格 + Windows 保留名过滤 + realpath 越界断言。
+- 服务器忽略 Range 回 200 时计数归零;206 校验 Content-Range 起点。
+- SHA256 校验阶段响应取消;下载网络错误走统一中文提示;sidecar 写失败可见。
+"""
 
 import asyncio
 import hashlib
@@ -17,21 +24,35 @@ _worker_tasks = []
 _cancel_flags = set()
 MAX_FINISHED_KEPT = 100
 
+ACTIVE_STATUSES = ("queued", "downloading", "verifying")
+
 JOB_PUBLIC_FIELDS = (
     "id", "model_id", "version_id", "model_name", "version_name", "type",
-    "base_model", "category", "filename", "dest", "status", "error",
+    "base_model", "category", "filename", "dest", "status", "error", "warning",
     "received", "total", "speed", "progress", "verified", "created", "finished",
 )
 
+_WIN_RESERVED = re.compile(r"(?i)(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$")
+
 
 def sanitize_filename(name):
-    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", str(name or "")).strip()
-    name = re.sub(r"\s+", " ", name)
-    return name[:160] or "model.bin"
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", str(name or "")).strip().rstrip(" .")
+    name = re.sub(r"\s+", " ", name)[:160].rstrip(" .")  # 截断后再收一次尾,防截断点落在点号上
+    if not name:
+        return "model.bin"
+    if name in (".", "..") or _WIN_RESERVED.match(name):
+        name = "_" + name
+    return name
 
 
 def sanitize_subfolder(sub):
-    parts = [p for p in re.split(r"[\\/]+", str(sub or "")) if p not in ("", ".", "..")]
+    """逐段消毒:剥非法字符与尾随点/空格,滤掉相对段与 Windows 保留名."""
+    parts = []
+    for raw in re.split(r"[\\/]+", str(sub or "")):
+        p = re.sub(r'[<>:"|?*\x00-\x1f]', "_", raw).strip().rstrip(" .")
+        if p in ("", ".", "..") or _WIN_RESERVED.match(p):
+            continue
+        parts.append(p[:120])
     return os.path.join(*parts) if parts else ""
 
 
@@ -55,6 +76,13 @@ def _unique_dest(path):
     return path + f".{int(time.time())}.bin"
 
 
+def _active_same_version(version_id):
+    return any(
+        str(j.get("version_id")) == str(version_id) and j.get("status") in ACTIVE_STATUSES
+        for j in _jobs.values()
+    )
+
+
 def get_state():
     return [{k: j.get(k) for k in JOB_PUBLIC_FIELDS} for j in _jobs.values()]
 
@@ -63,9 +91,18 @@ def enqueue(payload):
     version_id = payload.get("version_id")
     if not version_id:
         raise ValueError("缺少 version_id")
+    if _active_same_version(version_id):
+        raise ValueError("该模型版本已在下载队列中,请勿重复添加")
     root = _validate_root(payload.get("root"))
     if root is None:
         raise ValueError("目标目录不在已注册的模型目录内")
+    sub = sanitize_subfolder(payload.get("subfolder"))
+    # 越界断言:即使消毒有漏,也保证最终目录不逃出注册根
+    dest_dir_check = os.path.join(root, sub) if sub else root
+    real_root = os.path.realpath(root)
+    real_dest = os.path.realpath(dest_dir_check)
+    if real_dest != real_root and not real_dest.lower().startswith(real_root.lower() + os.sep):
+        raise ValueError("子文件夹越出目标目录,已拒绝")
     filename = sanitize_filename(payload.get("filename"))
     job = {
         "id": uuid.uuid4().hex[:12],
@@ -76,13 +113,14 @@ def enqueue(payload):
         "type": payload.get("type") or "",
         "base_model": payload.get("base_model") or "",
         "category": payload.get("category") or "",
-        "file_index": int(payload.get("file_index", 0) or 0),
+        "file_index": max(0, int(payload.get("file_index", 0) or 0)),
         "filename": filename,
-        "subfolder": sanitize_subfolder(payload.get("subfolder")),
+        "subfolder": sub,
         "root": root,
         "dest": "",
         "status": "queued",
         "error": "",
+        "warning": "",
         "received": 0,
         "total": 0,
         "speed": 0,
@@ -128,6 +166,12 @@ async def _worker():
             await _run_job(job)
         except asyncio.CancelledError:
             job["status"] = "cancelled"
+        except civitai_client.CivitaiError as e:
+            job["status"] = "error"
+            job["error"] = str(e)
+        except (asyncio.TimeoutError, aiohttp.ClientError) as e:
+            job["status"] = "error"
+            job["error"] = civitai_client.net_error_message(e)
         except Exception as e:
             job["status"] = "error"
             job["error"] = str(e)
@@ -147,6 +191,13 @@ def _sha256_file(path):
     return h.hexdigest()
 
 
+def _content_range_start(resp):
+    """从 Content-Range: bytes 123-456/789 里取起点;解析失败返回 None."""
+    cr = resp.headers.get("Content-Range") or ""
+    m = re.match(r"bytes\s+(\d+)-", cr, re.I)
+    return int(m.group(1)) if m else None
+
+
 async def _run_job(job):
     data = await civitai_client.get_json(f"/model-versions/{job['version_id']}")
     if not job.get("version_name"):
@@ -156,34 +207,39 @@ async def _run_job(job):
     files = data.get("files") or []
     if not files:
         raise ValueError("该版本没有可下载文件")
-    idx = min(job.get("file_index", 0), len(files) - 1)
+    idx = max(0, min(job.get("file_index", 0), len(files) - 1))
     file = files[idx]
     url = file.get("downloadUrl") or data.get("downloadUrl")
     if not url:
         url = f"{civitai_client.base_url()}/api/download/models/{job['version_id']}"
     if url.startswith("/"):
         url = civitai_client.base_url() + url
+    url = civitai_client.append_official_token(url)
 
     dest_dir = os.path.join(job["root"], job["subfolder"]) if job["subfolder"] else job["root"]
     os.makedirs(dest_dir, exist_ok=True)
-    dest = _unique_dest(os.path.join(dest_dir, job["filename"] or sanitize_filename(file.get("name"))))
+    dest = os.path.join(dest_dir, job["filename"] or sanitize_filename(file.get("name")))
+    # 临时文件名由目标+下载地址哈希决定(确定名):跨任务/跨重启都能命中同一 .part 断点续传;
+    # 并发同版本已被入队去重挡住,不会被两个 worker 同时写
+    part_tag = hashlib.sha1((str(dest) + "|" + str(url)).encode("utf-8")).hexdigest()[:12]
+    tmp = dest + f".{part_tag}.part"
     job["filename"] = os.path.basename(dest)
-    tmp = dest + ".part"
     job["dest"] = dest
     job["total"] = int((file.get("sizeKB") or 0) * 1024)
 
-    extra_headers = {"Accept": "*/*"}
+    extra_headers = {"Accept": "*/*", "Accept-Encoding": "identity"}
     resume_from = 0
     if os.path.exists(tmp):
         resume_from = os.path.getsize(tmp)
         if resume_from > 0:
             extra_headers["Range"] = f"bytes={resume_from}-"
-    # 下载流式传输:不限总时长,只限制单次读超时,避免大文件被全局超时杀掉
+    # 流式下载:不限总时长,只限单次读超时;允许重定向(下载落盘非浏览器,且
+    # Civitai 下载链路本身就会 302 到签名 CDN 域);用独立会话,不受共享会话退役影响
     dl_timeout = aiohttp.ClientTimeout(total=None, connect=20, sock_read=90)
-    received = resume_from
+    received = 0
     started = time.time()
-    job["received"] = received
-    async with await civitai_client.open_stream(
+    job["received"] = 0
+    async with civitai_client.open_isolated_stream(
         url, extra_headers=extra_headers, timeout=dl_timeout
     ) as resp:
         if resp.status == 416:
@@ -193,14 +249,26 @@ async def _run_job(job):
         if resp.status not in (200, 206):
             raise ValueError(f"下载失败 HTTP {resp.status}")
         if (resp.content_type or "").startswith("text/html"):
-            raise ValueError("下载被拦截(服务器返回的是网页)— 可能是 Cloudflare 校验,换个代理节点后重试")
+            raise ValueError("下载被拦截(服务器返回的是网页)— 可能是 WAF 校验,换个代理节点后重试")
         try:
             content_length = int(resp.headers.get("Content-Length") or 0)
         except ValueError:
             content_length = 0
+        append_mode = resp.status == 206 and resume_from > 0
+        if append_mode:
+            start = _content_range_start(resp)
+            if start is not None and start != resume_from:
+                # 服务器给的续传起点与本地不符,放弃续传从头下
+                append_mode = False
+        if append_mode:
+            received = resume_from
+        else:
+            received = 0
+            resume_from = 0
+        job["received"] = received
         if content_length:
-            job["total"] = content_length + (resume_from if resp.status == 206 else 0)
-        mode = "ab" if (resp.status == 206 and resume_from) else "wb"
+            job["total"] = content_length + received
+        mode = "ab" if append_mode else "wb"
         with open(tmp, mode) as f:
             async for chunk in resp.content.iter_chunked(512 * 1024):
                 if job["id"] in _cancel_flags:
@@ -213,26 +281,37 @@ async def _run_job(job):
                 if job["total"]:
                     job["progress"] = min(1.0, received / job["total"])
 
-    if config.load().get("verify_hash", True):
-        expected = (file.get("hashes") or {}).get("SHA256")
-        if expected:
-            job["status"] = "verifying"
-            loop = asyncio.get_running_loop()
-            actual = await loop.run_in_executor(None, _sha256_file, tmp)
-            if actual.lower() != str(expected).lower():
-                try:
-                    os.remove(tmp)
-                except OSError:
-                    pass
-                raise ValueError(f"SHA256 校验失败(期望 {str(expected)[:12]}…,实际 {actual[:12]}…),已删除损坏文件")
-            job["verified"] = True
-        else:
-            job["verified"] = None
+    expected = (file.get("hashes") or {}).get("SHA256")
+    if config.load().get("verify_hash", True) and expected:
+        if job["id"] in _cancel_flags:
+            raise asyncio.CancelledError()
+        job["status"] = "verifying"
+        loop = asyncio.get_running_loop()
+        actual = await loop.run_in_executor(None, _sha256_file, tmp)
+        if job["id"] in _cancel_flags:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise asyncio.CancelledError()
+        if actual.lower() != str(expected).lower():
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise ValueError(f"SHA256 校验失败(期望 {str(expected)[:12]}…,实际 {actual[:12]}…),已删除损坏文件")
+        job["verified"] = True
+    else:
+        job["verified"] = None
 
-    os.replace(tmp, dest)
+    # 目标名可能被并发任务占掉,落盘前最后再排重
+    final = _unique_dest(dest)
+    os.replace(tmp, final)
+    job["dest"] = final
+    job["filename"] = os.path.basename(final)
     job["status"] = "done"
     job["progress"] = 1.0
-    local_index.write_sidecar(dest, {
+    if not local_index.write_sidecar(final, {
         "source": "civitai",
         "model_id": job.get("model_id"),
         "version_id": str(job.get("version_id")),
@@ -240,12 +319,13 @@ async def _run_job(job):
         "version_name": job.get("version_name") or data.get("name"),
         "base_model": job.get("base_model") or data.get("baseModel"),
         "type": job.get("type"),
-        "file_name": os.path.basename(dest),
-        "sha256": (file.get("hashes") or {}).get("SHA256"),
-        "download_url": url,
+        "file_name": os.path.basename(final),
+        "sha256": expected,
+        "download_url": url.split("?", 1)[0],  # 剥掉可能带 token 的查询串再落盘
         "trained_words": data.get("trainedWords") or [],
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-    })
+    }):
+        job["warning"] = "模型已下载,但写入 .civitai.json 元数据失败(权限/磁盘?),本地库将无法关联该版本"
     asyncio.get_running_loop().run_in_executor(None, local_index.scan, True)
 
 
@@ -256,7 +336,7 @@ def cancel(job_id):
     if job["status"] == "queued":
         job["status"] = "cancelled"
         return True
-    if job["status"] in ("downloading", "verifying"):
+    if job["status"] in ACTIVE_STATUSES[1:]:
         _cancel_flags.add(job_id)
         return True
     return False

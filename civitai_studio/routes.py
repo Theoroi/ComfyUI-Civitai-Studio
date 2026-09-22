@@ -12,6 +12,7 @@ import urllib.parse
 import aiohttp
 import folder_paths
 from aiohttp import web
+from yarl import URL
 
 from . import civitai_client, config, downloader, local_index
 
@@ -43,6 +44,15 @@ def _ok(**kw):
     return web.json_response({"status": "ok", **kw})
 
 
+async def _read_json_dict(request):
+    """解析请求体,必须是 JSON 对象;否则返回 None(调用方回 400)."""
+    try:
+        body = await request.json()
+    except Exception:
+        return None
+    return body if isinstance(body, dict) else None
+
+
 async def _scan_async(force=False):
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, lambda: local_index.scan(force=force))
@@ -69,6 +79,8 @@ def _annotate_version(version, index):
 
 
 def _annotate_items(data, index):
+    """标注安装状态。nsfw 参数保持 0/1/2 数字档位:镜像站(civitai.red)实测可用,
+    官方站的枚举口径如有出入再按需映射。"""
     try:
         for model in data.get("items", []):
             model["installed"] = False
@@ -100,10 +112,9 @@ async def get_config(request):
 
 @_post("/civitai_studio/config")
 async def set_config(request):
-    try:
-        body = await request.json()
-    except Exception:
-        return _json_error("请求体不是合法 JSON", 400)
+    body = await _read_json_dict(request)
+    if body is None:
+        return _json_error("请求体必须是 JSON 对象", 400)
     partial = {}
     for key in ("proxy", "mirror"):
         if key in body:
@@ -189,6 +200,8 @@ async def version_images(request):
         return _json_error("limit 必须是数字", 400)
     if q.get("cursor"):
         params["cursor"] = q["cursor"]
+    if q.get("nsfw"):
+        params["nsfw"] = q["nsfw"]  # 与搜索同档位,避免"列表有图、详情无图"
     try:
         data = await civitai_client.get_json("/images", params=params)
     except civitai_client.CivitaiError as e:
@@ -200,18 +213,34 @@ async def version_images(request):
 async def image_proxy(request):
     url = request.query.get("url", "")
     if not config.load().get("proxy_images"):
+        # 关闭中转也只允许白名单域的 302,防开放重定向
+        if not civitai_client.host_allowed_image(url):
+            return _json_error("不允许的图片地址", 400)
         raise web.HTTPFound(url)
-    host = urllib.parse.urlparse(url).hostname or ""
-    allowed = host.endswith(("civitai.com", "civitai.green", "civitai.work", "civitai.red"))
-    if not url.startswith(("http://", "https://")) or not allowed:
+    if not url.startswith(("http://", "https://")) or not civitai_client.host_allowed_image(url):
         return _json_error("不允许的图片地址", 400)
+    timeout = aiohttp.ClientTimeout(total=30, connect=10)
+    current = url
     try:
-        timeout = aiohttp.ClientTimeout(total=30, connect=10)
-        async with await civitai_client.open_stream(url, timeout=timeout) as resp:
-            body = await resp.read()
-            ctype = (resp.headers.get("Content-Type") or "image/jpeg").split(";")[0]
-            return web.Response(body=body, content_type=ctype,
-                                headers={"Cache-Control": "public, max-age=86400"})
+        # 逐跳手动跟随重定向,每一跳(含跳转后)都过域名白名单,鉴权头按目标主机自动决定
+        for _hop in range(5):
+            async with await civitai_client.open_stream(current, timeout=timeout) as resp:
+                if resp.status in (301, 302, 303, 307, 308) and resp.headers.get("Location"):
+                    current = str(URL(resp.headers["Location"]).join(URL(current)))
+                    if not civitai_client.host_allowed_image(current):
+                        return _json_error("重定向到不允许的图片地址", 400)
+                    continue
+                if resp.status != 200:
+                    return _json_error(f"图片中转失败: HTTP {resp.status}", 502)
+                ctype = (resp.content_type or "").split(";")[0]
+                if not ctype.startswith("image/"):
+                    return _json_error("图片中转失败: 上游返回的不是图片(可能被 WAF 拦截),可尝试更换代理节点", 502)
+                body = await resp.content.read(20 * 1024 * 1024 + 1)
+                if len(body) > 20 * 1024 * 1024:
+                    return _json_error("图片超过 20MB 上限", 502)
+                return web.Response(body=body, content_type=ctype,
+                                    headers={"Cache-Control": "public, max-age=86400"})
+        return _json_error("图片重定向次数过多", 502)
     except Exception as e:
         return _json_error(f"图片中转失败: {civitai_client.net_error_message(e)}", 502)
 
@@ -221,7 +250,9 @@ async def image_proxy(request):
 @_get("/civitai_studio/destinations")
 async def destinations(request):
     ctype = request.query.get("type", "Checkpoint")
-    keys = local_index.TYPE_TO_FOLDERS.get(ctype) or local_index.categories()
+    keys = local_index.TYPE_TO_FOLDERS.get(ctype)
+    if keys is None:
+        return _json_error(f"未知的模型类型: {ctype}", 400)
     out = []
     seen_roots = set()
     for key in keys:
@@ -238,10 +269,9 @@ async def destinations(request):
 
 @_post("/civitai_studio/download")
 async def start_download(request):
-    try:
-        body = await request.json()
-    except Exception:
-        return _json_error("请求体不是合法 JSON", 400)
+    body = await _read_json_dict(request)
+    if body is None:
+        return _json_error("请求体必须是 JSON 对象", 400)
     try:
         job = downloader.enqueue(body)
     except ValueError as e:
@@ -256,10 +286,9 @@ async def list_downloads(request):
 
 @_post("/civitai_studio/downloads/cancel")
 async def cancel_download(request):
-    try:
-        body = await request.json()
-    except Exception:
-        return _json_error("请求体不是合法 JSON", 400)
+    body = await _read_json_dict(request)
+    if body is None:
+        return _json_error("请求体必须是 JSON 对象", 400)
     ok = downloader.cancel(str(body.get("id", "")))
     return _ok(cancelled=ok)
 
@@ -276,9 +305,20 @@ async def clear_downloads(request):
 async def local_models(request):
     force = request.query.get("force") == "1"
     index = await _scan_async(force)
+    # 响应瘦身:去掉 sidecar 里的长字段,完整元数据暂无按需详情接口,前端只用这些
+    slim = []
+    for m in index["models"]:
+        civ = m.get("civitai") or {}
+        slim.append({
+            "id": m["id"], "category": m["category"], "root": m["root"],
+            "rel": m["rel"], "name": m["name"], "size": m["size"], "mtime": m["mtime"],
+            "civitai": {k: civ[k] for k in
+                        ("model_id", "model_name", "version_id", "version_name", "base_model", "trained_words")
+                        if k in civ},
+        })
     return web.json_response({
         "status": "ok",
-        "models": index["models"],
+        "models": slim,
         "truncated": index.get("truncated", False),
         "scanned_at": index["ts"],
     })
@@ -286,10 +326,10 @@ async def local_models(request):
 
 @_post("/civitai_studio/local/delete")
 async def local_delete(request):
-    try:
-        body = await request.json()
-    except Exception:
-        return _json_error("请求体不是合法 JSON", 400)
+    body = await _read_json_dict(request)
+    if body is None:
+        return _json_error("请求体必须是 JSON 对象", 400)
+    await _scan_async(False)  # resolve 只查内存索引,扫描必须先在 executor 完成
     path = local_index.resolve(body.get("category"), body.get("rel"))
     if not path or not os.path.isfile(path):
         return _json_error("文件不存在或不在模型目录内", 404)
@@ -303,16 +343,16 @@ async def local_delete(request):
             os.remove(sidecar)
         except OSError:
             pass
-    local_index.scan(force=True)
+    await _scan_async(True)
     return _ok()
 
 
 @_post("/civitai_studio/local/reveal")
 async def local_reveal(request):
-    try:
-        body = await request.json()
-    except Exception:
-        return _json_error("请求体不是合法 JSON", 400)
+    body = await _read_json_dict(request)
+    if body is None:
+        return _json_error("请求体必须是 JSON 对象", 400)
+    await _scan_async(False)
     path = local_index.resolve(body.get("category"), body.get("rel"))
     if not path or not os.path.isfile(path):
         return _json_error("文件不存在或不在模型目录内", 404)
@@ -331,11 +371,8 @@ async def local_reveal(request):
 
 @_post("/civitai_studio/local/check_updates")
 async def check_updates(request):
-    try:
-        body = await request.json() if request.can_read_body else {}
-    except Exception:
-        body = {}
-    wanted = body.get("items") or []
+    body = (await _read_json_dict(request)) or {}
+    wanted = [w for w in (body.get("items") or []) if isinstance(w, dict)]
     index = await _scan_async(False)
     targets = []
     for m in index["models"]:
@@ -343,35 +380,47 @@ async def check_updates(request):
         if not meta.get("model_id") or not meta.get("version_id"):
             continue
         if wanted:
-            key_id = m["id"]
             if not any(w.get("category") == m["category"] and w.get("rel") == m["rel"] for w in wanted):
                 continue
         targets.append(m)
-    results = []
-    errors = 0
-    for m in targets[:30]:
+    batch = targets[:30]
+    sem = asyncio.Semaphore(4)
+
+    async def fetch_one(m):
         meta = m["civitai"]
-        try:
-            data = await civitai_client.get_json(f"/models/{meta['model_id']}")
-            versions = [v for v in data.get("modelVersions", []) if v.get("id")]
-            latest = versions[0] if versions else None
-            current = str(meta.get("version_id"))
-            entry = {
-                "id": m["id"], "category": m["category"], "rel": m["rel"],
-                "name": m["name"], "model_id": meta.get("model_id"),
-                "current_version": meta.get("version_name"),
-            }
-            if latest and str(latest.get("id")) != current:
-                entry["update"] = {
-                    "version_id": latest["id"], "version_name": latest.get("name"),
-                    "base_model": latest.get("baseModel"),
-                    "model_name": data.get("name"),
-                }
-            results.append(entry)
-        except civitai_client.CivitaiError as e:
-            errors += 1
-            results.append({"id": m["id"], "error": str(e)})
-    return web.json_response({"status": "ok", "checked": len(targets[:30]), "errors": errors, "results": results})
+        entry = {
+            "id": m["id"], "category": m["category"], "rel": m["rel"],
+            "name": m["name"], "model_id": meta.get("model_id"),
+            "current_version": meta.get("version_name"),
+        }
+        async with sem:
+            try:
+                data = await civitai_client.get_json(f"/models/{meta['model_id']}")
+                versions = [v for v in data.get("modelVersions", []) if v.get("id")]
+                latest = versions[0] if versions else None
+                current = str(meta.get("version_id"))
+                if latest and str(latest.get("id")) != current:
+                    entry["update"] = {
+                        "version_id": latest["id"], "version_name": latest.get("name"),
+                        "base_model": latest.get("baseModel"),
+                        "model_name": data.get("name"),
+                    }
+                return entry
+            except Exception as e:  # 单项失败不拖垮整批
+                entry["error"] = str(e)
+                return entry
+
+    try:
+        results = await asyncio.wait_for(
+            asyncio.gather(*(fetch_one(m) for m in batch)), timeout=120
+        )
+    except asyncio.TimeoutError:
+        results = [{"id": m["id"], "error": "批量检查整体超时,请分批重试"} for m in batch]
+    errors = sum(1 for r in results if r.get("error"))
+    return web.json_response({
+        "status": "ok", "checked": len(batch), "total_linked": len(targets),
+        "errors": errors, "results": results,
+    })
 
 
 if _routes is None:
