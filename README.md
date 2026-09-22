@@ -9,12 +9,12 @@ ComfyUI 侧边栏插件:Civitai **在线浏览器 + 本地模型管理器 + 下�
 - **🌐 浏览**:搜索 Civitai 模型(类型 / 底模 / 排序 / 时间范围 / NSFW 分级过滤),无限滚动;卡片标记「已安装」;详情页含版本切换、触发词、文件列表、预览图画廊,点预览图可看生成参数(提示词 / 采样器 / Seed / 资源列表,一键复制)。
 - **⬇ 下载**:选目标目录(自动按模型类型映射到 checkpoints / loras / vae / controlnet 等注册目录)+ 子文件夹 + 文件名;串行/并发队列、实时速度、**断点续传**、下载后 **SHA256 校验**(可关),完成后自动写 `<模型文件名>.civitai.json` 元数据(含 version_id / 触发词 / hash)。
 - **📁 本地库**:按目录分类扫描所有本地模型,搜索、定位(打开资源管理器)、删除(带确认)、**检查更新**(基于 sidecar 里的 version_id 与 Civitai 最新版对比,不用哈希大文件),新版本一键回填同目录下载。
-- **⚙ 设置**:API Key、HTTP 代理、镜像站、NSFW 默认级别、图片中转开关、SHA256 校验开关、下载并发数。
+- **⚙ 设置**:API Key、HTTP 代理、API 站点、下载并发数、图片中转开关、SHA256 校验开关(NSFW 档位在浏览页过滤器选择,自动记住)。
 
 ## 兼容性
 
 - 需要 ComfyUI 前端支持 `extensionManager.registerSidebarTab`(2024-07 之后的前端均可;实测 **ComfyUI 0.37.0 / 前端 1.52.7**)。
-- 纯 UI 插件,无自定义节点;Python 依赖仅 `aiohttp`(ComfyUI 自带)+ `aiohttp-socks`(可选,SOCKS 代理支持)。
+- 纯 UI 插件,无自定义节点;Python 依赖 `aiohttp`(ComfyUI 自带)+ `aiohttp-socks`(发布包默认安装;代码未装该库也能运行,仅 SOCKS 代理不可用并会提示)。
 
 ## 安装
 
@@ -49,7 +49,7 @@ git clone <本仓库> ComfyUI-Civitai-Studio
 
 - 配置:`<ComfyUI>/user/civitai_studio/config.json`
 - 模型元数据:模型文件旁的 `<文件名>.civitai.json`(可随文件一起移动/分享)
-- 下载临时文件:`<目标目录>/xxx.part`(断点续传,失败可手动删除)
+- 下载临时文件:`<目标目录>/xxx.<哈希>.part`(断点续传,失败可手动删除所有 `.part` 结尾文件)
 
 ## 与 Civitai-Toolkit 的差异
 

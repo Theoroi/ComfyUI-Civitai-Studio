@@ -93,7 +93,10 @@ def enqueue(payload):
     version_id = payload.get("version_id")
     if not version_id:
         raise ValueError("缺少 version_id")
-    file_index = max(0, int(payload.get("file_index", 0) or 0))
+    try:
+        file_index = max(0, int(payload.get("file_index", 0) or 0))
+    except (TypeError, ValueError):
+        raise ValueError("file_index 必须是整数")
     if _active_same_task(version_id, file_index):
         raise ValueError("该模型版本的同名文件已在下载队列中,请勿重复添加")
     root = _validate_root(payload.get("root"))
@@ -201,7 +204,7 @@ async def _worker():
                 job["error"] = civitai_client.net_error_message(e)
             except Exception as e:
                 job["status"] = "error"
-                job["error"] = str(e)
+                job["error"] = f"下载失败: {e}(请检查磁盘空间/权限后重试)"
             finally:
                 _cancel_flags.discard(job_id)
                 job["finished"] = time.time()

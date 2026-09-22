@@ -107,14 +107,12 @@ def is_official_host(url):
     return _host_match(host_of(url), _OFFICIAL_HOSTS)
 
 
-def host_allowed_image(url, extra_domain=""):
+def host_allowed_image(url):
     """图片代理白名单:静态域 + 当前 API 站点主机(自定义镜像时其图片域也放行)."""
     domains = list(_IMAGE_HOSTS)
     mirror_host = host_of(base_url())
     if mirror_host:
         domains.append(mirror_host)
-    if extra_domain:
-        domains.append(extra_domain.lower().lstrip("."))
     return _host_match(host_of(url), tuple(domains))
 
 

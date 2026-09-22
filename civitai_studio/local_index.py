@@ -171,7 +171,3 @@ def resolve(category, rel):
     item_id = str(category) + "/" + str(rel).replace("\\", "/")
     item = scan().get("by_id", {}).get(item_id)
     return item["path"] if item else None
-
-
-def invalidate():
-    scan(force=True)

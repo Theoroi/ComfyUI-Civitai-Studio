@@ -190,7 +190,6 @@ async function fetchBrowse(reset) {
     updateStatusLine();
     try {
         const data = await apiGet("/civitai_studio/search?" + browseParams(attemptedPage));
-        if (reset) st.items = [];
         st.items = reset ? (data.items || []) : st.items.concat(data.items || []);
         const cur = data.metadata?.currentPage ?? attemptedPage;
         const total = data.metadata?.totalPages ?? 1;
@@ -212,8 +211,7 @@ async function fetchBrowse(reset) {
 }
 
 function triggerBrowseRefresh() {
-    S.browse.items.forEach((m) => { m.__rendered = false; });
-    fetchBrowse(true);
+    fetchBrowse(true); // renderResults(true) 内部会重置 __rendered
 }
 
 // ---------- 在线浏览:渲染 ----------

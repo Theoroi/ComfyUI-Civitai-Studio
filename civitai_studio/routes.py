@@ -7,7 +7,6 @@ import asyncio
 import os
 import subprocess
 import sys
-import urllib.parse
 
 import aiohttp
 import folder_paths
@@ -174,20 +173,9 @@ async def model_detail(request):
     return web.json_response(_annotate_items({"items": [data]}, index)["items"][0])
 
 
-@_get("/civitai_studio/version/{vid}")
-async def version_detail(request):
-    vid = request.match_info["vid"]
-    try:
-        data = await civitai_client.get_json(f"/model-versions/{vid}")
-    except civitai_client.CivitaiError as e:
-        return _json_error(e, 502)
-    index = await _scan_async(False)
-    _annotate_version(data, index)
-    return web.json_response(data)
-
-
 @_get("/civitai_studio/images")
 async def version_images(request):
+    """预留:分页拉取某版本更多预览图(当前前端只用详情内嵌 images)。"""
     q = request.query
     params = {}
     if q.get("modelVersionId"):
@@ -201,7 +189,7 @@ async def version_images(request):
     if q.get("cursor"):
         params["cursor"] = q["cursor"]
     if q.get("nsfw"):
-        params["nsfw"] = q["nsfw"]  # 与搜索同档位,避免"列表有图、详情无图"
+        params["nsfw"] = q["nsfw"]
     try:
         data = await civitai_client.get_json("/images", params=params)
     except civitai_client.CivitaiError as e:
@@ -312,7 +300,8 @@ async def local_models(request):
         civ = m.get("civitai") or {}
         slim.append({
             "id": m["id"], "category": m["category"], "root": m["root"],
-            "rel": m["rel"], "name": m["name"], "size": m["size"], "mtime": m["mtime"],
+            "rel": m["rel"], "name": m["name"], "path": m["path"],
+            "size": m["size"], "mtime": m["mtime"],
             "civitai": {k: civ[k] for k in
                         ("model_id", "model_name", "version_id", "version_name", "base_model", "trained_words")
                         if k in civ},
@@ -407,8 +396,11 @@ async def check_updates(request):
                         "model_name": data.get("name"),
                     }
                 return entry
-            except Exception as e:  # 单项失败不拖垮整批
+            except civitai_client.CivitaiError as e:  # 已是可读中文
                 entry["error"] = str(e)
+                return entry
+            except Exception:  # 未知异常不给用户看英文堆栈
+                entry["error"] = "查询失败,请稍后重试"
                 return entry
 
     try:

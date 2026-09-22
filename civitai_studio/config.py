@@ -13,9 +13,9 @@ _CONFIG_DIR = os.path.join(folder_paths.get_user_directory(), "civitai_studio")
 _CONFIG_FILE = os.path.join(_CONFIG_DIR, "config.json")
 
 DEFAULTS = {
-    "api_key": "",          # Civitai API Key(下载受限模型/提高限额)
-    "proxy": "",            # 例如 http://127.0.0.1:7890
-    "mirror": "",           # 镜像站,留空 = https://civitai.com
+    "api_key": "",          # Civitai API Key(下载受限模型/提高限额;只发给官方域)
+    "proxy": "",            # 例如 http://127.0.0.1:10808(SOCKS 写 socks5://)
+    "mirror": "",           # API 站点覆盖,留空 = https://civitai.red
     "nsfw": 1,              # 默认搜索 NSFW 级别 0/1/2
     "proxy_images": False,  # 预览图是否经服务端中转
     "verify_hash": True,    # 下载完成后校验 SHA256
@@ -62,11 +62,6 @@ def _save_locked(cfg):
 def load():
     with _LOCK:
         return _load_locked()
-
-
-def save(cfg):
-    with _LOCK:
-        _save_locked(cfg)
 
 
 def update(partial):
