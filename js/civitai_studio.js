@@ -101,6 +101,35 @@ function imgSrc(url) {
     return url;
 }
 
+function altSrc(url) {
+    // 加载失败换路重试:当前中转 → 直连;当前直连 → 中转
+    if (S.cfg.proxy_images) return url;
+    return "/civitai_studio/image?url=" + encodeURIComponent(url);
+}
+
+function pickCover(model) {
+    // 首版本可能没有预览(AutismMix)或首个是视频(Juggernaut):
+    // 优先跨版本找图片封面,全站只有视频封面时才回退视频
+    let video = null;
+    for (const v of model.modelVersions || []) {
+        for (const i of v.images || []) {
+            if (!i.url) continue;
+            if (i.type === "image") return { media: i, kind: "image" };
+            if (!video) video = { media: i, kind: "video" };
+        }
+    }
+    return video;
+}
+
+function attachCoverErrorHandler(el, url) {
+    // 直连/中转各试一次,都失败保留占位符(refreshAllImages 换路后还能再试)
+    el.addEventListener("error", () => {
+        if (el.dataset.retried) return;
+        el.dataset.retried = "1";
+        el.src = altSrc(url);
+    });
+}
+
 function toast(sev, summary, detail) {
     try {
         app.extensionManager.toast.add({ severity: sev, summary, detail, life: 4000 });
@@ -264,7 +293,7 @@ function makeCard(model) {
     if (!version) return null;
     const card = document.createElement("div");
     card.className = "cs-card" + (model.installed ? " cs-card-installed" : "");
-    const cover = version.images?.find((i) => i.url);
+    const cover = pickCover(model);
     const creator = model.creator?.username || "未知作者";
     const rating = version.stats && typeof version.stats.thumbsUpCount === "number" ? version.stats.thumbsUpCount : (model.stats?.thumbsUpCount || 0);
     card.innerHTML = `
@@ -283,18 +312,34 @@ function makeCard(model) {
             </div>
             <div class="cs-card-creator">by ${esc(creator)}</div>
         </div>`;
-    if (cover?.url) {
-        const img = document.createElement("img");
-        img.className = "cs-card-img";
-        img.loading = "lazy";
-        img.alt = model.name;
-        img.dataset.direct = cover.url;
-        // 注意:不能用 display:none 等加载完再显示——display:none 的元素不进入视口交集,
-        // lazy 加载永不触发,形成死锁。用 opacity 过渡显示。
-        img.onload = () => { $(".cs-card-placeholder", card).style.display = "none"; img.classList.add("is-loaded"); };
-        img.onerror = () => img.remove();
-        img.src = imgSrc(cover.url);
-        $(".cs-card-cover", card).prepend(img);
+    if (cover?.media?.url) {
+        const url = cover.media.url;
+        const isVideo = cover.kind === "video";
+        const el = document.createElement(isVideo ? "video" : "img");
+        el.className = "cs-card-img";
+        el.dataset.direct = url;
+        const show = () => {
+            const ph = $(".cs-card-placeholder", card);
+            if (ph) ph.style.display = "none";
+            el.classList.add("is-loaded");
+        };
+        if (isVideo) {
+            // 视频封面:静音循环,悬停播放;#t 片段让浏览器先渲染首帧
+            el.muted = true;
+            el.loop = true;
+            el.playsInline = true;
+            el.preload = "metadata";
+            el.addEventListener("loadeddata", show);
+            card.addEventListener("mouseenter", () => el.play().catch(() => {}));
+            card.addEventListener("mouseleave", () => el.pause());
+        } else {
+            el.loading = "lazy";
+            el.alt = model.name;
+            el.addEventListener("load", show);
+        }
+        attachCoverErrorHandler(el, url);
+        el.src = imgSrc(url) + (isVideo ? "#t=0.001" : "");
+        $(".cs-card-cover", card).prepend(el);
     }
     card.onclick = () => openDetail(model.id);
     return card;
@@ -381,6 +426,19 @@ function rewriteDescImages(root) {
     });
 }
 
+function galleryItemHtml(img) {
+    // 预览条目可能是视频(mp4 封面):静音循环,进视口才加载
+    const src = esc(imgSrc(img.url));
+    const direct = esc(img.url);
+    if (img.type === "video") {
+        return `<div class="cs-gallery-item"><video muted loop playsinline preload="metadata"
+                    src="${src}#t=0.001" data-direct="${direct}"
+                    onerror="this.style.display='none'"></video></div>`;
+    }
+    return `<div class="cs-gallery-item"><img loading="lazy" src="${src}" data-direct="${direct}"
+                onerror="this.style.display='none'"/></div>`;
+}
+
 function renderVersion(version, model) {
     const body = $("#cs-version-body");
     if (!body || !version) return;
@@ -407,11 +465,7 @@ function renderVersion(version, model) {
         ${images.length ? `
         <div class="cs-section">
             <div class="cs-section-title">预览图 (${images.length}) — 点击查看生成参数</div>
-            <div class="cs-gallery">${images.map((img) => `
-                <div class="cs-gallery-item">
-                    <img loading="lazy" src="${esc(imgSrc(img.url))}" data-direct="${esc(img.url)}"
-                         onerror="this.style.display='none'"/>
-                </div>`).join("")}
+            <div class="cs-gallery">${images.map(galleryItemHtml).join("")}
             </div>
         </div>` : ""}
     `;
@@ -1069,7 +1123,7 @@ function injectStyles() {
 .cs-file-name { font-size:12px; word-break:break-all; }
 .cs-file-meta { font-size:10px; color:var(--desc-text-color,#999); }
 .cs-gallery { display:grid; grid-template-columns:repeat(auto-fill, minmax(105px, 1fr)); gap:6px; }
-.cs-gallery-item img { width:100%; aspect-ratio:3/4; object-fit:cover; border-radius:4px; cursor:pointer; border:2px solid transparent; }
+.cs-gallery-item img, .cs-gallery-item video { width:100%; aspect-ratio:3/4; object-fit:cover; border-radius:4px; cursor:pointer; border:2px solid transparent; display:block; }
 .cs-gallery-item img:hover { border-color:var(--accent-color,#4a90e2); }
 .cs-desc { margin:8px 0; }
 .cs-desc summary { cursor:pointer; font-weight:600; font-size:12px; }
