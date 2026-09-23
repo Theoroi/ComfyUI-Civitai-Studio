@@ -30,7 +30,7 @@ const SORTS = ["Most Downloaded", "Highest Rated", "Newest"];
 const PERIODS = ["AllTime", "Month", "Week", "Day"];
 const NSFW_LEVELS = [0, 1, 2];
 
-const JS_VERSION = "0.4.0";
+const JS_VERSION = "0.5.0";
 
 // ---------- i18n ----------
 const STR = {
@@ -653,12 +653,13 @@ async function openBrowseFloat(modelId) {
 }
 
 // ---------- 详情页 ----------
-function renderDetail(model, container) {
+function renderDetail(model, container, opts = {}) {
     const box = container;
     if (!box) return;
     const versions = (model.modelVersions || []).filter((v) => v.id);
     const desc = sanitizeHtml(model.description);
     box.innerHTML = `
+        ${opts.offline ? `<div class="cs-banner">${esc(t("offlineBanner"))}</div>` : ""}
         <div class="cs-detail-head">
             <button class="cs-btn" id="cs-detail-back">${esc(t("back"))}</button>
             <a class="cs-btn" href="${esc(civitaiPage())}/models/${esc(String(model.id))}" target="_blank" rel="noopener noreferrer">${esc(t("openOnCivitai"))}</a>
@@ -671,12 +672,15 @@ function renderDetail(model, container) {
         ${model.tags?.length ? `<div class="cs-tags">${model.tags.slice(0, 10).map((tg) => `<span class="cs-tag">${esc(tg)}</span>`).join("")}</div>` : ""}
         <div class="cs-detail-row">
             <label>${esc(t("versionLabel"))}</label>
-            <select id="cs-version-sel">${versions.map((v, i) =>
-                `<option value="${esc(String(v.id))}" data-idx="${i}">${esc(v.name)} (${esc(v.baseModel || "?")})${v.local ? esc(t("installedMark")) : ""}</option>`).join("")}
+            <select id="cs-version-sel">${versions.map((v, i) => {
+                const prefer = opts.preferVersionId && String(v.id) === String(opts.preferVersionId);
+                const selAttr = prefer ? " selected" : (i === 0 && !opts.preferVersionId ? " selected" : "");
+                return `<option value="${esc(String(v.id))}" data-idx="${i}"${selAttr}>${esc(v.name)} (${esc(v.baseModel || "?")})${v.local ? esc(t("installedMark")) : ""}</option>`;
+            }).join("")}
             </select>
         </div>
         <div id="cs-version-body"></div>
-        ${desc ? `<details class="cs-desc"><summary>${esc(t("modelDesc"))}</summary><div class="cs-desc-body">${desc}</div></details>` : ""}
+        ${desc ? `<details class="cs-desc" open><summary>${esc(t("modelDesc"))}</summary><div class="cs-desc-body">${desc}</div></details>` : ""}
     `;
     $("#cs-detail-back", box).onclick = closeFloatDetail;
     rewriteDescImages(box);
@@ -687,6 +691,37 @@ function renderDetail(model, container) {
     };
     sel.onchange = renderVer;
     renderVer();
+    if (opts.local) {
+        const m = opts.local;
+        const acts = document.createElement("div");
+        acts.className = "cs-expand-actions";
+        acts.innerHTML = `
+            <button class="cs-btn cs-btn-mini" data-fx-reveal>${esc(t("revealBtn"))}</button>
+            <button class="cs-btn cs-btn-mini" data-fx-rename>${esc(t("renameBtn"))}</button>
+            <button class="cs-btn cs-btn-mini" data-fx-re-associate>${esc(t("reAssociate"))}</button>
+            <button class="cs-btn cs-btn-mini" data-fx-refresh>${esc(t("refreshMeta"))}</button>`;
+        box.appendChild(acts);
+        $("[data-fx-reveal]", acts).onclick = async () => {
+            try { await apiPost("/civitai_studio/local/reveal", { category: m.category, rel: m.rel }); }
+            catch (e) { toast("error", t("revealFailed"), e.message); }
+        };
+        $("[data-fx-rename]", acts).onclick = () => renameDialog(m);
+        $("[data-fx-re-associate]", acts).onclick = () => associateDialog(m);
+        $("[data-fx-refresh]", acts).onclick = async () => {
+            const b2 = $("[data-fx-refresh]", acts);
+            b2.disabled = true; b2.textContent = t("refreshing");
+            try {
+                await apiPost("/civitai_studio/local/refresh_meta", { category: m.category, rel: m.rel });
+                const fresh = await apiGet(`/civitai_studio/model/${encodeURIComponent(String(m.civitai.model_id))}`);
+                S.local.detailCache[m.civitai.model_id] = fresh;
+                renderDetail(fresh, box, { preferVersionId: m.civitai.version_id, local: m });
+                toast("success", t("metaRefreshed"), "");
+            } catch (e2) {
+                toast("error", t("metaRefreshFailed"), e2.message);
+                b2.disabled = false; b2.textContent = t("refreshMeta");
+            }
+        };
+    }
 }
 
 function rewriteDescImages(root) {
@@ -849,9 +884,16 @@ async function showImageMeta(image) {
         applyBtn.disabled = true;
         try {
             const result = applyRecipeToWorkflow(meta);
+            // 画布上选中并居中到被改动的节点,直观看到应用到了哪里
+            const targets = [result.posNode, result.negNode, ...result.loraNodes].filter(Boolean);
+            targets.forEach((n) => { n.selected = true; });
+            try {
+                app.canvas.setDirty(true, true);
+                if (targets[0]) app.canvas.centerOnNode(targets[0]);
+            } catch (e2) {}
+            const where = targets.map((n) => `#${n.id} ${n.title || n.type}`).join(" · ");
             const loraPart = result.loras ? t("applyLoraPart", { n: result.loras }) : "";
-            toast("success", t("applyDone", { lora: loraPart }),
-                  result.missing.length ? t("loraMissing", { names: result.missing.join(", ") }) : "");
+            toast("success", t("applyDone", { lora: loraPart }), where + (result.missing.length ? " | " + t("loraMissing", { names: result.missing.join(", ") }) : ""));
             m.close();
         } catch (e) {
             toast("error", t("applyFail"), e.message);
@@ -876,20 +918,21 @@ function applyRecipeToWorkflow(meta) {
         const link = inp && inp.link != null ? graph.links[inp.link] : null;
         return link ? { node: byId[link.origin_id], slot: link.origin_slot } : null;
     };
-    const result = { pos: false, neg: false, loras: 0, missing: [] };
+    const result = { pos: false, neg: false, loras: 0, missing: [], posNode: null, negNode: null, loraNodes: [] };
     // 1) 提示词:沿 KSampler 的 positive/negative 连线找文本节点;兜底第一个 CLIPTextEncode
-    const setText = (inp, text) => {
+    const setText = (inp, text, mark) => {
         const src = linkSrc(inp);
         if (src?.node?.widgets?.length && src.node.widgets[0].name === "text") {
             src.node.widgets[0].value = text;
+            result[mark] = src.node;
             return true;
         }
         const te = nodes.find((n) => n.type === "CLIPTextEncode" && n.widgets?.[0]?.name === "text");
-        if (te) { te.widgets[0].value = text; return true; }
+        if (te) { te.widgets[0].value = text; result[mark] = te; return true; }
         return false;
     };
-    if (meta.prompt) result.pos = setText(posInp, meta.prompt);
-    if (meta.negativePrompt) result.neg = setText(negInp, meta.negativePrompt);
+    if (meta.prompt) result.pos = setText(posInp, meta.prompt, "posNode");
+    if (meta.negativePrompt) result.neg = setText(negInp, meta.negativePrompt, "negNode");
     // 2) LoRA 链:按名称匹配本地库,匹配到就新建 LoraLoader 串进 model/clip 链路
     const libLoras = S.local.models.filter((m) => m.category === "loras");
     let modelSrc = linkSrc(modelInp);
@@ -915,6 +958,7 @@ function applyRecipeToWorkflow(meta) {
         modelSrc = { node: nn, slot: 0 };
         clipSrc = { node: nn, slot: 1 };
         created.push(nn);
+        result.loraNodes.push(nn);
         result.loras += 1;
     }
     // 3) 最后一级接回 KSampler
@@ -1192,103 +1236,22 @@ function toggleLocalDetail(m) {
     body.innerHTML = `<div class="cs-expand-loading">${esc(t("loadingCivitai"))}</div>`;
     const mid = m.civitai.model_id;
     const cached = S.local.detailCache[mid];
-    if (cached) { renderLocalExpand(body, m, cached); return; }
+    if (cached) { renderDetail(cached, body, { preferVersionId: m.civitai.version_id, local: m }); return; }
     apiGet(`/civitai_studio/model/${encodeURIComponent(String(mid))}`).then((data) => {
         S.local.detailCache[mid] = data;
-        if (S.ui.float && S.ui.float.dataset.mid === String(m.civitai.model_id)) renderLocalExpand(body, m, data);
+        if (S.ui.float && S.ui.float.dataset.mid === String(m.civitai.model_id)) renderDetail(data, body, { preferVersionId: m.civitai.version_id, local: m });
     }).catch((e) => {
         const civ = m.civitai || {};
         if (civ.description_html) {
             // 离线回退:sidecar 里有落盘的说明
-            renderLocalExpand(body, m, {
-                id: civ.model_id,
-                name: civ.model_name, description: civ.description_html,
-                stats: {}, modelVersions: [],
-            }, { offline: true });
+            renderDetail({ name: civ.model_name, description: civ.description_html, stats: {}, modelVersions: [], id: civ.model_id },
+                         body, { preferVersionId: civ.version_id, local: m, offline: true });
         } else {
             body.innerHTML = `<div class="cs-expand-loading">${esc(t("expandLoadFailed") + e.message)}</div>`;
         }
     });
 }
 
-function renderLocalExpand(ex, m, data, opts = {}) {
-    const civ = m.civitai || {};
-    const versions = (data.modelVersions || []).filter((v) => v.id);
-    const version = versions.find((v) => String(v.id) === String(civ.version_id)) || versions[0] || {};
-    const images = version.images || [];
-    const cover = images.find((i) => i.url && i.type === "image") || images.find((i) => i.url)
-        || (civ.cover_url ? { url: civ.cover_url, type: "image" } : null);
-    // 说明:在线数据优先;离线时用 sidecar 落盘的缓存
-    const desc = sanitizeHtml(data.description || civ.description_html || "");
-    const triggers = version.trainedWords || civ.trained_words || [];
-    const files = version.files || [];
-    ex.innerHTML = `
-        ${opts.offline ? `<div class="cs-banner">${esc(t("offlineBanner"))}</div>` : ""}
-        <div class="cs-expand-body">
-            ${cover?.url ? `<img class="cs-expand-cover" loading="lazy" src="${esc(imgSrc(cover.url))}" data-direct="${esc(cover.url)}" onerror="this.style.display='none'"/>` : ""}
-            <div class="cs-expand-main">
-                <div class="cs-kv-grid">
-                    <div><b>${esc(t("civName"))}</b><span>${esc(data.name || civ.model_name || "-")}</span></div>
-                    <div><b>${esc(t("versionLabel"))}</b><span>${esc(version.name || civ.version_name || "-")}</span></div>
-                    <div><b>Base Model</b><span>${esc(version.baseModel || civ.base_model || "-")}</span></div>
-                    <div><b>${esc(t("statsLabel"))}</b><span>⬇ ${fmtNum(data.stats?.downloadCount)} · 👍 ${fmtNum(data.stats?.thumbsUpCount)}</span></div>
-                    <div><b>Model ID</b><span class="cs-copyable" title="${esc(t("clickCopy"))}" data-copy-text="${esc(String(data.id))}">${esc(String(data.id))}</span></div>
-                    <div><b>Version ID</b><span class="cs-copyable" title="${esc(t("clickCopy"))}" data-copy-text="${esc(String(version.id || ""))}">${esc(String(version.id || ""))}</span></div>
-                </div>
-                ${triggers.length ? `<div class="cs-tags">${triggers.map((tg) => `<code class="cs-trigger">${esc(tg)}</code>`).join("")}</div>` : ""}
-                ${desc ? `<div class="cs-expand-desc">${desc}</div>` : ""}
-                ${files.length ? `<div class="cs-files">${files.map((f) => `
-                    <div class="cs-file"><div class="cs-file-info">
-                        <div class="cs-file-name" title="${esc(f.name)}">${esc(f.name)}</div>
-                        <div class="cs-file-meta">${fmtSize((f.sizeKB || 0) * 1024)}${f.primary ? " · " + esc(t("primaryFile")) : ""}</div>
-                    </div></div>`).join("")}</div>` : ""}
-                <div class="cs-expand-actions">
-                    <a class="cs-btn cs-btn-mini" href="${esc(civitaiPage())}/models/${esc(String(data.id))}" target="_blank" rel="noopener noreferrer">${esc(t("openOnCivitai"))}</a>
-                    ${version.id ? `<button class="cs-btn cs-btn-mini cs-btn-primary" data-dl-version="${esc(String(version.id))}">${esc(t("dlThisVersion"))}</button>` : ""}
-                    ${civ.model_id ? `<button class="cs-btn cs-btn-mini" data-re-associate>${esc(t("reAssociate"))}</button>` : ""}
-                    ${civ.model_id ? `<button class="cs-btn cs-btn-mini" data-refresh-meta>${esc(t("refreshMeta"))}</button>` : ""}
-                </div>
-            </div>
-        </div>`;
-    $$(".cs-trigger", ex).forEach((el) => { el.onclick = () => copyText(el.textContent, el); });
-    $$(".cs-copyable", ex).forEach((el) => { el.onclick = () => copyText(el.dataset.copyText || "", el); });
-    const reAssoc = $("[data-re-associate]", ex);
-    if (reAssoc) reAssoc.onclick = () => associateDialog(m);
-    const rf = $("[data-refresh-meta]", ex);
-    if (rf) rf.onclick = async () => {
-        rf.disabled = true;
-        rf.textContent = t("refreshing");
-        try {
-            await apiPost("/civitai_studio/local/refresh_meta", { category: m.category, rel: m.rel });
-            const fresh = await apiGet(`/civitai_studio/model/${encodeURIComponent(String(civ.model_id))}`);
-            S.local.detailCache[civ.model_id] = fresh;
-            renderLocalExpand(ex, m, fresh);
-            toast("success", t("metaRefreshed"), "");
-        } catch (e2) {
-            toast("error", t("metaRefreshFailed"), e2.message);
-            rf.disabled = false;
-            rf.textContent = t("refreshMeta");
-        }
-    };
-    rewriteDescImages(ex);
-    const descEl = $(".cs-expand-desc", ex);
-    if (descEl) {
-        descEl.classList.add("cs-clamped");
-        const tgl = document.createElement("button");
-        tgl.className = "cs-btn cs-btn-mini";
-        tgl.style.marginTop = "6px";
-        tgl.textContent = t("expandAll");
-        tgl.onclick = () => {
-            const clamped = descEl.classList.toggle("cs-clamped");
-            tgl.textContent = clamped ? t("expandAll") : t("collapse");
-        };
-        descEl.after(tgl);
-    }
-    const dlBtn = $("[data-dl-version]", ex);
-    if (dlBtn) dlBtn.onclick = () => {
-        const ver = versions.find((v) => String(v.id) === dlBtn.dataset.dlVersion) || version;
-        openDownloadDialog({ model: data, version: ver, defaultRoot: m.root, defaultSub: m.rel.includes("/") ? m.rel.slice(0, m.rel.lastIndexOf("/")) : "" });
-    };
 }
 
 function renameDialog(m) {
@@ -2055,6 +2018,180 @@ function injectStyles() {
 `;
     document.head.appendChild(style);
 }
+
+// ---------- 节点内缩略图(画布上的三个 Civitai 节点) ----------
+function fetchNodeThumbs(node, params) {
+    api.fetchApi(`/civitai_studio/search?${params}`, { cache: "no-store" })
+        .then((r) => r.json())
+        .then((d) => {
+            node.csResults = d.items || [];
+            node.csImgs = node.csResults.slice(0, 10).map((it) => {
+                const im = new Image();
+                im.src = it.url || "";
+                return im;
+            });
+            node.csMsg = node.csImgs.length ? "" : "没有结果";
+            app.canvas.setDirty(true, true);
+        })
+        .catch(() => { node.csMsg = "缩略图拉取失败"; });
+}
+
+app.registerExtension({
+    name: "Civitai.Studio.Nodes",
+    beforeRegisterNodeDef(nodeType, nodeData) {
+        const type = nodeData.name;
+
+        // 图片搜索节点:节点内画结果缩略图条,点击选择 index
+        if (type === "CivitaiImageSearch") {
+            const origCreated = nodeType.prototype.onNodeCreated;
+            nodeType.prototype.onNodeCreated = function () {
+                const r = origCreated?.apply(this, arguments);
+                this.size = [360, 300];
+                this.csSig = "";
+                this.csImgs = [];
+                this.csRects = [];
+                this.csMsg = "";
+                const node = this;
+                const widget = (name) => (node.widgets || []).find((x) => x.name === name);
+                const sig = () => ["keyword", "base_model", "tag", "sort", "period"].map((n) => widget(n)?.value ?? "").join("|");
+                node.csSchedule = () => {
+                    const s2 = sig();
+                    if (s2 === node.csSig) return;
+                    node.csSig = s2;
+                    const p = new URLSearchParams({ limit: "10", nsfw: widget("nsfw")?.value || "false" });
+                    const q = widget("keyword")?.value?.trim();
+                    const bm = widget("base_model")?.value;
+                    const tag = widget("tag")?.value?.trim();
+                    if (q) p.set("query", q);
+                    if (bm && bm !== "(any)") p.set("baseModels", bm);
+                    if (tag) p.set("tag", tag);
+                    p.set("sort", widget("sort")?.value || "Newest");
+                    p.set("period", widget("period")?.value || "AllTime");
+                    fetchNodeThumbs(node, p.toString());
+                };
+                // 筛选变化 → 节流拉缩略图
+                node.csDeb = null;
+                (node.widgets || []).forEach((wd) => {
+                    if (!["keyword", "base_model", "tag", "sort", "period", "nsfw"].includes(wd.name)) return;
+                    const oc = wd.callback;
+                    wd.callback = function () {
+                        const r = oc?.apply(this, arguments);
+                        clearTimeout(node.csDeb);
+                        node.csDeb = setTimeout(() => node.csSchedule?.(), 600);
+                        return r;
+                    };
+                });
+                setTimeout(() => node.csSchedule?.(), 200); // 首次拉取
+                return r;
+            };
+            nodeType.prototype.onDrawBackground = function (ctx) {
+                if (!this.csImgs?.length) {
+                    if (this.csMsg) {
+                        ctx.save();
+                        ctx.fillStyle = "#888";
+                        ctx.font = "11px sans-serif";
+                        ctx.fillText(this.csMsg, 12, this.size[1] - 12);
+                        ctx.restore();
+                    }
+                    return;
+                }
+                const thumbW = 64, thumbH = 84, gap = 6;
+                const top = this.size[1] - thumbH - 14;
+                this.csRects = [];
+                const idxW = (this.widgets || []).find((w2) => w2.name === "index");
+                this.csImgs.forEach((im, i) => {
+                    const x = 10 + i * (thumbW + gap);
+                    if (x + thumbW > this.size[0] - 10) return;
+                    this.csRects.push({ x, y: top, w: thumbW, h: thumbH, i });
+                    if (im.complete && im.naturalWidth > 0) {
+                        ctx.drawImage(im, x, top, thumbW, thumbH);
+                    } else {
+                        ctx.fillStyle = "#26262a";
+                        ctx.fillRect(x, top, thumbW, thumbH);
+                    }
+                    const selected = Number(idxW?.value) === i;
+                    ctx.strokeStyle = selected ? "#4a90e2" : "#555";
+                    ctx.lineWidth = selected ? 2 : 1;
+                    ctx.strokeRect(x, top, thumbW, thumbH);
+                });
+                ctx.fillStyle = "#999";
+                ctx.font = "10px sans-serif";
+                ctx.fillText("点击缩略图选择 index", 10, top - 4);
+            };
+            nodeType.prototype.onMouseDown = function (e, pos) {
+                if (!this.csRects?.length) return false;
+                for (const r of this.csRects) {
+                    if (pos[0] >= r.x && pos[0] <= r.x + r.w && pos[1] >= r.y && pos[1] <= r.y + r.h) {
+                        const w = (this.widgets || []).find((x) => x.name === "index");
+                        if (w) {
+                            w.value = r.i;
+                            w.callback?.(r.i);
+                        }
+                        app.canvas.setDirty(true, true);
+                        return true;
+                    }
+                }
+                return false;
+            };
+        }
+
+        // LoRA 两个节点:节点内画选中 LoRA 的封面
+        if (type === "CivitaiTriggerWords" || type === "CivitaiLoraRecipe") {
+            const origCreated = nodeType.prototype.onNodeCreated;
+            nodeType.prototype.onNodeCreated = function () {
+                const r = origCreated?.apply(this, arguments);
+                this.size = [320, 240];
+                const node = this;
+                node.csCover = null;
+                const drawCover = () => {
+                    const loraW = (node.widgets || []).find((x) => x.name === "lora");
+                    const id = loraW?.value;
+                    if (!id || id.includes("(")) { node.csCover = null; return; }
+                    api.fetchApi("/civitai_studio/local", { cache: "no-store" })
+                        .then((r2) => r2.json())
+                        .then((d) => {
+                            const item = (d.models || []).find((m2) => m2.id === id);
+                            const mid = item?.civitai?.model_id;
+                            if (!mid) return;
+                            return api.fetchApi(`/civitai_studio/model/${mid}`, { cache: "no-store" }).then((r3) => r3.json());
+                        })
+                        .then((m) => {
+                            if (!m) return;
+                            const imgs = ((m.modelVersions || [])[0] || {}).images || [];
+                            const first = imgs.find((i) => i.url && i.type === "image") || imgs.find((i) => i.url);
+                            if (first?.url) {
+                                const im = new Image();
+                                im.onload = () => { node.setDirtyCanvas?.(true, true); };
+                                im.src = first.url;
+                                node.csCover = im;
+                            }
+                        })
+                        .catch(() => {});
+                };
+                setTimeout(drawCover, 300);
+                (node.widgets || []).forEach((wd) => {
+                    if (wd.name !== "lora") return;
+                    const oc = wd.callback;
+                    wd.callback = function () {
+                        const r = oc?.apply(this, arguments);
+                        setTimeout(drawCover, 100);
+                        return r;
+                    };
+                });
+                const origBg = nodeType.prototype.onDrawBackground;
+                nodeType.prototype.onDrawBackground = function (ctx) {
+                    origBg?.apply(this, arguments);
+                    if (!node.csCover || !(node.csCover.complete && node.csCover.naturalWidth > 0)) return;
+                    const w2 = 96, h2 = 128;
+                    ctx.drawImage(node.csCover, this.size[0] - w2 - 12, 40, w2, h2);
+                    ctx.strokeStyle = "#555";
+                    ctx.strokeRect(this.size[0] - w2 - 12, 40, w2, h2);
+                };
+                return r;
+            };
+        }
+    },
+});
 
 // ---------- 入口 ----------
 app.registerExtension({
