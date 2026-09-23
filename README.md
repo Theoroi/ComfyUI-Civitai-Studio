@@ -2,7 +2,7 @@
 
 ComfyUI 侧边栏插件:Civitai **在线浏览器 + 本地模型管理器 + 下载队列**。搜索 Civitai 上的模型直接下载进 ComfyUI 模型目录,跟踪已安装版本、检查更新、删除/定位本地文件。
 
-> 灵感来自 [ComfyUI-Civitai-Toolkit](https://github.com/BAIKEMARK/ComfyUI-Civitai-Toolkit)(MIT)与其实践脚本 `civitai_pull.py`,为其重写的轻量版:不需要数据库、不需要哈希全库扫描,新增**真实下载队列(断点续传 + SHA256 校验)**。
+> 灵感来自 [ComfyUI-Civitai-Toolkit](https://github.com/BAIKEMARK/ComfyUI-Civitai-Toolkit)(MIT)与非公开实践脚本 `civitai_pull.py`,为其重写的轻量版:不需要数据库、不需要哈希全库扫描,新增**真实下载队列(断点续传 + SHA256 校验)**。
 
 ## 功能
 

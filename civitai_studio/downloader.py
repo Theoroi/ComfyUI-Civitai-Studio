@@ -266,7 +266,7 @@ async def _download_to_tmp(job, attempt_url, tmp, dl_timeout, started):
             extra_headers["Range"] = f"bytes={resume_from}-"
     received = 0
     job["received"] = received
-    async with await civitai_client.open_isolated_stream(
+    async with civitai_client.open_isolated_stream(
         attempt_url, extra_headers=extra_headers, timeout=dl_timeout
     ) as resp:
         if resp.status == 416:
