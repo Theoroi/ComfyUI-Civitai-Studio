@@ -30,7 +30,7 @@ const SORTS = ["Most Downloaded", "Highest Rated", "Newest"];
 const PERIODS = ["AllTime", "Month", "Week", "Day"];
 const NSFW_LEVELS = [0, 1, 2];
 
-const JS_VERSION = "0.5.10";
+const JS_VERSION = "0.5.13";
 
 // ---------- i18n ----------
 const STR = {
@@ -133,7 +133,7 @@ const STR = {
         noTextNode: "未找到 CLIPTextEncode 文本节点",
         galleryTab: "🖼 画廊", gallerySortNewest: "最新发布", gallerySortReactions: "最多互动", gallerySortComments: "最多评论",
         galTag: "Tag", galBase: "底模", loadMore: "加载更多", useAsOutput: "选为输出", selectedAsOutput: "已选为输出",
-        sfwLabel: "全年龄", nsfwLabel: "含成人内容", galTagId: "仅数字 Tag ID,多个用逗号分隔",
+        sfwLabel: "全年龄", nsfwLabel: "包含 NSFW", galTagId: "仅数字 Tag ID,多个用逗号分隔",
         galleryEmpty: "没有图片。", galleryAuthor: "作者",
     },
     en: {
@@ -249,7 +249,7 @@ let S = {
     },
     local: { models: [], search: "", type: "", loading: false, updates: {}, truncated: false, openId: null, detailCache: {} },
     dl: { jobs: [], lastSig: "", failStreak: 0 },
-    gal: { items: [], next: [], sort: "Newest", period: "AllTime", base: "", tag: "", nsfw: true, loading: false, error: "" },
+    gal: { items: [], next: [], sort: "Newest", period: "AllTime", base: "", tag: "", nsfwLevel: 1, loading: false, error: "" },
     ui: { tab: "browse", root: null, scrollTop: 0, detailId: null, backendStale: false },
 };
 
@@ -1514,7 +1514,7 @@ async function fetchGallery(reset) {
     renderGallery();
     try {
         const p = new URLSearchParams({ limit: "24", sort: st.sort, period: st.period });
-        p.set("nsfw", st.nsfw ? "true" : "false");
+        p.set("nsfw", st.nsfwLevel > 0 ? "true" : "false");
         if (st.base) p.set("baseModels", st.base);
         if (st.tag.trim()) p.set("tags", st.tag.trim());
         if (!reset && st.next) for (const [k, v] of st.next) p.append(k, v);
@@ -1585,14 +1585,12 @@ function buildGalleryView(root) {
     view.className = "cs-view";
     view.dataset.view = "gallery";
     view.innerHTML = `
-        <div class="cs-gal-filters">
-            <select id="cs-gal-base"><option value="">${esc(t("galBase"))}</option></select>
-            <select id="cs-gal-nsfw">
-                <option value="false" ${!st.nsfw ? "selected" : ""}>${esc(t("sfwLabel"))}</option>
-                <option value="true" ${st.nsfw ? "selected" : ""}>${esc(t("nsfwLabel"))}</option>
-            </select>
-            <input id="cs-gal-tag" type="text" placeholder="${esc(t("galTagId"))}" value="${esc(st.tag)}" style="grid-column:1/-1"/>
-            <select id="cs-gal-period">${["AllTime", "Month", "Week", "Day"].map((p) => `<option value="${p}" ${st.period === p ? "selected" : ""}>${esc(periodLabel(p))}</option>`).join("")}</select>
+        <div class="cs-filters">
+            <input id="cs-gal-base" list="cs-gal-base-list" type="text" placeholder="${esc(t("basePlaceholder"))}" value="${esc(st.base)}"/>
+            <datalist id="cs-gal-base-list">${BASE_MODELS.map((b) => `<option value="${esc(b)}"></option>`).join("")}</datalist>
+            <select id="cs-gal-nsfw"><option value="0" ${!st.nsfwLevel ? "selected" : ""}>${esc(t("sfwLabel"))}</option><option value="1" ${st.nsfwLevel ? "selected" : ""}>${esc(t("nsfwLabel"))}</option></select>
+            <input id="cs-gal-tag" type="text" placeholder="${esc(t("galTagId"))}" value="${esc(st.tag)}"/>
+            <select id="cs-gal-period">${PERIODS.map((p) => `<option value="${p}" ${st.period === p ? "selected" : ""}>${esc(periodLabel(p))}</option>`).join("")}</select>
             <select id="cs-gal-sort">
                 <option value="Newest">${esc(t("gallerySortNewest"))}</option>
                 <option value="Most Reactions">${esc(t("gallerySortReactions"))}</option>
@@ -1606,21 +1604,22 @@ function buildGalleryView(root) {
     $("#cs-gal-sort", view).value = st.sort;
     $("#cs-gal-sort", view).addEventListener("change", (e) => { st.sort = e.target.value; fetchGallery(true); });
     $("#cs-gal-period", view).addEventListener("change", (e) => { st.period = e.target.value; fetchGallery(true); });
-    $("#cs-gal-nsfw", view).addEventListener("change", (e) => { st.nsfw = e.target.value === "true"; fetchGallery(true); });
+    $("#cs-gal-nsfw", view).addEventListener("change", (e) => { st.nsfwLevel = parseInt(e.target.value, 10); fetchGallery(true); });
     const debouncedFetch = () => {
         clearTimeout(buildGalleryView._deb);
         buildGalleryView._deb = setTimeout(() => fetchGallery(true), 600);
     };
     $("#cs-gal-tag", view).addEventListener("input", (e) => { st.tag = e.target.value; debouncedFetch(); });
-    $("#cs-gal-base", view).addEventListener("change", (e) => { st.base = e.target.value; fetchGallery(true); });
-    // 底模下拉:从站方枚举填充
+    let debBase;
+    $("#cs-gal-base", view).addEventListener("input", (e) => {
+        clearTimeout(debBase);
+        debBase = setTimeout(() => { st.base = e.target.value.trim(); fetchGallery(true); }, 400);
+    });
+    // 底模联想列表:内置种子 + 站方枚举补全(与浏览页一致)
     apiGet("/civitai_studio/enums").then((d) => {
         const list = sortEnumNames(d.ActiveBaseModel || d.BaseModel || []);
-        const sel = $("#cs-gal-base", view);
-        if (sel && list.length) {
-            sel.innerHTML = [`<option value="">${esc(t("galBase"))}: ${esc(t("allTypes"))}</option>`]
-                .concat(list.map((b) => `<option value="${esc(String(b))}" ${String(b) === st.base ? "selected" : ""}>${esc(String(b))}</option>`)).join("");
-        }
+        const dl = $("#cs-gal-base-list", view);
+        if (dl && list.length) dl.innerHTML = list.map((b) => `<option value="${esc(String(b))}"></option>`).join("");
     }).catch(() => {});
     $("#cs-gal-content", view).addEventListener("scroll", (e) => {
         const el = e.target;
@@ -1803,7 +1802,7 @@ function buildBrowseView(root) {
             <datalist id="cs-base-list">${BASE_MODELS.map((b) => `<option value="${esc(b)}"></option>`).join("")}</datalist>
             <select id="cs-f-sort">${SORTS.map((s) => `<option value="${s}" ${st.sort === s ? "selected" : ""}>${esc(sortLabel(s))}</option>`).join("")}</select>
             <select id="cs-f-period">${PERIODS.map((p) => `<option value="${p}" ${st.period === p ? "selected" : ""}>${esc(periodLabel(p))}</option>`).join("")}</select>
-            <select id="cs-f-nsfw">${NSFW_LEVELS.map((n) => `<option value="${n}" ${st.nsfw === n ? "selected" : ""}>${esc(nsfwLabel(n))}</option>`).join("")}</select>
+            <select id="cs-f-nsfw"><option value="0" ${!st.nsfw ? "selected" : ""}>${esc(t("sfwLabel"))}</option><option value="1" ${st.nsfw ? "selected" : ""}>${esc(t("nsfwLabel"))}</option></select>
         </div>
         <div id="cs-browse-content" class="cs-scroll">
             <div id="cs-grid" class="cs-grid"></div>
@@ -1961,7 +1960,7 @@ function injectStyles() {
 .cs-toolbar input[type=search] { flex:1; min-width:0; }
 .cs-filters { display:grid; grid-template-columns:1fr 1fr; gap:4px; padding:0 6px 6px; flex-shrink:0; }
 .cs-presets { display:flex; gap:4px; padding:0 6px 6px; flex-shrink:0; flex-wrap:wrap; }
-.cs-filters select { width:100%; padding:3px; font-size:12px; }
+.cs-filters select, .cs-filters input[type=text] { width:100%; padding:3px; font-size:12px; box-sizing:border-box; }
 .cs-scroll { flex:1; min-height:0; overflow-y:auto; padding:0 6px; }
 .cs-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:8px; padding-bottom:20px; }
 .cs-card { background:var(--comfy-box-bg, var(--comfy-input-bg,#333)); border:1px solid var(--border-color,#444); border-radius:6px; overflow:hidden; cursor:pointer; transition:transform .15s, border-color .15s; }
@@ -2060,8 +2059,8 @@ function injectStyles() {
 .cs-local-update.cs-ok { color:#4caf50; }
 .cs-gal-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(170px,1fr)); gap:6px; padding-bottom:20px; }
 .cs-gal-item { position:relative; border-radius:6px; overflow:hidden; background:#222; }
-.cs-gal-item img { width:100%; display:block; cursor:pointer; }
-.cs-gal-item img:hover { outline:2px solid var(--accent-color,#4a90e2); }
+.cs-gal-item img, .cs-gal-item video { width:100%; display:block; cursor:pointer; }
+.cs-gal-item img:hover, .cs-gal-item video:hover { outline:2px solid var(--accent-color,#4a90e2); }
 .cs-dim { color:var(--desc-text-color,#999); font-size:11px; }
 .cs-dl-row { background:var(--comfy-box-bg, var(--comfy-input-bg,#333)); border-radius:6px; padding:8px; margin-bottom:6px; display:flex; gap:8px; align-items:center; }
 .cs-dl-info { flex:1; min-width:0; }
@@ -2128,16 +2127,19 @@ function mediaViewerHtml(item) {
 function renderNodeThumbs(node) {
     const strip = node.csStrip;
     if (!strip) return;
+    const keepScroll = strip.scrollTop; // 重建后保持滚动位置(加载更多不跳顶)
     strip.querySelectorAll(".cs-thumb,.cs-thumb-msg,.cs-thumb-bar,.cs-thumb-more")
         .forEach((el) => el.remove());
     const st = node.csFetch || {};
     const total = (node.csResults || []).length;
 
-    // 状态条:计数 + spinner + 提示
+    // 状态条:提示 + 计数 + spinner
     const bar = document.createElement("div");
     bar.className = "cs-thumb-bar";
     bar.style.cssText = "width:100%;display:flex;align-items:center;gap:8px;font-size:11px;color:#999;";
-    bar.innerHTML = `<span>${esc(S.lang === "zh" ? "点击缩略图放大/选择" : "Click to enlarge / select")} · ${total}</span>`;
+    bar.innerHTML = `<span>${esc(S.lang === "zh"
+        ? "点击放大/选择 · tag 仅数字 ID · "
+        : "Click to enlarge / select · tag = numeric IDs · ")}${total}</span>`;
     if (st.loading) {
         const sp = document.createElement("span");
         sp.className = "cs-spin";
@@ -2161,9 +2163,9 @@ function renderNodeThumbs(node) {
         const cell = document.createElement("div");
         cell.className = "cs-thumb";
         cell.title = "index " + i;
-        // flex 收缩保证窄节点下至少 3 张一行,宽节点自动更多列
-        cell.style.cssText = "position:relative;flex:1 1 110px;min-width:0;aspect-ratio:3/4;background:#2e2e33;"
-            + "border:2px solid #555;border-radius:4px;overflow:hidden;cursor:pointer;";
+        // 固定 4 列等宽:末行不足时尺寸不变(flex-grow 会让末行撑大)
+        cell.style.cssText = "position:relative;flex:0 0 calc((100% - 18px)/4);max-width:calc((100% - 18px)/4);"
+            + "aspect-ratio:3/4;background:#2e2e33;border:2px solid #555;border-radius:4px;overflow:hidden;cursor:pointer;";
         if (isVideoItem(it)) {
             // 静音取首帧作缩略图
             const v = document.createElement("video");
@@ -2194,6 +2196,7 @@ function renderNodeThumbs(node) {
         more.onclick = () => node.csLoadMore?.();
         strip.appendChild(more);
     }
+    strip.scrollTop = keepScroll;
     nodeThumbsResize(node);
 }
 
@@ -2266,6 +2269,8 @@ app.registerExtension({
                 const strip = document.createElement("div");
                 strip.style.cssText = "display:flex;flex-wrap:wrap;gap:6px;padding:4px;width:100%;"
                     + "align-content:flex-start;max-height:520px;overflow-y:auto;";
+                // 滚轮留给面板内部滚动,阻止画布缩放
+                strip.addEventListener("wheel", (e) => e.stopPropagation(), { passive: true, capture: true });
                 node.csStrip = strip;
                 this.addDOMWidget("cs_thumbs", "cs_thumbs", strip);
                 if (this.size[0] < 460) this.size[0] = 460; // 保证默认 3 列以上
@@ -2312,6 +2317,9 @@ app.registerExtension({
                     }
                 });
                 setTimeout(() => node.csSchedule?.(), 200); // 首次拉取
+                // 兜底轮询:部分文本输入在新前端不触发 widget.callback/inputEl 事件,
+                // 轮询 sig 变化保证 tag 等改动最终一定触发刷新(csSchedule 内部去重)
+                node.csPoll = setInterval(() => node.csSchedule?.(), 700);
                 return r;
             };
         }
