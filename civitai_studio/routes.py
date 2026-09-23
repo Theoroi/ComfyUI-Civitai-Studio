@@ -254,36 +254,6 @@ async def version_images(request):
     if q.get("nsfw"):
         # 与搜索同档位;新 API 是布尔开关,映射后再透传
         params["nsfw"] = "false" if q["nsfw"] in ("0", "false") else "true"
-    # /images 没有关键词参数(query 会被上游静默忽略):逐页拉取后按 提示词/作者 包含关键词过滤,
-    # 直到凑满 limit 或翻页耗尽(最多 6 页)。游标返回最后一页的,前端"加载更多"延续同一过滤。
-    keyword = (q.get("query") or "").strip().lower()
-    try:
-        if keyword:
-            want = int(params["limit"])
-            collected: list = []
-            next_query: list = []
-            cur = dict(params)
-            for _page in range(6):
-                data = await civitai_client.get_json("/images", params=cur)
-                for it in data.get("items") or []:
-                    hay = " ".join([
-                        str(((it.get("meta") or {}).get("prompt")) or ""),
-                        str(it.get("username") or ""),
-                    ]).lower()
-                    if keyword in hay:
-                        collected.append(it)
-                nxt = ((data.get("metadata") or {}).get("nextPage")) or ""
-                if not nxt or len(collected) >= want:
-                    if nxt:
-                        try:
-                            next_query = urllib.parse.parse_qsl(urllib.parse.urlparse(nxt).query)
-                        except Exception:
-                            next_query = []
-                    break
-                cur = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(nxt).query))
-            return web.json_response({"items": collected[:want], "next_query": next_query})
-    except civitai_client.CivitaiError as e:
-        return _json_error(e, 502)
     try:
         data = await civitai_client.get_json("/images", params=params)
     except civitai_client.CivitaiError as e:

@@ -69,12 +69,12 @@ class CivitaiImageSearch:
 
     @classmethod
     def INPUT_TYPES(cls):
-        # 分组顺序与 UI 两列排版意图一致:底模/NSFW → 关键词/Tag → 时间/排序 → 数量/序号
+        # 分组顺序与 UI 两列排版意图一致:底模/NSFW → Tag → 时间/排序 → 数量/序号
         return {"required": {
             "base_model": (["(any)"] + _BASE_MODEL_OPTIONS,),
             "nsfw": (["true", "false"],),
-            "keyword": ("STRING", {"default": ""}),
-            "tag": ("STRING", {"default": ""}),
+            "tag": ("STRING", {"default": "", "multiline": False,
+                               "tooltip": "仅数字 Tag ID,多个用逗号分隔 / numeric tag IDs only, comma-separated"}),
             "period": (["AllTime", "Month", "Week", "Day"],),
             "sort": (["Newest", "Most Reactions", "Most Comments"],),
             "limit": ("INT", {"default": 50, "min": 10, "max": 100, "step": 10}),
@@ -88,13 +88,11 @@ class CivitaiImageSearch:
     FUNCTION = "run"
     CATEGORY = "Civitai Studio"
 
-    def run(self, base_model, nsfw, keyword, tag, period, sort, limit, index, image_url):
+    def run(self, base_model, nsfw, tag, period, sort, limit, index, image_url):
         params = {
             "limit": str(min(100, max(10, int(limit)))),
             "nsfw": str(nsfw), "sort": sort, "period": period, "withMeta": "true",
         }
-        if keyword:
-            params["query"] = keyword
         if base_model and base_model != "(any)":
             params["baseModels"] = base_model
         if tag:
@@ -102,27 +100,7 @@ class CivitaiImageSearch:
             ids = ",".join(t.strip() for t in tag.replace("，", ",").split(",") if t.strip().isdigit())
             if ids:
                 params["tags"] = ids
-        # /images 无关键词检索:逐页拉取后按 提示词/作者 包含关键词过滤(与路由侧逻辑一致)
-        kw = (keyword or "").strip().lower()
-        if kw:
-            collected = []
-            cur = dict(params)
-            for _page in range(6):
-                page = _sync_get_json("/images", cur)
-                for it in page.get("items") or []:
-                    hay = " ".join([
-                        str(((it.get("meta") or {}).get("prompt")) or ""),
-                        str(it.get("username") or ""),
-                    ]).lower()
-                    if kw in hay:
-                        collected.append(it)
-                nxt = ((page.get("metadata") or {}).get("nextPage")) or ""
-                if not nxt or len(collected) >= int(params["limit"]):
-                    break
-                cur = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(nxt).query))
-            data = {"items": collected}
-        else:
-            data = _sync_get_json("/images", params)
+        data = _sync_get_json("/images", params)
         items = data.get("items") or []
         if not items:
             raise RuntimeError("没有搜索结果,请调整筛选条件")

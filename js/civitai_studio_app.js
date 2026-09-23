@@ -30,7 +30,7 @@ const SORTS = ["Most Downloaded", "Highest Rated", "Newest"];
 const PERIODS = ["AllTime", "Month", "Week", "Day"];
 const NSFW_LEVELS = [0, 1, 2];
 
-const JS_VERSION = "0.5.9";
+const JS_VERSION = "0.5.10";
 
 // ---------- i18n ----------
 const STR = {
@@ -132,8 +132,8 @@ const STR = {
         applyDone: "已应用:提示词 ✓{lora}", applyLoraPart: ",LoRA ×{n}", loraMissing: "本地未找到: {names}",
         noTextNode: "未找到 CLIPTextEncode 文本节点",
         galleryTab: "🖼 画廊", gallerySortNewest: "最新发布", gallerySortReactions: "最多互动", gallerySortComments: "最多评论",
-        galQuery: "关键词", galTag: "Tag", galBase: "底模", loadMore: "加载更多", useAsOutput: "选为输出", selectedAsOutput: "已选为输出",
-        sfwLabel: "全年龄", nsfwLabel: "含成人内容", galTagId: "Tag ID(逗号分隔)",
+        galTag: "Tag", galBase: "底模", loadMore: "加载更多", useAsOutput: "选为输出", selectedAsOutput: "已选为输出",
+        sfwLabel: "全年龄", nsfwLabel: "含成人内容", galTagId: "仅数字 Tag ID,多个用逗号分隔",
         galleryEmpty: "没有图片。", galleryAuthor: "作者",
     },
     en: {
@@ -234,8 +234,8 @@ const STR = {
         applyDone: "Applied: prompts ✓{lora}", applyLoraPart: ", {n} LoRA(s)", loraMissing: "Local LoRAs not found: {names}",
         noTextNode: "No CLIPTextEncode text node found",
         galleryTab: "🖼 Gallery", gallerySortNewest: "Newest", gallerySortReactions: "Most reactions", gallerySortComments: "Most comments",
-        galQuery: "Keyword", galTag: "Tag", galBase: "Base model", loadMore: "Load more", useAsOutput: "Use as output", selectedAsOutput: "Selected as output",
-        sfwLabel: "SFW only", nsfwLabel: "Include NSFW", galTagId: "Tag IDs (comma-separated)",
+        galTag: "Tag", galBase: "Base model", loadMore: "Load more", useAsOutput: "Use as output", selectedAsOutput: "Selected as output",
+        sfwLabel: "SFW only", nsfwLabel: "Include NSFW", galTagId: "Numeric tag IDs only, comma-separated",
         galleryEmpty: "No images.", galleryAuthor: "Author",
     },
 };
@@ -249,7 +249,7 @@ let S = {
     },
     local: { models: [], search: "", type: "", loading: false, updates: {}, truncated: false, openId: null, detailCache: {} },
     dl: { jobs: [], lastSig: "", failStreak: 0 },
-    gal: { items: [], next: [], sort: "Newest", period: "AllTime", query: "", base: "", tag: "", nsfw: true, loading: false, error: "" },
+    gal: { items: [], next: [], sort: "Newest", period: "AllTime", base: "", tag: "", nsfw: true, loading: false, error: "" },
     ui: { tab: "browse", root: null, scrollTop: 0, detailId: null, backendStale: false },
 };
 
@@ -899,7 +899,7 @@ async function showImageMeta(image) {
         `<code class="cs-trigger">${esc(r.name || r.modelName || "?")}${r.weight != null ? " × " + esc(r.weight) : ""}</code>`).join("");
     const m = showModal(`
         <h3 class="cs-modal-title">${esc(t("genParams"))}</h3>
-        ${isVideoItem(image) ? `<div class="cs-media-view" style="margin-bottom:10px">${mediaViewerHtml(image)}</div>` : ""}
+        <div class="cs-media-view" style="margin-bottom:10px">${mediaViewerHtml(image)}</div>
         <div class="cs-meta-block">
             <div class="cs-section-title">${esc(t("positivePrompt"))} <button class="cs-btn cs-btn-mini" data-copy="prompt">${esc(t("copy"))}</button></div>
             <textarea readonly rows="5">${esc(meta.prompt || "")}</textarea>
@@ -912,6 +912,7 @@ async function showImageMeta(image) {
         <div class="cs-kv-grid">${kv.map(([k, v]) => `<div><b>${esc(k)}</b><span>${esc(v)}</span></div>`).join("")}</div>
         ${resources ? `<div class="cs-meta-block"><div class="cs-section-title">${esc(t("resources"))}</div><div class="cs-tags">${resources}</div></div>` : ""}
         <div class="cs-modal-actions">
+            <button class="cs-btn" data-save-img>${esc(t("saveBtn"))}</button>
             <button class="cs-btn cs-btn-primary" data-apply-workflow>${esc(t("applyBtn"))}</button>
         </div>`);
     $$("[data-copy]", m.box).forEach((btn) => {
@@ -920,6 +921,8 @@ async function showImageMeta(image) {
             copyText(ta.value, btn);
         };
     });
+    const saveBtn = $("[data-save-img]", m.box);
+    if (saveBtn) saveBtn.onclick = () => saveImageToOutput(image.url, saveBtn);
     const applyBtn = $("[data-apply-workflow]", m.box);
     if (applyBtn) applyBtn.onclick = () => {
         applyBtn.disabled = true;
@@ -1512,7 +1515,6 @@ async function fetchGallery(reset) {
     try {
         const p = new URLSearchParams({ limit: "24", sort: st.sort, period: st.period });
         p.set("nsfw", st.nsfw ? "true" : "false");
-        if (st.query.trim()) p.set("query", st.query.trim());
         if (st.base) p.set("baseModels", st.base);
         if (st.tag.trim()) p.set("tags", st.tag.trim());
         if (!reset && st.next) for (const [k, v] of st.next) p.append(k, v);
@@ -1589,8 +1591,7 @@ function buildGalleryView(root) {
                 <option value="false" ${!st.nsfw ? "selected" : ""}>${esc(t("sfwLabel"))}</option>
                 <option value="true" ${st.nsfw ? "selected" : ""}>${esc(t("nsfwLabel"))}</option>
             </select>
-            <input id="cs-gal-query" type="text" placeholder="${esc(t("galQuery"))}" value="${esc(st.query)}"/>
-            <input id="cs-gal-tag" type="text" placeholder="${esc(t("galTagId"))}" value="${esc(st.tag)}"/>
+            <input id="cs-gal-tag" type="text" placeholder="${esc(t("galTagId"))}" value="${esc(st.tag)}" style="grid-column:1/-1"/>
             <select id="cs-gal-period">${["AllTime", "Month", "Week", "Day"].map((p) => `<option value="${p}" ${st.period === p ? "selected" : ""}>${esc(periodLabel(p))}</option>`).join("")}</select>
             <select id="cs-gal-sort">
                 <option value="Newest">${esc(t("gallerySortNewest"))}</option>
@@ -1610,7 +1611,6 @@ function buildGalleryView(root) {
         clearTimeout(buildGalleryView._deb);
         buildGalleryView._deb = setTimeout(() => fetchGallery(true), 600);
     };
-    $("#cs-gal-query", view).addEventListener("input", (e) => { st.query = e.target.value; debouncedFetch(); });
     $("#cs-gal-tag", view).addEventListener("input", (e) => { st.tag = e.target.value; debouncedFetch(); });
     $("#cs-gal-base", view).addEventListener("change", (e) => { st.base = e.target.value; fetchGallery(true); });
     // 底模下拉:从站方枚举填充
@@ -2270,19 +2270,21 @@ app.registerExtension({
                 this.addDOMWidget("cs_thumbs", "cs_thumbs", strip);
                 if (this.size[0] < 460) this.size[0] = 460; // 保证默认 3 列以上
 
-                const sig = () => ["keyword", "base_model", "tag", "sort", "period", "nsfw", "limit"]
+                const sig = () => ["base_model", "tag", "sort", "period", "nsfw", "limit"]
                     .map((n) => widget(n)?.value ?? "").join("|");
                 node.csSchedule = () => {
                     const s2 = sig();
                     if (s2 === node.csSig) return;
                     node.csSig = s2;
                     const p = new URLSearchParams({ limit: String(widget("limit")?.value || 50), nsfw: widget("nsfw")?.value || "false" });
-                    const q = widget("keyword")?.value?.trim();
                     const bm = widget("base_model")?.value;
                     const tag = widget("tag")?.value?.trim();
-                    if (q) p.set("query", q);
                     if (bm && bm !== "(any)") p.set("baseModels", bm);
-                    if (tag) p.set("tag", tag);
+                    if (tag) {
+                        // 官方 /images 的 tags 只认数字 ID,过滤掉非数字项
+                        const ids = tag.replace("，", ",").split(",").map((s) => s.trim()).filter((s) => /^\d+$/.test(s)).join(",");
+                        if (ids) p.set("tags", ids);
+                    }
                     p.set("sort", widget("sort")?.value || "Newest");
                     p.set("period", widget("period")?.value || "AllTime");
                     node.csLastParams = p.toString();
@@ -2296,7 +2298,7 @@ app.registerExtension({
                     node.csDeb = setTimeout(() => node.csSchedule?.(), 600);
                 };
                 (node.widgets || []).forEach((wd) => {
-                    if (!["keyword", "base_model", "tag", "sort", "period", "nsfw", "limit", "index"].includes(wd.name)) return;
+                    if (!["base_model", "tag", "sort", "period", "nsfw", "limit", "index"].includes(wd.name)) return;
                     const oc = wd.callback;
                     wd.callback = function () {
                         const r2 = oc?.apply(this, arguments);
@@ -2305,7 +2307,7 @@ app.registerExtension({
                         return r2;
                     };
                     // 新前端对文本输入框可能不触发 widget.callback:直接监听 DOM 输入
-                    if ((wd.name === "keyword" || wd.name === "tag") && wd.inputEl) {
+                    if (wd.name === "tag" && wd.inputEl) {
                         wd.inputEl.addEventListener("input", debounced);
                     }
                 });
