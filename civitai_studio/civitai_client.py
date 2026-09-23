@@ -19,7 +19,7 @@ from . import config
 
 # 主站用 civitai.red(与 docs/civitai/civitai_pull.py 实测一致):
 # API 与下载端点齐全,且不被 Cloudflare 盯;civitai.com 对代理出口 IP 经常弹网页挑战
-DEFAULT_BASE = "https://civitai.red"
+DEFAULT_BASE = "https://civitai.com"
 
 # 只有官方域才认识 civitai.com 签发的 API Key
 _OFFICIAL_HOSTS = ("civitai.com", "civitai.green")

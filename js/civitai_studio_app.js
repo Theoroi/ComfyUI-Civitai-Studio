@@ -30,7 +30,7 @@ const SORTS = ["Most Downloaded", "Highest Rated", "Newest"];
 const PERIODS = ["AllTime", "Month", "Week", "Day"];
 const NSFW_LEVELS = [0, 1, 2];
 
-const JS_VERSION = "0.5.13";
+const JS_VERSION = "0.5.14";
 
 // ---------- i18n ----------
 const STR = {
@@ -115,7 +115,7 @@ const STR = {
         proxyLabel: "网络代理(HTTP / SOCKS 均可,裸地址自动按 HTTP 处理)",
         proxyPh: "http://127.0.0.1:10808 或 socks5://127.0.0.1:10808,留空 = 直连",
         proxyHint: "填 127.0.0.1 而非 localhost。v2rayN 混合端口 10808:优先填 socks5://127.0.0.1:10808(实测最稳),http://127.0.0.1:10808 亦可;API、下载、图片全部走此代理。",
-        mirrorLabel: "API 站点(默认 civitai.red,被拦时可改回 https://civitai.com)",
+        mirrorLabel: "API 站点(默认 civitai.com)", siteCustom: "自定义",
         mirrorPh: "留空 = https://civitai.red",
         concLabel: "下载并发数(1-4)",
         pimgLabel: "预览图经服务端中转(直连打不开图片时开启)",
@@ -217,7 +217,7 @@ const STR = {
         proxyLabel: "Network proxy (HTTP / SOCKS; bare addresses are treated as HTTP)",
         proxyPh: "http://127.0.0.1:10808 or socks5://127.0.0.1:10808, empty = direct",
         proxyHint: "Use 127.0.0.1 instead of localhost. API, downloads and previews all go through this proxy.",
-        mirrorLabel: "API host (default civitai.red; switch back to https://civitai.com if blocked)",
+        mirrorLabel: "API site (default civitai.com)", siteCustom: "Custom",
         mirrorPh: "empty = https://civitai.red",
         concLabel: "Download concurrency (1-4)",
         pimgLabel: "Route preview images through the backend (enable if direct loading fails)",
@@ -339,7 +339,7 @@ function fmtNum(n) {
 }
 
 function civitaiPage() {
-    let base = (S.cfg.mirror || "https://civitai.red").trim().replace(/\/+$/, "");
+    let base = (S.cfg.mirror || "https://civitai.com").trim().replace(/\/+$/, "");
     if (!/^https?:\/\//i.test(base)) base = "https://" + base; // 裸域名兜底,防相对链接
     return base;
 }
@@ -1586,16 +1586,16 @@ function buildGalleryView(root) {
     view.dataset.view = "gallery";
     view.innerHTML = `
         <div class="cs-filters">
-            <input id="cs-gal-base" list="cs-gal-base-list" type="text" placeholder="${esc(t("basePlaceholder"))}" value="${esc(st.base)}"/>
+            <input id="cs-gal-base" class="cs-span-full" list="cs-gal-base-list" type="text" placeholder="${esc(t("basePlaceholder"))}" value="${esc(st.base)}"/>
             <datalist id="cs-gal-base-list">${BASE_MODELS.map((b) => `<option value="${esc(b)}"></option>`).join("")}</datalist>
-            <select id="cs-gal-nsfw"><option value="0" ${!st.nsfwLevel ? "selected" : ""}>${esc(t("sfwLabel"))}</option><option value="1" ${st.nsfwLevel ? "selected" : ""}>${esc(t("nsfwLabel"))}</option></select>
-            <input id="cs-gal-tag" type="text" placeholder="${esc(t("galTagId"))}" value="${esc(st.tag)}"/>
+            <input id="cs-gal-tag" class="cs-span-full" type="text" placeholder="${esc(t("galTagId"))}" value="${esc(st.tag)}"/>
             <select id="cs-gal-period">${PERIODS.map((p) => `<option value="${p}" ${st.period === p ? "selected" : ""}>${esc(periodLabel(p))}</option>`).join("")}</select>
             <select id="cs-gal-sort">
                 <option value="Newest">${esc(t("gallerySortNewest"))}</option>
                 <option value="Most Reactions">${esc(t("gallerySortReactions"))}</option>
                 <option value="Most Comments">${esc(t("gallerySortComments"))}</option>
             </select>
+            <select id="cs-gal-nsfw"><option value="0" ${!st.nsfwLevel ? "selected" : ""}>${esc(t("sfwLabel"))}</option><option value="1" ${st.nsfwLevel ? "selected" : ""}>${esc(t("nsfwLabel"))}</option></select>
         </div>
         <div id="cs-gal-content" class="cs-scroll">
             <div id="cs-gal-grid" class="cs-gal-grid"></div>
@@ -1726,7 +1726,13 @@ async function openSettings() {
                 <span class="cs-form-hint">${esc(t("proxyHint"))}</span>
             </label>
             <label>${esc(t("mirrorLabel"))}
-                <input id="cs-set-mirror" type="text" value="${esc(cfg.mirror || "")}" placeholder="${esc(t("mirrorPh"))}"/>
+                <select id="cs-set-site">
+                    <option value="https://civitai.com">civitai.com</option>
+                    <option value="https://civitai.green">civitai.green [SFW]</option>
+                    <option value="https://civitai.red">civitai.red [NSFW]</option>
+                    <option value="__custom__">${esc(t("siteCustom"))}</option>
+                </select>
+                <input id="cs-set-mirror" type="text" value="${esc(cfg.mirror || "")}" placeholder="https://…" style="display:none;margin-top:4px"/>
             </label>
             <label>${esc(t("concLabel"))}
                 <input id="cs-set-conc" type="number" min="1" max="4" value="${cfg.max_concurrent || 1}"/>
@@ -1741,10 +1747,24 @@ async function openSettings() {
             </div>
         </div>`);
     $("[data-act=cancel]", m.box).onclick = m.close;
+    // API 站点四选一:预设回显;自定义时展开输入框
+    const siteSel = $("#cs-set-site", m.box);
+    const mirrorInput = $("#cs-set-mirror", m.box);
+    const knownSites = ["https://civitai.com", "https://civitai.green", "https://civitai.red"];
+    const curMirror = (cfg.mirror || "").trim().replace(/\/+$/, "");
+    if (curMirror && !knownSites.includes(curMirror)) siteSel.value = "__custom__";
+    else if (!curMirror) siteSel.value = "https://civitai.com";
+    else siteSel.value = curMirror;
+    mirrorInput.style.display = siteSel.value === "__custom__" ? "block" : "none";
+    siteSel.addEventListener("change", () => {
+        mirrorInput.style.display = siteSel.value === "__custom__" ? "block" : "none";
+    });
     $("[data-act=ok]", m.box).onclick = async () => {
+        const mirror = siteSel.value === "__custom__" ? mirrorInput.value.trim()
+            : (siteSel.value === "https://civitai.com" ? "" : siteSel.value); // 留空 = 默认 civitai.com
         const body = {
             proxy: $("#cs-set-proxy", m.box).value.trim(),
-            mirror: $("#cs-set-mirror", m.box).value.trim(),
+            mirror,
             max_concurrent: parseInt($("#cs-set-conc", m.box).value, 10) || 1,
             proxy_images: $("#cs-set-pimg", m.box).checked,
             verify_hash: $("#cs-set-hash", m.box).checked,
@@ -1797,11 +1817,11 @@ function buildBrowseView(root) {
             <button class="cs-chip" data-preset="best-month">${esc(t("presetBestMonth"))}</button>
         </div>
         <div class="cs-filters">
-            <select id="cs-f-type"><option value="">${esc(t("allTypes"))}</option>${TYPE_OPTIONS.map((tp) => `<option value="${tp}" ${st.type === tp ? "selected" : ""}>${esc(typeLabel(tp))}</option>`).join("")}</select>
-            <input id="cs-f-base" list="cs-base-list" type="text" placeholder="${esc(t("basePlaceholder"))}" value="${esc(st.base)}"/>
+            <input id="cs-f-base" class="cs-span-full" list="cs-base-list" type="text" placeholder="${esc(t("basePlaceholder"))}" value="${esc(st.base)}"/>
             <datalist id="cs-base-list">${BASE_MODELS.map((b) => `<option value="${esc(b)}"></option>`).join("")}</datalist>
-            <select id="cs-f-sort">${SORTS.map((s) => `<option value="${s}" ${st.sort === s ? "selected" : ""}>${esc(sortLabel(s))}</option>`).join("")}</select>
+            <select id="cs-f-type" class="cs-span-full"><option value="">${esc(t("allTypes"))}</option>${TYPE_OPTIONS.map((tp) => `<option value="${tp}" ${st.type === tp ? "selected" : ""}>${esc(tp)}</option>`).join("")}</select>
             <select id="cs-f-period">${PERIODS.map((p) => `<option value="${p}" ${st.period === p ? "selected" : ""}>${esc(periodLabel(p))}</option>`).join("")}</select>
+            <select id="cs-f-sort">${SORTS.map((s) => `<option value="${s}" ${st.sort === s ? "selected" : ""}>${esc(sortLabel(s))}</option>`).join("")}</select>
             <select id="cs-f-nsfw"><option value="0" ${!st.nsfw ? "selected" : ""}>${esc(t("sfwLabel"))}</option><option value="1" ${st.nsfw ? "selected" : ""}>${esc(t("nsfwLabel"))}</option></select>
         </div>
         <div id="cs-browse-content" class="cs-scroll">
@@ -1958,7 +1978,9 @@ function injectStyles() {
 .cs-view.active { display:flex; }
 .cs-toolbar { display:flex; gap:6px; padding:6px; flex-shrink:0; align-items:center; }
 .cs-toolbar input[type=search] { flex:1; min-width:0; }
-.cs-filters { display:grid; grid-template-columns:1fr 1fr; gap:4px; padding:0 6px 6px; flex-shrink:0; }
+.cs-filters { display:grid; grid-template-columns:repeat(6,1fr); gap:4px; padding:0 6px 6px; flex-shrink:0; }
+.cs-filters > * { width:100%; min-width:0; grid-column:span 2; }
+.cs-filters > .cs-span-full { grid-column:1/-1; }
 .cs-presets { display:flex; gap:4px; padding:0 6px 6px; flex-shrink:0; flex-wrap:wrap; }
 .cs-filters select, .cs-filters input[type=text] { width:100%; padding:3px; font-size:12px; box-sizing:border-box; }
 .cs-scroll { flex:1; min-height:0; overflow-y:auto; padding:0 6px; }
