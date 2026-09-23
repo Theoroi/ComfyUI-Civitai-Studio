@@ -98,8 +98,31 @@ class CivitaiImageSearch:
         if base_model and base_model != "(any)":
             params["baseModels"] = base_model
         if tag:
-            params["tag"] = tag
-        data = _sync_get_json("/images", params)
+            # 官方 /images 的 tags 只认逗号分隔的数字 Tag ID,文本名会被忽略
+            ids = ",".join(t.strip() for t in tag.replace("，", ",").split(",") if t.strip().isdigit())
+            if ids:
+                params["tags"] = ids
+        # /images 无关键词检索:逐页拉取后按 提示词/作者 包含关键词过滤(与路由侧逻辑一致)
+        kw = (keyword or "").strip().lower()
+        if kw:
+            collected = []
+            cur = dict(params)
+            for _page in range(6):
+                page = _sync_get_json("/images", cur)
+                for it in page.get("items") or []:
+                    hay = " ".join([
+                        str(((it.get("meta") or {}).get("prompt")) or ""),
+                        str(it.get("username") or ""),
+                    ]).lower()
+                    if kw in hay:
+                        collected.append(it)
+                nxt = ((page.get("metadata") or {}).get("nextPage")) or ""
+                if not nxt or len(collected) >= int(params["limit"]):
+                    break
+                cur = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(nxt).query))
+            data = {"items": collected}
+        else:
+            data = _sync_get_json("/images", params)
         items = data.get("items") or []
         if not items:
             raise RuntimeError("没有搜索结果,请调整筛选条件")

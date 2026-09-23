@@ -30,7 +30,7 @@ const SORTS = ["Most Downloaded", "Highest Rated", "Newest"];
 const PERIODS = ["AllTime", "Month", "Week", "Day"];
 const NSFW_LEVELS = [0, 1, 2];
 
-const JS_VERSION = "0.5.8";
+const JS_VERSION = "0.5.9";
 
 // ---------- i18n ----------
 const STR = {
@@ -133,6 +133,7 @@ const STR = {
         noTextNode: "未找到 CLIPTextEncode 文本节点",
         galleryTab: "🖼 画廊", gallerySortNewest: "最新发布", gallerySortReactions: "最多互动", gallerySortComments: "最多评论",
         galQuery: "关键词", galTag: "Tag", galBase: "底模", loadMore: "加载更多", useAsOutput: "选为输出", selectedAsOutput: "已选为输出",
+        sfwLabel: "全年龄", nsfwLabel: "含成人内容", galTagId: "Tag ID(逗号分隔)",
         galleryEmpty: "没有图片。", galleryAuthor: "作者",
     },
     en: {
@@ -234,6 +235,7 @@ const STR = {
         noTextNode: "No CLIPTextEncode text node found",
         galleryTab: "🖼 Gallery", gallerySortNewest: "Newest", gallerySortReactions: "Most reactions", gallerySortComments: "Most comments",
         galQuery: "Keyword", galTag: "Tag", galBase: "Base model", loadMore: "Load more", useAsOutput: "Use as output", selectedAsOutput: "Selected as output",
+        sfwLabel: "SFW only", nsfwLabel: "Include NSFW", galTagId: "Tag IDs (comma-separated)",
         galleryEmpty: "No images.", galleryAuthor: "Author",
     },
 };
@@ -247,7 +249,7 @@ let S = {
     },
     local: { models: [], search: "", type: "", loading: false, updates: {}, truncated: false, openId: null, detailCache: {} },
     dl: { jobs: [], lastSig: "", failStreak: 0 },
-    gal: { items: [], next: [], sort: "Newest", period: "AllTime", query: "", base: "", tag: "", loading: false, error: "" },
+    gal: { items: [], next: [], sort: "Newest", period: "AllTime", query: "", base: "", tag: "", nsfw: true, loading: false, error: "" },
     ui: { tab: "browse", root: null, scrollTop: 0, detailId: null, backendStale: false },
 };
 
@@ -256,6 +258,12 @@ function t(key, vars) {
     let s = table[key] ?? STR.zh[key] ?? key;
     if (vars) for (const k in vars) s = s.replaceAll("{" + k + "}", String(vars[k]));
     return s;
+}
+
+function sortEnumNames(list) {
+    // 枚举名去重 + 字母序(此前该函数从未定义,三处枚举下拉因 ReferenceError 被吞掉而一直为空)
+    return [...new Set((list || []).map((x) => String(x)))]
+        .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
 }
 
 function detectLang() {
@@ -1503,10 +1511,10 @@ async function fetchGallery(reset) {
     renderGallery();
     try {
         const p = new URLSearchParams({ limit: "24", sort: st.sort, period: st.period });
-        p.set("nsfw", S.browse.nsfw > 0 ? "true" : "false");
+        p.set("nsfw", st.nsfw ? "true" : "false");
         if (st.query.trim()) p.set("query", st.query.trim());
         if (st.base) p.set("baseModels", st.base);
-        if (st.tag.trim()) p.set("tag", st.tag.trim());
+        if (st.tag.trim()) p.set("tags", st.tag.trim());
         if (!reset && st.next) for (const [k, v] of st.next) p.append(k, v);
         const data = await apiGet("/civitai_studio/images?" + p.toString());
         const items = data.items || [];
@@ -1575,18 +1583,20 @@ function buildGalleryView(root) {
     view.className = "cs-view";
     view.dataset.view = "gallery";
     view.innerHTML = `
-        <div class="cs-toolbar">
-            <input id="cs-gal-query" type="text" placeholder="${esc(t("galQuery"))}" value="${esc(st.query)}" style="flex:1 1 90px;min-width:80px"/>
-            <input id="cs-gal-tag" type="text" placeholder="${esc(t("galTag"))}" value="${esc(st.tag)}" style="flex:1 1 70px;min-width:64px"/>
-            <select id="cs-gal-base" style="flex:1 1 100px;min-width:90px"><option value="">${esc(t("galBase"))}: ${esc(t("unknown"))}</option></select>
-        </div>
-        <div class="cs-toolbar">
+        <div class="cs-gal-filters">
+            <select id="cs-gal-base"><option value="">${esc(t("galBase"))}</option></select>
+            <select id="cs-gal-nsfw">
+                <option value="false" ${!st.nsfw ? "selected" : ""}>${esc(t("sfwLabel"))}</option>
+                <option value="true" ${st.nsfw ? "selected" : ""}>${esc(t("nsfwLabel"))}</option>
+            </select>
+            <input id="cs-gal-query" type="text" placeholder="${esc(t("galQuery"))}" value="${esc(st.query)}"/>
+            <input id="cs-gal-tag" type="text" placeholder="${esc(t("galTagId"))}" value="${esc(st.tag)}"/>
+            <select id="cs-gal-period">${["AllTime", "Month", "Week", "Day"].map((p) => `<option value="${p}" ${st.period === p ? "selected" : ""}>${esc(periodLabel(p))}</option>`).join("")}</select>
             <select id="cs-gal-sort">
                 <option value="Newest">${esc(t("gallerySortNewest"))}</option>
                 <option value="Most Reactions">${esc(t("gallerySortReactions"))}</option>
                 <option value="Most Comments">${esc(t("gallerySortComments"))}</option>
             </select>
-            <select id="cs-gal-period">${["AllTime", "Month", "Week", "Day"].map((p) => `<option value="${p}" ${st.period === p ? "selected" : ""}>${esc(periodLabel(p))}</option>`).join("")}</select>
         </div>
         <div id="cs-gal-content" class="cs-scroll">
             <div id="cs-gal-grid" class="cs-gal-grid"></div>
@@ -1595,6 +1605,7 @@ function buildGalleryView(root) {
     $("#cs-gal-sort", view).value = st.sort;
     $("#cs-gal-sort", view).addEventListener("change", (e) => { st.sort = e.target.value; fetchGallery(true); });
     $("#cs-gal-period", view).addEventListener("change", (e) => { st.period = e.target.value; fetchGallery(true); });
+    $("#cs-gal-nsfw", view).addEventListener("change", (e) => { st.nsfw = e.target.value === "true"; fetchGallery(true); });
     const debouncedFetch = () => {
         clearTimeout(buildGalleryView._deb);
         buildGalleryView._deb = setTimeout(() => fetchGallery(true), 600);
@@ -2083,6 +2094,8 @@ function injectStyles() {
 .cs-float-modal .cs-float-body { max-height:calc(100vh - 120px); }
 @keyframes cs-rotate { to { transform: rotate(360deg); } }
 .cs-spin { width:14px; height:14px; border:2px solid #555; border-top-color:var(--accent-color,#4a90e2); border-radius:50%; animation:cs-rotate .8s linear infinite; display:inline-block; flex:0 0 auto; }
+.cs-gal-filters { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:8px; }
+.cs-gal-filters > * { width:100%; min-width:0; }
 .cs-media-view img, .cs-media-view video { max-width:100%; max-height:64vh; border-radius:8px; display:block; margin:0 auto; background:rgba(0,0,0,.35); }
 .cs-thumb video { pointer-events:none; }
 `;
