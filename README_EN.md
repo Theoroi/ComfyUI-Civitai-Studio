@@ -6,7 +6,7 @@ A ComfyUI sidebar plugin: Civitai **online browser + local model manager + downl
 
 [中文说明](README.md) | **English**
 
-**Contents**: [Features](#features) · [Compatibility](#compatibility) · [Install](#install) · [Usage](#usage) · [Networking](#networking-cn-users) · [API Key](#api-key) · [Data locations](#data-locations) · [Uninstall](#uninstall) · [License](#license) · [中文说明](README.md)
+**Contents**: [Features](#features) · [Compatibility](#compatibility) · [Install](#install) · [Usage](#usage) · [Networking](#networking-cn-users) · [API Key](#api-key) · [Data locations](#data-locations) · [Uninstall](#uninstall) · [License](#license)
 
 ## Features
 

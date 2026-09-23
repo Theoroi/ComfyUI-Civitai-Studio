@@ -4,7 +4,9 @@ ComfyUI 侧边栏插件:Civitai **在线浏览器 + 本地模型管理器 + 下�
 
 > 灵感来自 [ComfyUI-Civitai-Toolkit](https://github.com/BAIKEMARK/ComfyUI-Civitai-Toolkit)(MIT)与非公开实践脚本 `civitai_pull.py`,为其重写的轻量版:不需要数据库、不需要哈希全库扫描,新增**真实下载队列(断点续传 + SHA256 校验)**。
 
-**目录**:[功能](#功能) · [兼容性](#兼容性) · [安装](#安装) · [使用](#使用) · [网络问题](#网络问题国内用户) · [API Key](#api-key) · [数据位置](#数据位置) · [卸载](#卸载) · [License](#license) · [English](README_EN.md)
+[English](README_EN.md) | **中文**
+
+**目录**:[功能](#功能) · [兼容性](#兼容性) · [安装](#安装) · [使用](#使用) · [网络问题](#网络问题国内用户) · [API Key](#api-key) · [数据位置](#数据位置) · [卸载](#卸载) · [License](#license)
 
 ## 功能
 
