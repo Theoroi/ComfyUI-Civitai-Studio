@@ -270,6 +270,31 @@ async def open_isolated_stream(url, extra_headers=None, timeout=None):
 
 _RETRYABLE_STATUS = (429, 500, 502, 503, 504)
 
+# 模型详情缓存:LRU+TTL,本地库展开详情/说明落盘复用,避免重复打 API
+_model_cache = {}
+_MODEL_TTL = 600.0
+_MODEL_CACHE_MAX = 50
+
+
+async def get_model_cached(mid):
+    """按 id 取模型详情,带 10 分钟 LRU 缓存(上限 50 条)."""
+    key = str(mid)
+    hit = _model_cache.get(key)
+    now = time.time()
+    if hit and now - hit[0] < _MODEL_TTL:
+        return hit[1]
+    data = await get_json(f"/models/{key}")
+    if len(_model_cache) >= _MODEL_CACHE_MAX:
+        oldest = min(_model_cache, key=lambda k: _model_cache[k][0])
+        _model_cache.pop(oldest, None)
+    _model_cache[key] = (now, data)
+    return data
+
+
+def prime_model_cache(mid, data):
+    """外部刷新数据后回填缓存,让后续 /model/{id} 读取拿到新内容."""
+    _model_cache[str(mid)] = (time.time(), data)
+
 
 async def get_json(path, params=None, timeout=None):
     global _cooldown_until

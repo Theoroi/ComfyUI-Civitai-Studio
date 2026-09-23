@@ -167,6 +167,14 @@ def schedule_rescan(delay=2.0):
     _rescan_handle = asyncio.get_running_loop().call_later(delay, _fire)
 
 
+def truncate_desc(html):
+    """说明落盘用:空返回 None;超长截断(默认上限 51200 字符)."""
+    t = str(html or "")
+    if not t:
+        return None
+    return t[:51200]
+
+
 def resolve(category, rel):
     item_id = str(category) + "/" + str(rel).replace("\\", "/")
     item = scan().get("by_id", {}).get(item_id)

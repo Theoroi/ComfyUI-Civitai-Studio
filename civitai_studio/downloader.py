@@ -347,7 +347,7 @@ async def _run_job(job):
     job["filename"] = os.path.basename(final)
     job["status"] = "done"
     job["progress"] = 1.0
-    if not local_index.write_sidecar(final, {
+    meta = {
         "source": "civitai",
         "model_id": job.get("model_id"),
         "version_id": str(job.get("version_id")),
@@ -360,7 +360,19 @@ async def _run_job(job):
         "download_url": url.split("?", 1)[0],  # 剥掉可能带 token 的查询串再落盘
         "trained_words": data.get("trainedWords") or [],
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-    }):
+    }
+    if config.load().get("persist_description") and job.get("model_id"):
+        # 说明落盘(默认关):拉模型级描述/标签/封面写进 sidecar;失败不影响下载结果
+        try:
+            mdata = await civitai_client.get_model_cached(job["model_id"])
+            meta["description_html"] = local_index.truncate_desc(mdata.get("description"))
+            meta["tags"] = mdata.get("tags") or []
+            meta["cover_url"] = next(
+                (i.get("url") for v in (mdata.get("modelVersions") or [])
+                 for i in (v.get("images") or []) if i.get("url")), None)
+        except Exception:
+            pass
+    if not local_index.write_sidecar(final, meta):
         job["warning"] = "模型已下载,但写入 .civitai.json 元数据失败(权限/磁盘?),本地库将无法关联该版本"
     local_index.schedule_rescan()  # 去抖合并:2s 窗口内多个完成只触发一次重扫
 

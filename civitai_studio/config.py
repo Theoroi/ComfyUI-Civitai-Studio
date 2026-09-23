@@ -20,6 +20,7 @@ DEFAULTS = {
     "proxy_images": False,  # 预览图是否经服务端中转
     "verify_hash": True,    # 下载完成后校验 SHA256
     "max_concurrent": 1,    # 并发下载数 1-4
+    "persist_description": False,  # 说明/标签/封面落盘到 .civitai.json(默认关)
 }
 
 

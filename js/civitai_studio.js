@@ -802,7 +802,16 @@ function injectLocalExpand(m, rowEl) {
         S.local.detailCache[mid] = data;
         if (S.local.expanded.has(m.id)) renderLocalExpand(ex, m, data);
     }).catch((e) => {
-        ex.innerHTML = `<div class="cs-expand-loading">详情加载失败: ${esc(e.message)}</div>`;
+        const civ = m.civitai || {};
+        if (civ.description_html) {
+            // 离线回退:sidecar 里有落盘的说明
+            renderLocalExpand(ex, m, {
+                name: civ.model_name, description: civ.description_html,
+                stats: {}, modelVersions: [],
+            }, { offline: true });
+        } else {
+            ex.innerHTML = `<div class="cs-expand-loading">详情加载失败: ${esc(e.message)}</div>`;
+        }
     });
 }
 
@@ -816,16 +825,18 @@ function restoreExpansions(listEl) {
     }
 }
 
-function renderLocalExpand(ex, m, data) {
+function renderLocalExpand(ex, m, data, opts = {}) {
     const civ = m.civitai || {};
     const versions = (data.modelVersions || []).filter((v) => v.id);
     const version = versions.find((v) => String(v.id) === String(civ.version_id)) || versions[0] || {};
     const images = version.images || [];
     const cover = images.find((i) => i.url && i.type === "image") || images.find((i) => i.url);
-    const desc = sanitizeHtml(data.description || "");
+    // 说明:在线数据优先;离线时用 sidecar 落盘的缓存
+    const desc = sanitizeHtml(data.description || civ.description_html || "");
     const triggers = version.trainedWords || civ.trained_words || [];
     const files = version.files || [];
     ex.innerHTML = `
+        ${opts.offline ? '<div class="cs-banner">离线:显示本地缓存的说明(可能非最新)</div>' : ""}
         <div class="cs-expand-body">
             ${cover?.url ? `<img class="cs-expand-cover" loading="lazy" src="${esc(imgSrc(cover.url))}" data-direct="${esc(cover.url)}" onerror="this.style.display='none'"/>` : ""}
             <div class="cs-expand-main">
@@ -847,11 +858,28 @@ function renderLocalExpand(ex, m, data) {
                 <div class="cs-expand-actions">
                     <a class="cs-btn cs-btn-mini" href="${esc(civitaiPage())}/models/${esc(String(data.id))}" target="_blank" rel="noopener noreferrer">Civitai 页面 ↗</a>
                     ${version.id ? `<button class="cs-btn cs-btn-mini cs-btn-primary" data-dl-version="${esc(String(version.id))}">下载此版本</button>` : ""}
+                    ${civ.model_id ? `<button class="cs-btn cs-btn-mini" data-refresh-meta>刷新元数据</button>` : ""}
                 </div>
             </div>
         </div>`;
     $$(".cs-trigger", ex).forEach((el) => { el.onclick = () => copyText(el.textContent, el); });
     $$(".cs-copyable", ex).forEach((el) => { el.onclick = () => copyText(el.dataset.copyText || "", el); });
+    const rf = $("[data-refresh-meta]", ex);
+    if (rf) rf.onclick = async () => {
+        rf.disabled = true;
+        rf.textContent = "刷新中…";
+        try {
+            await apiPost("/civitai_studio/local/refresh_meta", { category: m.category, rel: m.rel });
+            const fresh = await apiGet(`/civitai_studio/model/${encodeURIComponent(String(civ.model_id))}`);
+            S.local.detailCache[civ.model_id] = fresh;
+            renderLocalExpand(ex, m, fresh);
+            toast("success", "元数据已刷新", "");
+        } catch (e2) {
+            toast("error", "刷新元数据失败", e2.message);
+            rf.disabled = false;
+            rf.textContent = "刷新元数据";
+        }
+    };
     rewriteDescImages(ex);
     const descEl = $(".cs-expand-desc", ex);
     if (descEl) {
@@ -1177,6 +1205,7 @@ async function openSettings() {
             </label>
             <label class="cs-check"><input id="cs-set-pimg" type="checkbox" ${cfg.proxy_images ? "checked" : ""}/> 预览图经服务端中转(直连打不开图片时开启)</label>
             <label class="cs-check"><input id="cs-set-hash" type="checkbox" ${cfg.verify_hash ? "checked" : ""}/> 下载完成后校验 SHA256</label>
+            <label class="cs-check"><input id="cs-set-pdesc" type="checkbox" ${cfg.persist_description ? "checked" : ""}/> 说明落盘:把 Civitai 说明/标签/封面写进 .civitai.json(离线可看,默认关)</label>
             <div class="cs-modal-msg">API Key 在 <a href="https://civitai.com/user/account" target="_blank" rel="noopener noreferrer">Civitai 账户设置</a> 页生成,仅保存在本机 ComfyUI user 目录;Key 只会下发给官方站点,不会发给镜像。</div>
             <div class="cs-modal-actions">
                 <button class="cs-btn" data-act="cancel">取消</button>
@@ -1191,6 +1220,7 @@ async function openSettings() {
             max_concurrent: parseInt($("#cs-set-conc", m.box).value, 10) || 1,
             proxy_images: $("#cs-set-pimg", m.box).checked,
             verify_hash: $("#cs-set-hash", m.box).checked,
+            persist_description: $("#cs-set-pdesc", m.box).checked,
         };
         const key = $("#cs-set-key", m.box).value.trim();
         if (key) body.api_key = key;

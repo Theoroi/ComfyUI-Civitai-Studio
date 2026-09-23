@@ -20,24 +20,6 @@ from . import civitai_client, config, downloader, local_index
 _enums_cache = {"data": None, "ts": 0.0}
 _ENUMS_TTL = 6 * 3600.0
 
-_model_cache = {}  # model_id(str) -> (ts, data),LRU+TTL,避免本地库反复展开详情重复打 Civitai
-_MODEL_TTL = 600.0
-_MODEL_CACHE_MAX = 50
-
-
-async def _get_model_cached(mid):
-    key = str(mid)
-    hit = _model_cache.get(key)
-    now = time.time()
-    if hit and now - hit[0] < _MODEL_TTL:
-        return hit[1]
-    data = await civitai_client.get_json(f"/models/{key}")
-    if len(_model_cache) >= _MODEL_CACHE_MAX:
-        oldest = min(_model_cache, key=lambda k: _model_cache[k][0])
-        _model_cache.pop(oldest, None)
-    _model_cache[key] = (now, data)
-    return data
-
 
 def _parse_model_ref(text):
     """从页面链接或纯数字里提取 (model_id, version_id|None)。
@@ -143,6 +125,7 @@ async def get_config(request):
         "proxy_images": cfg.get("proxy_images", False),
         "verify_hash": cfg.get("verify_hash", True),
         "max_concurrent": cfg.get("max_concurrent", 1),
+        "persist_description": cfg.get("persist_description", False),
     })
 
 
@@ -164,7 +147,7 @@ async def set_config(request):
             except (TypeError, ValueError):
                 return _json_error(f"{key} 必须是整数", 400)
             partial[key] = max(lo, min(hi, value))
-    for key in ("proxy_images", "verify_hash"):
+    for key in ("proxy_images", "verify_hash", "persist_description"):
         if key in body:
             partial[key] = bool(body.get(key))
     cfg = config.update(partial)
@@ -208,7 +191,7 @@ async def search_models(request):
 async def model_detail(request):
     mid = request.match_info["mid"]
     try:
-        data = await _get_model_cached(mid)
+        data = await civitai_client.get_model_cached(mid)
     except civitai_client.CivitaiError as e:
         return _json_error(e, 502)
     index = await _scan_async(False)
@@ -471,7 +454,7 @@ async def local_associate(request):
     if not mid.isdigit():
         return _json_error("无法解析模型 ID:请从搜索结果选择,或粘贴页面链接/模型 ID", 400)
     try:
-        data = await _get_model_cached(mid)
+        data = await civitai_client.get_model_cached(mid)
     except civitai_client.CivitaiError as e:
         return _json_error(e, 502)
     versions = [v for v in data.get("modelVersions", []) if v.get("id")]
@@ -495,10 +478,54 @@ async def local_associate(request):
         "manual": True,
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
+    if config.load().get("persist_description"):
+        meta["description_html"] = local_index.truncate_desc(data.get("description"))
+        meta["tags"] = data.get("tags") or []
+        meta["cover_url"] = next(
+            (i.get("url") for v in versions for i in (v.get("images") or []) if i.get("url")), None)
     if not local_index.write_sidecar(path, meta):
         return _json_error("写入 .civitai.json 失败(权限/磁盘?)", 500)
     await _scan_async(True)
     return _ok(associated=meta)
+
+
+@_post("/civitai_studio/local/refresh_meta")
+async def local_refresh_meta(request):
+    """刷新已关联模型的元数据:版本信息取最新;说明/标签/封面按设置落盘."""
+    body = await _read_json_dict(request)
+    if body is None:
+        return _json_error("请求体必须是 JSON 对象", 400)
+    await _scan_async(False)
+    path = local_index.resolve(body.get("category"), body.get("rel"))
+    if not path or not os.path.isfile(path):
+        return _json_error("文件不存在或不在模型目录内", 404)
+    meta = local_index.read_sidecar(path)
+    if not meta or not meta.get("model_id"):
+        return _json_error("该文件未关联 Civitai(缺少 .civitai.json)", 400)
+    try:
+        # 绕过缓存取最新
+        data = await civitai_client.get_json(f"/models/{meta['model_id']}")
+    except civitai_client.CivitaiError as e:
+        return _json_error(e, 502)
+    except (asyncio.TimeoutError, aiohttp.ClientError) as e:
+        return _json_error(civitai_client.net_error_message(e), 502)
+    meta["model_name"] = data.get("name") or meta.get("model_name")
+    versions = [v for v in data.get("modelVersions", []) if v.get("id")]
+    cur = next((v for v in versions if str(v.get("id")) == str(meta.get("version_id"))), None)
+    if cur:
+        meta["version_name"] = cur.get("name") or meta.get("version_name")
+        meta["base_model"] = cur.get("baseModel") or meta.get("base_model")
+        meta["trained_words"] = cur.get("trainedWords") or meta.get("trained_words") or []
+    if config.load().get("persist_description"):
+        meta["description_html"] = local_index.truncate_desc(data.get("description"))
+        meta["tags"] = data.get("tags") or []
+        meta["cover_url"] = next(
+            (i.get("url") for v in versions for i in (v.get("images") or []) if i.get("url")),
+            meta.get("cover_url"))
+    local_index.write_sidecar(path, meta)
+    civitai_client.prime_model_cache(meta["model_id"], data)  # 让随后的 /model/{id} 读到新数据
+    await _scan_async(True)
+    return _ok()
 
 
 @_post("/civitai_studio/local/check_updates")
