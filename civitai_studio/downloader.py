@@ -94,6 +94,8 @@ def enqueue(payload):
     version_id = payload.get("version_id")
     if not version_id:
         raise ValueError("缺少 version_id")
+    if not str(version_id).isdigit():
+        raise ValueError("version_id 必须是数字")
     try:
         file_index = max(0, int(payload.get("file_index", 0) or 0))
     except (TypeError, ValueError):
@@ -230,23 +232,25 @@ def _content_range_start(resp):
 
 
 class _DownloadStatusError(Exception):
-    """下载返回鉴权类状态(401/403):换源(带 token / 换官方域)重试."""
+    """下载返回非成功状态(401/403/404/5xx 等):按候选链换源重试."""
 
-    def __init__(self, status):
-        super().__init__(f"HTTP {status}")
+    def __init__(self, status, msg=None):
+        super().__init__(msg or f"HTTP {status}")
         self.status = status
+        self.msg = msg or f"HTTP {status}"
 
 
 async def _download_candidates(url):
-    """下载地址候选:原 URL → 原URL+token → 官方域 → 官方域+token(去重)."""
+    """下载地址候选:原 URL → 官方域;token 候选仅对官方域追加(镜像站不下发 Key)."""
     key = (config.load().get("api_key") or "").strip()
     out = [url]
-    if key:
-        out.append(url + ("&" if "?" in url else "?") + "token=" + urllib.parse.quote(key))
     com = re.sub(r"(?<=://)[^/]+", "civitai.com", url, count=1)
     if com != url:
         out.append(com)
-        if key:
+    if key:
+        if civitai_client.is_official_host(url):
+            out.append(url + ("&" if "?" in url else "?") + "token=" + urllib.parse.quote(key))
+        if com != url and civitai_client.is_official_host(com):
             out.append(com + ("&" if "?" in com else "?") + "token=" + urllib.parse.quote(key))
     seen, dedup = set(), []
     for c in out:
@@ -257,7 +261,7 @@ async def _download_candidates(url):
 
 
 async def _download_to_tmp(job, attempt_url, tmp, dl_timeout, started):
-    """对单个候选地址完成流式下载(含断点续传);401/403 抛 _DownloadStatusError."""
+    """对单个候选地址完成流式下载(含断点续传);非成功状态抛 _DownloadStatusError."""
     extra_headers = {"Accept": "*/*", "Accept-Encoding": "identity"}
     resume_from = 0
     if os.path.exists(tmp):
@@ -274,11 +278,11 @@ async def _download_to_tmp(job, attempt_url, tmp, dl_timeout, started):
                 os.remove(tmp)
             raise ValueError("断点文件与服务器不匹配,已清除 .part 临时文件,请重试")
         if resp.status in (401, 403):
-            raise _DownloadStatusError(resp.status)
+            raise _DownloadStatusError(resp.status, f"HTTP {resp.status}(该模型可能需要登录或为 Early Access,请在设置里配置 API Key)")
         if resp.status not in (200, 206):
-            raise ValueError(f"下载失败 HTTP {resp.status}")
+            raise _DownloadStatusError(resp.status)
         if (resp.content_type or "").startswith("text/html"):
-            raise ValueError("下载被拦截(服务器返回的是网页)— 可能是 WAF 校验,换个代理节点后重试")
+            raise _DownloadStatusError(502, "下载被拦截(服务器返回的是网页)— 可能是 WAF 校验,换个代理节点后重试")
         try:
             content_length = int(resp.headers.get("Content-Length") or 0)
         except ValueError:
@@ -336,11 +340,11 @@ async def _run_job(job):
     job["total"] = int((file.get("sizeKB") or 0) * 1024)
 
     # 流式下载:不限总时长,只限单次读超时;用独立会话,不受共享会话退役影响;
-    # 401/403 时依次换源重试(带 token / 换官方域)
+    # 401/403/404/5xx/被拦截时依次换源重试(官方域 + token)
     dl_timeout = aiohttp.ClientTimeout(total=None, connect=20, sock_read=90)
     started = time.time()
     candidates = await _download_candidates(url)
-    last_status = None
+    last_err = None
     used_url = url
     for cand in candidates:
         try:
@@ -348,13 +352,10 @@ async def _run_job(job):
             used_url = cand
             break
         except _DownloadStatusError as e:
-            last_status = e.status
+            last_err = e
             continue
     else:
-        raise ValueError(
-            f"下载失败 HTTP {last_status}(该模型可能需要登录或为 Early Access:"
-            "请在设置里配置 API Key,或在浏览器打开模型页确认可下载)"
-        )
+        raise ValueError(f"下载失败:{last_err.msg or last_err.status}(已尝试 {len(candidates)} 个下载源)")
     received = job.get("received", 0)
 
     expected = (file.get("hashes") or {}).get("SHA256")
@@ -380,15 +381,25 @@ async def _run_job(job):
     else:
         job["verified"] = None
 
-    # 目标名可能被并发任务占掉,落盘前最后再排重;此时再响应一次取消
+    # 目标名可能被并发任务占掉,落盘前最后再排重;此时再响应一次取消。
+    # rename(Windows 目标存在即抛)循环到成功,杜绝并发覆盖已完成下载
     if job["id"] in _cancel_flags:
         try:
             os.remove(tmp)
         except OSError:
             pass
         raise asyncio.CancelledError()
-    final = _unique_dest(dest)
-    os.replace(tmp, final)
+    placed = False
+    for _ in range(50):
+        final = _unique_dest(dest)
+        try:
+            os.rename(tmp, final)
+            placed = True
+            break
+        except FileExistsError:
+            continue
+    if not placed:
+        raise ValueError("目标文件名冲突,请重试")
     job["dest"] = final
     job["filename"] = os.path.basename(final)
     job["status"] = "done"

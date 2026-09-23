@@ -26,10 +26,13 @@ def _parse_model_ref(text):
     """从页面链接或纯数字里提取 (model_id, version_id|None)。
 
     支持: https://civitai.com/models/12345、...?modelVersionId=678、纯 '12345'。
+    下载直链(api/download/models/)不是模型页,单独拦截。
     """
     t = str(text or "").strip()
     if not t:
         return None, None
+    if re.search(r"download/models/\d+", t):
+        raise ValueError("请粘贴模型页链接(models/数字),而不是下载直链")
     m = re.search(r"models/(\d+)", t)
     mid = m.group(1) if m else (t if t.isdigit() else None)
     mv = re.search(r"modelVersionId=(\d+)", t)
@@ -197,6 +200,8 @@ async def search_models(request):
 @_get("/civitai_studio/model/{mid}")
 async def model_detail(request):
     mid = request.match_info["mid"]
+    if not mid.isdigit():
+        return _json_error("模型 ID 必须是数字", 400)
     try:
         data = await civitai_client.get_model_cached(mid)
     except civitai_client.CivitaiError as e:
@@ -356,7 +361,8 @@ async def local_models(request):
             "rel": m["rel"], "name": m["name"], "path": m["path"],
             "size": m["size"], "mtime": m["mtime"],
             "civitai": {k: civ[k] for k in
-                        ("model_id", "model_name", "version_id", "version_name", "base_model", "trained_words")
+                        ("model_id", "model_name", "version_id", "version_name", "base_model", "trained_words",
+                         "description_html", "tags", "cover_url")
                         if k in civ},
         })
     return web.json_response({
@@ -425,17 +431,23 @@ async def local_rename(request):
     if not new_name or new_name in (".", ".."):
         return _json_error("新文件名无效", 400)
     dest = os.path.join(os.path.dirname(path), new_name)
+    if os.path.normcase(os.path.abspath(dest)) == os.path.normcase(os.path.abspath(path)):
+        return _ok(new_name=new_name)  # 同名(含仅大小写差异):无需改动
     if os.path.exists(dest):
         return _json_error("目标文件名已存在", 400)
+    ext = os.path.splitext(new_name)[1].lower()
+    if ext not in local_index.MODEL_EXTS:
+        return _json_error(f"不支持的扩展名 {ext or '(无)'}:重命名后需仍是模型文件", 400)
     try:
         os.rename(path, dest)
     except OSError as e:
         return _json_error(f"重命名失败(文件可能被占用): {e}", 500)
     old_sidecar = local_index.sidecar_path(path)
+    old_meta = local_index.read_sidecar(path)
+    if old_meta:
+        old_meta["file_name"] = new_name
+        local_index.write_sidecar(dest, old_meta)
     if os.path.exists(old_sidecar):
-        meta = local_index.read_sidecar(path) or {}
-        meta["file_name"] = new_name
-        local_index.write_sidecar(dest, meta)
         try:
             os.remove(old_sidecar)
         except OSError:
@@ -454,7 +466,10 @@ async def local_associate(request):
     path = local_index.resolve(body.get("category"), body.get("rel"))
     if not path or not os.path.isfile(path):
         return _json_error("文件不存在或不在模型目录内", 404)
-    mid, vid = _parse_model_ref(body.get("ref"))
+    try:
+        mid, vid = _parse_model_ref(body.get("ref"))
+    except ValueError as e:
+        return _json_error(e, 400)
     # 搜索选择的走显式 model_id/version_id 字段,优先于 ref 解析
     mid = str(body.get("model_id") or mid or "").strip()
     vid = str(body.get("version_id") or vid or "").strip()
@@ -472,7 +487,10 @@ async def local_associate(request):
             return _json_error(f"该模型下未找到版本 {vid}", 400)
     elif versions:
         version = versions[0]
+    # 合并旧 sidecar(保留 sha256/download_url 等文件级字段),再覆盖关联身份字段
+    old = local_index.read_sidecar(path) or {}
     meta = {
+        **old,
         "source": "civitai",
         "model_id": data.get("id"),
         "version_id": str(version.get("id")) if version else "",
@@ -485,11 +503,22 @@ async def local_associate(request):
         "manual": True,
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
-    if config.load().get("persist_description"):
-        meta["description_html"] = local_index.truncate_desc(data.get("description"))
-        meta["tags"] = data.get("tags") or []
-        meta["cover_url"] = next(
-            (i.get("url") for v in versions for i in (v.get("images") or []) if i.get("url")), None)
+    if str(old.get("model_id") or "") != str(meta["model_id"]):
+        # 换了模型:旧版本的哈希/下载地址/落盘说明不再适用
+        meta.pop("sha256", None)
+        meta.pop("download_url", None)
+        if config.load().get("persist_description"):
+            meta["description_html"] = local_index.truncate_desc(data.get("description"))
+            meta["tags"] = data.get("tags") or []
+            meta["cover_url"] = next(
+                (i.get("url") for v in versions for i in (v.get("images") or []) if i.get("url")), None)
+        else:
+            meta.pop("description_html", None)
+            meta.pop("tags", None)
+            meta.pop("cover_url", None)
+    # 网络等待期间文件可能已被重命名/删除,写盘前复验
+    if not os.path.isfile(path):
+        return _json_error("文件已移动或删除,请刷新本地库后重试", 409)
     if not local_index.write_sidecar(path, meta):
         return _json_error("写入 .civitai.json 失败(权限/磁盘?)", 500)
     await _scan_async(True)
@@ -509,6 +538,9 @@ async def local_refresh_meta(request):
     meta = local_index.read_sidecar(path)
     if not meta or not meta.get("model_id"):
         return _json_error("该文件未关联 Civitai(缺少 .civitai.json)", 400)
+    meta["model_id"] = str(meta.get("model_id"))
+    if not meta["model_id"].isdigit():
+        return _json_error("sidecar 中的 model_id 无效,请重新关联", 400)
     try:
         # 绕过缓存取最新
         data = await civitai_client.get_json(f"/models/{meta['model_id']}")
@@ -529,7 +561,11 @@ async def local_refresh_meta(request):
         meta["cover_url"] = next(
             (i.get("url") for v in versions for i in (v.get("images") or []) if i.get("url")),
             meta.get("cover_url"))
-    local_index.write_sidecar(path, meta)
+    # 网络等待期间文件可能已被重命名/删除,写盘前复验
+    if not os.path.isfile(path):
+        return _json_error("文件已移动或删除,请刷新本地库后重试", 409)
+    if not local_index.write_sidecar(path, meta):
+        return _json_error("写入 .civitai.json 失败(权限/磁盘?)", 500)
     civitai_client.prime_model_cache(meta["model_id"], data)  # 让随后的 /model/{id} 读到新数据
     await _scan_async(True)
     return _ok()

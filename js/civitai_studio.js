@@ -68,7 +68,8 @@ function esc(s) {
 function sanitizeHtml(html) {
     const div = document.createElement("div");
     div.innerHTML = String(html || "");
-    $$("script,style,iframe,object,embed,link,meta,form,base,svg,math", div).forEach((n) => n.remove());
+    // template 的子节点不在 querySelectorAll 范围内,会整体绕过净化:直接移除
+    $$("script,style,iframe,object,embed,link,meta,form,base,svg,math,template", div).forEach((n) => n.remove());
     $$("*", div).forEach((n) => {
         for (const attr of Array.from(n.attributes)) {
             const name = attr.name.toLowerCase();
@@ -247,7 +248,13 @@ async function fetchBrowse(reset) {
     updateStatusLine();
     try {
         const data = await apiGet("/civitai_studio/search?" + browseParams(cursor));
-        st.items = reset ? (data.items || []) : st.items.concat(data.items || []);
+        if (reset) {
+            st.items = data.items || [];
+        } else {
+            // cursor 翻页期间上游有增删,同一模型可能重复出现:按 id 去重
+            const seen = new Set(st.items.map((x) => x.id));
+            st.items = st.items.concat((data.items || []).filter((x) => !seen.has(x.id)));
+        }
         st.nextCursor = data.metadata?.nextCursor || "";
         st.dirty = false;
         st.error = "";
@@ -636,21 +643,28 @@ async function openDownloadDialog({ model, version, fileIndex = null, defaultRoo
 }
 
 // ---------- 本地库 ----------
+let loadLocalSeq = 0;
+
 async function loadLocal(force) {
     const st = S.local;
+    const seq = ++loadLocalSeq;
     st.loading = true;
     renderLocalList();
     try {
         const data = await apiGet("/civitai_studio/local" + (force ? "?force=1" : ""));
+        if (seq !== loadLocalSeq) return; // 旧响应丢弃,避免乱序覆盖
         st.models = data.models || [];
         st.truncated = !!data.truncated;
         st.error = "";
     } catch (e) {
+        if (seq !== loadLocalSeq) return;
         st.error = "加载失败: " + e.message;
         st.models = [];
     } finally {
-        st.loading = false;
-        renderLocalList();
+        if (seq === loadLocalSeq) {
+            st.loading = false;
+            renderLocalList();
+        }
     }
 }
 
@@ -820,6 +834,7 @@ function injectLocalExpand(m, rowEl) {
         if (civ.description_html) {
             // 离线回退:sidecar 里有落盘的说明
             renderLocalExpand(ex, m, {
+                id: civ.model_id,
                 name: civ.model_name, description: civ.description_html,
                 stats: {}, modelVersions: [],
             }, { offline: true });
@@ -833,9 +848,10 @@ function restoreExpansions(listEl) {
     if (!listEl) return;
     for (const id of Array.from(S.local.expanded)) {
         const m = findLocalModel(id);
+        if (!m || !m.civitai || !m.civitai.model_id) { S.local.expanded.delete(id); continue; }
+        // 行因筛选/搜索不在当前 DOM 时保留展开态,清空筛选后自动恢复
         const row = listEl.querySelector(`.cs-local-row[data-id="${CSS.escape(id)}"]`);
-        if (!m || !row || !m.civitai || !m.civitai.model_id) { S.local.expanded.delete(id); continue; }
-        injectLocalExpand(m, row);
+        if (row) injectLocalExpand(m, row);
     }
 }
 
@@ -844,7 +860,8 @@ function renderLocalExpand(ex, m, data, opts = {}) {
     const versions = (data.modelVersions || []).filter((v) => v.id);
     const version = versions.find((v) => String(v.id) === String(civ.version_id)) || versions[0] || {};
     const images = version.images || [];
-    const cover = images.find((i) => i.url && i.type === "image") || images.find((i) => i.url);
+    const cover = images.find((i) => i.url && i.type === "image") || images.find((i) => i.url)
+        || (civ.cover_url ? { url: civ.cover_url, type: "image" } : null);
     // 说明:在线数据优先;离线时用 sidecar 落盘的缓存
     const desc = sanitizeHtml(data.description || civ.description_html || "");
     const triggers = version.trainedWords || civ.trained_words || [];
@@ -941,6 +958,7 @@ function renameDialog(m) {
             md.close();
             toast("success", "已重命名", m.name);
             S.local.expanded.delete(m.id);
+            delete S.local.updates[m.id];
             loadLocal(true);
         } catch (e) {
             toast("error", "重命名失败", e.message);
@@ -1016,7 +1034,10 @@ function associateDialog(m) {
 
     const doSearch = async () => {
         const q = $("#cs-as-query", md.box).value.trim();
-        if (!q) return;
+        if (!q) {
+            resultsEl.innerHTML = '<div class="cs-dim">请输入搜索词,或直接粘贴页面链接 / 模型 ID</div>';
+            return;
+        }
         resultsEl.innerHTML = '<div class="cs-dim">搜索中…</div>';
         try {
             const data = await apiGet(`/civitai_studio/search?query=${encodeURIComponent(q)}&limit=8&nsfw=true`);
@@ -1044,20 +1065,23 @@ function associateDialog(m) {
         const it = searchItems[parseInt(item.dataset.i, 10)];
         if (!it) return;
         selected = { model_id: it.id };
+        const myId = String(it.id);
         refInput.value = "";
-        okBtn.disabled = false;
+        okBtn.disabled = true; // 版本加载完成前禁止提交,避免发送垃圾 version_id
         versionSel.innerHTML = "";
         versionWrap.style.display = "";
         versionSel.innerHTML = '<option>版本加载中…</option>';
         try {
-            const detail = await apiGet(`/civitai_studio/model/${encodeURIComponent(String(it.id))}`);
+            const detail = await apiGet(`/civitai_studio/model/${encodeURIComponent(myId)}`);
+            if (selected?.model_id !== myId) return; // 用户已改选其他模型,丢弃本次响应
             detailData = detail;
             const versions = (detail.modelVersions || []).filter((v) => v.id);
             versionSel.innerHTML = versions.map((v, i) =>
                 `<option value="${esc(String(v.id))}" ${i === 0 ? "selected" : ""}>${esc(v.name)} (${esc(v.baseModel || "?")})</option>`).join("");
+            okBtn.disabled = false;
             updateVersionAux();
         } catch (e2) {
-            versionWrap.style.display = "none";
+            if (selected?.model_id === myId) versionWrap.style.display = "none";
         }
     });
     $("[data-act=cancel]", md.box).onclick = md.close;
@@ -1079,6 +1103,7 @@ function associateDialog(m) {
             }
             const res = await apiPost("/civitai_studio/local/associate", body);
             md.close();
+            delete S.local.updates[m.id];
             toast("success", "已关联", `${res.associated?.model_name || m.name} — ${res.associated?.version_name || ""}`);
             loadLocal(true);
         } catch (e) {
@@ -1342,7 +1367,7 @@ function buildBrowseView(root) {
     // 无限滚动(页码推进在 fetchBrowse 成功后提交,失败自动重试同一页)
     $("#cs-browse-content", view).addEventListener("scroll", (e) => {
         const el = e.target;
-        S.ui.scrollTop = el.scrollTop;
+        if (!S.ui.detailId) S.ui.scrollTop = el.scrollTop; // 详情视图的滚动不污染列表还原位
         if (el.scrollTop + el.clientHeight >= el.scrollHeight - 400) {
             if (!st.loading && st.nextCursor && !st.dirty) fetchBrowse(false);
         }
