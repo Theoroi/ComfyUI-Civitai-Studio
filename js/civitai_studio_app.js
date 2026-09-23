@@ -30,7 +30,7 @@ const SORTS = ["Most Downloaded", "Highest Rated", "Newest"];
 const PERIODS = ["AllTime", "Month", "Week", "Day"];
 const NSFW_LEVELS = [0, 1, 2];
 
-const JS_VERSION = "0.5.16";
+const JS_VERSION = "0.5.17";
 
 // ---------- i18n ----------
 const STR = {
@@ -651,10 +651,20 @@ function dragFloat(panel, head) {
     });
 }
 
-// 悬浮层锚点:始终以 ComfyUI 画布区域为基准。
+// 悬浮层锚点:始终以 ComfyUI 主画布区域为基准。
+// 页面上有多个 canvas(小地图/预览等),querySelector 会取错,须取 litegraph 主画布;
 // 侧边栏切到非 Civitai 标签时 root 处于隐藏态(矩形为 0),按 root 定位会飘到左上角。
 function floatAnchor() {
-    const canvasR = document.querySelector("canvas")?.getBoundingClientRect();
+    let el = window.app?.canvas?.canvas;
+    if (!el || !el.isConnected) {
+        let best = null, bestArea = 0;
+        for (const c of document.querySelectorAll("canvas")) {
+            const r = c.getBoundingClientRect();
+            if (r.width > 50 && r.width * r.height > bestArea) { best = c; bestArea = r.width * r.height; }
+        }
+        el = best;
+    }
+    const canvasR = el ? el.getBoundingClientRect() : null;
     if (canvasR && canvasR.width > 50) {
         return { left: canvasR.left, right: canvasR.right, top: canvasR.top };
     }
