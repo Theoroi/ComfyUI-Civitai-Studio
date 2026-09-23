@@ -30,7 +30,7 @@ const SORTS = ["Most Downloaded", "Highest Rated", "Newest"];
 const PERIODS = ["AllTime", "Month", "Week", "Day"];
 const NSFW_LEVELS = [0, 1, 2];
 
-const JS_VERSION = "0.5.21";
+const JS_VERSION = "2026.9.23";
 
 // ---------- i18n ----------
 const STR = {
@@ -2354,13 +2354,17 @@ app.registerExtension({
                 const strip = document.createElement("div");
                 strip.style.cssText = "display:flex;flex-wrap:wrap;gap:6px;padding:4px;width:100%;"
                     + "align-content:flex-start;max-height:520px;overflow-y:auto;";
-                // 滚轮:ComfyUI 的容器级 handler 会 preventDefault 取消原生滚动并缩放画布,
-                // 这里手动接管滚动并阻断传播
-                strip.addEventListener("wheel", (e) => {
+                // 滚轮:挂到 window 捕获阶段(最早触发),命中面板时手动滚动并拦截,
+                // 防止 ComfyUI 高层 handler 先行 preventDefault/缩放画布
+                const wheelTarget = strip;
+                const wheelGuard = (e) => {
+                    if (!(e.target instanceof Node) || !wheelTarget.contains(e.target)) return;
                     e.preventDefault();
                     e.stopPropagation();
-                    strip.scrollTop += e.deltaY;
-                }, { passive: false, capture: true });
+                    wheelTarget.scrollTop += e.deltaY;
+                };
+                window.addEventListener("wheel", wheelGuard, { passive: false, capture: true });
+                node.csWheelGuard = wheelGuard;
                 node.csStrip = strip;
                 this.addDOMWidget("cs_thumbs", "cs_thumbs", strip);
                 if (this.size[0] < 460) this.size[0] = 460; // 保证默认 3 列以上
@@ -2410,6 +2414,32 @@ app.registerExtension({
                 // 兜底轮询:部分文本输入在新前端不触发 widget.callback/inputEl 事件,
                 // 轮询 sig 变化保证 tag 等改动最终一定触发刷新(csSchedule 内部去重)
                 node.csPoll = setInterval(() => node.csSchedule?.(), 700);
+                return r;
+            };
+        }
+
+        // 显示文本节点:执行完成后把收到的字符串渲染在节点内
+        if (type === "CivitaiShowText") {
+            const origCreated = nodeType.prototype.onNodeCreated;
+            nodeType.prototype.onNodeCreated = function () {
+                const r = origCreated?.apply(this, arguments);
+                const el = document.createElement("div");
+                el.style.cssText = "white-space:pre-wrap;word-break:break-word;font-size:11px;line-height:1.4;"
+                    + "max-height:220px;overflow-y:auto;padding:4px;color:#ddd;min-height:20px;";
+                el.textContent = "(未执行)";
+                this.addDOMWidget("cs_show", "cs_show", el);
+                const node = this;
+                const onExecuted = ({ detail }) => {
+                    if (String(detail?.node) !== String(node.id)) return;
+                    const t = detail?.output?.text;
+                    el.textContent = Array.isArray(t) ? t.join("\n") : String(t ?? "");
+                };
+                app.api.addEventListener("executed", onExecuted);
+                const origOnRemoved = this.onRemoved;
+                this.onRemoved = function () {
+                    app.api.removeEventListener("executed", onExecuted);
+                    origOnRemoved?.apply(this, arguments);
+                };
                 return r;
             };
         }

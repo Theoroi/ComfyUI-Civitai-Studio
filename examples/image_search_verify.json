@@ -1,266 +1,75 @@
 {
   "id": "civitai-studio-image-search-verify",
   "revision": 0,
-  "last_node_id": 6,
-  "last_link_id": 7,
+  "last_node_id": 5,
+  "last_link_id": 4,
   "nodes": [
     {
       "id": 1,
       "type": "CivitaiImageSearch",
-      "pos": [
-        80,
-        120
-      ],
-      "size": [
-        460,
-        900
-      ],
+      "pos": [80, 120],
+      "size": [460, 900],
       "flags": {},
       "order": 0,
       "mode": 0,
       "inputs": [],
       "outputs": [
-        {
-          "name": "positive",
-          "type": "STRING",
-          "links": [
-            2
-          ]
-        },
-        {
-          "name": "negative",
-          "type": "STRING",
-          "links": [
-            3
-          ]
-        },
-        {
-          "name": "lora_string",
-          "type": "STRING",
-          "links": []
-        },
-        {
-          "name": "trigger_words",
-          "type": "STRING",
-          "links": []
-        },
-        {
-          "name": "base_model",
-          "type": "STRING",
-          "links": []
-        },
-        {
-          "name": "image",
-          "type": "IMAGE",
-          "links": [
-            6
-          ]
-        }
+        {"name": "positive", "type": "STRING", "links": [1]},
+        {"name": "negative", "type": "STRING", "links": [2]},
+        {"name": "lora_string", "type": "STRING", "links": []},
+        {"name": "trigger_words", "type": "STRING", "links": []},
+        {"name": "base_model", "type": "STRING", "links": []},
+        {"name": "image", "type": "IMAGE", "links": [4]}
       ],
       "properties": {},
-      "widgets_values": [
-        "(any)",
-        "false",
-        "",
-        "AllTime",
-        "Newest",
-        50,
-        0,
-        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/eae2d40b-53a9-4085-b1fe-5edcfc673b0a/original=true/eae2d40b-53a9-4085-b1fe-5edcfc673b0a.jpeg"
-      ]
+      "widgets_values": ["(any)", "false", "", "AllTime", "Newest", 50, 0, "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/eae2d40b-53a9-4085-b1fe-5edcfc673b0a/original=true/eae2d40b-53a9-4085-b1fe-5edcfc673b0a.jpeg"]
     },
     {
       "id": 2,
-      "type": "CLIPLoader",
-      "pos": [
-        80,
-        1180
-      ],
-      "size": [
-        340,
-        80
-      ],
+      "type": "CivitaiShowText",
+      "title": "positive(运行后显示在这里)",
+      "pos": [620, 120],
+      "size": [460, 180],
       "flags": {},
       "order": 1,
       "mode": 0,
-      "inputs": [],
-      "outputs": [
-        {
-          "name": "CLIP",
-          "type": "CLIP",
-          "links": [
-            1
-          ],
-          "slot_index": 0
-        }
-      ],
-      "properties": {},
-      "widgets_values": [
-        "clip_l.safetensors",
-        "stable_diffusion"
-      ]
+      "inputs": [{"name": "text", "type": "STRING", "link": 1}],
+      "outputs": [{"name": "text", "type": "STRING", "links": []}],
+      "properties": {}
     },
     {
       "id": 3,
-      "type": "CLIPTextEncode",
-      "title": "positive → 执行后文本显示在这里",
-      "pos": [
-        700,
-        120
-      ],
-      "size": [
-        420,
-        140
-      ],
+      "type": "CivitaiShowText",
+      "title": "negative(运行后显示在这里)",
+      "pos": [620, 360],
+      "size": [460, 180],
       "flags": {},
       "order": 2,
       "mode": 0,
-      "inputs": [
-        {
-          "name": "clip",
-          "type": "CLIP",
-          "link": 1
-        },
-        {
-          "name": "text",
-          "type": "STRING",
-          "link": 2,
-          "widget": {
-            "name": "text"
-          }
-        }
-      ],
-      "outputs": [
-        {
-          "name": "CONDITIONING",
-          "type": "CONDITIONING",
-          "links": []
-        }
-      ],
-      "properties": {},
-      "widgets_values": [
-        ""
-      ]
+      "inputs": [{"name": "text", "type": "STRING", "link": 2}],
+      "outputs": [{"name": "text", "type": "STRING", "links": []}],
+      "properties": {}
     },
     {
-      "id": 5,
-      "type": "CLIPTextEncode",
-      "title": "negative → 执行后文本显示在这里",
-      "pos": [
-        700,
-        320
-      ],
-      "size": [
-        420,
-        140
-      ],
+      "id": 4,
+      "type": "PreviewImage",
+      "pos": [620, 600],
+      "size": [460, 380],
       "flags": {},
       "order": 3,
       "mode": 0,
-      "inputs": [
-        {
-          "name": "clip",
-          "type": "CLIP",
-          "link": 1
-        },
-        {
-          "name": "text",
-          "type": "STRING",
-          "link": 3,
-          "widget": {
-            "name": "text"
-          }
-        }
-      ],
-      "outputs": [
-        {
-          "name": "CONDITIONING",
-          "type": "CONDITIONING",
-          "links": []
-        }
-      ],
-      "properties": {},
-      "widgets_values": [
-        ""
-      ]
-    },
-    {
-      "id": 6,
-      "type": "PreviewImage",
-      "pos": [
-        700,
-        520
-      ],
-      "size": [
-        420,
-        320
-      ],
-      "flags": {},
-      "order": 4,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "images",
-          "type": "IMAGE",
-          "link": 6
-        }
-      ],
+      "inputs": [{"name": "images", "type": "IMAGE", "link": 4}],
       "outputs": [],
       "properties": {}
     }
   ],
   "links": [
-    [
-      1,
-      2,
-      0,
-      3,
-      0,
-      "CLIP"
-    ],
-    [
-      1,
-      2,
-      0,
-      5,
-      0,
-      "CLIP"
-    ],
-    [
-      2,
-      1,
-      0,
-      3,
-      1,
-      "STRING"
-    ],
-    [
-      3,
-      1,
-      1,
-      5,
-      1,
-      "STRING"
-    ],
-    [
-      6,
-      1,
-      5,
-      6,
-      0,
-      "IMAGE"
-    ]
+    [1, 1, 0, 2, 0, "STRING"],
+    [2, 1, 1, 3, 0, "STRING"],
+    [4, 1, 5, 4, 0, "IMAGE"]
   ],
   "groups": [],
   "config": {},
-  "extra": {
-    "ds": {
-      "offset": [
-        0,
-        0
-      ],
-      "scale": 0.75
-    }
-  },
+  "extra": {"ds": {"offset": [0, 0], "scale": 0.75}},
   "version": 0.4
 }

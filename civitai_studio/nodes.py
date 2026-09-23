@@ -79,8 +79,9 @@ class CivitaiImageSearch:
             "sort": (["Newest", "Most Reactions", "Most Comments"],),
             "limit": ("INT", {"default": 50, "min": 10, "max": 100, "step": 10}),
             "index": ("INT", {"default": 0, "min": 0, "max": 199}),
-            # 点选缩略图后由前端写入;非空时执行直接按 URL 取图与参数
-            "image_url": ("STRING", {"default": "", "multiline": False}),
+            # 点选缩略图后由前端写入;URL 优先于 index,直接按此地址取图与参数
+            "image_url": ("STRING", {"default": "", "multiline": False,
+                                     "tooltip": "URL 优先:填入后忽略 index,直接按此地址取图与生成参数 / takes priority over index"}),
         }}
 
     RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING", "STRING", "IMAGE")
@@ -100,22 +101,33 @@ class CivitaiImageSearch:
             ids = ",".join(t.strip() for t in tag.replace("，", ",").split(",") if t.strip().isdigit())
             if ids:
                 params["tags"] = ids
-        data = _sync_get_json("/images", params)
-        items = data.get("items") or []
-        if not items:
-            raise RuntimeError("没有搜索结果,请调整筛选条件")
-        # 优先按前端点选的 URL 取图(翻页/追加后 index 不再可靠);否则退回 index
+        # URL 优先:填入 image_url 时沿游标翻页定位对应图片(最多 5 页),命中则
+        # 忽略 index;未填或未命中时退回 index 取第一页里的图
         chosen = None
         wanted = (image_url or "").strip()
         if wanted:
-            chosen = next((it for it in items if (it.get("url") or "") == wanted), None)
+            cur = dict(params)
+            for _page in range(5):
+                page = _sync_get_json("/images", cur)
+                chosen = next((it for it in page.get("items") or [] if (it.get("url") or "") == wanted), None)
+                if chosen is not None:
+                    break
+                nxt = ((page.get("metadata") or {}).get("nextPage")) or ""
+                if not nxt:
+                    break
+                cur = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(nxt).query))
+        if chosen is None:
+            data = _sync_get_json("/images", params)
+            items = data.get("items") or []
+            if not items:
+                raise RuntimeError("没有搜索结果,请调整筛选条件")
+            if wanted:
+                chosen = next((it for it in items if (it.get("url") or "") == wanted), None)
         if chosen is None:
             idx = min(max(int(index), 0), len(items) - 1)
             chosen = items[idx]
         vids = chosen.get("modelVersionIds") or []
-        if not vids:
-            raise RuntimeError("该图片未关联模型版本,请换一张(调整 index 或重新点选)")
-        vdata = _sync_get_json(f"/model-versions/{vids[0]}")
+        vdata = _sync_get_json(f"/model-versions/{vids[0]}") if vids else {}
         # withMeta=true 已在 feed 条目带回生成参数;个别图未公开则留空
         meta = chosen.get("meta") or {}
         pos = meta.get("prompt") or ""
@@ -204,14 +216,33 @@ def _bytes_to_tensor(data):
     return torch.from_numpy(arr)[None,]
 
 
+class CivitaiShowText:
+    """显示传入的文本(验证输出用),并原样透传给下游."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"text": ("STRING", {"forceInput": True})}}
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("text",)
+    FUNCTION = "run"
+    CATEGORY = "Civitai Studio"
+    OUTPUT_NODE = True
+
+    def run(self, text):
+        return {"ui": {"text": [text]}, "result": (text,)}
+
+
 NODE_CLASS_MAPPINGS = {
     "CivitaiTriggerWords": CivitaiTriggerWords,
     "CivitaiImageSearch": CivitaiImageSearch,
     "CivitaiLoraRecipe": CivitaiLoraRecipe,
+    "CivitaiShowText": CivitaiShowText,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "CivitaiTriggerWords": "Civitai 触发词 (Trigger Words)",
     "CivitaiImageSearch": "Civitai 图片搜索 (Image Search)",
     "CivitaiLoraRecipe": "Civitai LoRA 配方 (LoRA Recipe)",
+    "CivitaiShowText": "Civitai 显示文本 (Show Text)",
 }
