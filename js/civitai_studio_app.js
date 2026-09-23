@@ -30,7 +30,7 @@ const SORTS = ["Most Downloaded", "Highest Rated", "Newest"];
 const PERIODS = ["AllTime", "Month", "Week", "Day"];
 const NSFW_LEVELS = [0, 1, 2];
 
-const JS_VERSION = "0.5.19";
+const JS_VERSION = "0.5.20";
 
 // ---------- i18n ----------
 const STR = {
@@ -676,7 +676,14 @@ function sidebarDockRect() {
         .map((p) => p.getBoundingClientRect())
         .filter((r) => r.width > 60 && r.left < window.innerWidth / 2)
         .sort((a, b) => b.right - a.right);
-    return panels[0] || null;
+    if (panels[0]) return panels[0];
+    // 侧边栏收起:吸附左侧图标菜单栏
+    const rail = document.querySelector(".side-tool-bar-container");
+    if (rail) {
+        const r = rail.getBoundingClientRect();
+        if (r.width > 20 && r.left < window.innerWidth / 2) return r;
+    }
+    return null;
 }
 
 let csDockObserver = null;
