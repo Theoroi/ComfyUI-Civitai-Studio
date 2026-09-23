@@ -830,13 +830,15 @@ async function renderVersion(version, model, box) {
 
 async function showImageMeta(image) {
     let meta = image.meta;
+    // 镜像图片流不带 meta:逐个 modelVersionId 尝试,用 hash 匹配找回
     if (!meta && Array.isArray(image.modelVersionIds) && image.modelVersionIds.length) {
-        // 镜像图片流不带 meta:两跳到版本接口找回生成参数
-        try {
-            const v = await apiGet(`/civitai_studio/version/${encodeURIComponent(String(image.modelVersionIds[0]))}`);
-            const match = (v.images || []).find((i) => String(i.id) === String(image.id) || (image.hash && i.hash === image.hash)) || {};
-            if (match.meta) image = { ...image, meta: match.meta };
-        } catch (e) { /* 保留无 meta 状态 */ }
+        for (const vid of image.modelVersionIds.slice(0, 3)) {
+            try {
+                const v = await apiGet(`/civitai_studio/version/${encodeURIComponent(String(vid))}`);
+                const match = image.hash ? (v.images || []).find((i) => i.hash === image.hash) : null;
+                if (match?.meta) { image = { ...image, meta: match.meta }; break; }
+            } catch (e) { /* 尝试下一个 */ }
+        }
         meta = image.meta;
     }
     if (!meta) {
@@ -2027,7 +2029,7 @@ function fetchNodeThumbs(node, params) {
         .then((r) => r.json())
         .then((d) => {
             node.csResults = d.items || [];
-            node.csImgs = node.csResults.slice(0, 10).map((it) => {
+            node.csImgs = node.csResults.slice(0, 8).map((it) => {
                 const im = new Image();
                 im.src = it.url || "";
                 return im;
@@ -2048,7 +2050,7 @@ app.registerExtension({
             const origCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
                 const r = origCreated?.apply(this, arguments);
-                this.size = [360, 300];
+                this.size = [540, 260];
                 this.csSig = "";
                 this.csImgs = [];
                 this.csRects = [];
@@ -2097,8 +2099,8 @@ app.registerExtension({
                     }
                     return;
                 }
-                const thumbW = 64, thumbH = 84, gap = 6;
-                const top = this.size[1] - thumbH - 14;
+                const thumbW = 120, thumbH = 160, gap = 8;
+                const top = 30; // 固定在 widgets 下方
                 this.csRects = [];
                 const idxW = (this.widgets || []).find((w2) => w2.name === "index");
                 this.csImgs.forEach((im, i) => {
@@ -2142,7 +2144,7 @@ app.registerExtension({
             const origCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
                 const r = origCreated?.apply(this, arguments);
-                this.size = [320, 240];
+                this.size = [360, 260];
                 const node = this;
                 node.csCover = null;
                 const drawCover = () => {
@@ -2184,7 +2186,7 @@ app.registerExtension({
                 nodeType.prototype.onDrawBackground = function (ctx) {
                     origBg?.apply(this, arguments);
                     if (!node.csCover || !(node.csCover.complete && node.csCover.naturalWidth > 0)) return;
-                    const w2 = 96, h2 = 128;
+                    const w2 = 140, h2 = 186;
                     ctx.drawImage(node.csCover, this.size[0] - w2 - 12, 40, w2, h2);
                     ctx.strokeStyle = "#555";
                     ctx.strokeRect(this.size[0] - w2 - 12, 40, w2, h2);
