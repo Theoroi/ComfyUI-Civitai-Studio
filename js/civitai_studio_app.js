@@ -30,7 +30,7 @@ const SORTS = ["Most Downloaded", "Highest Rated", "Newest"];
 const PERIODS = ["AllTime", "Month", "Week", "Day"];
 const NSFW_LEVELS = [0, 1, 2];
 
-const JS_VERSION = "0.5.17";
+const JS_VERSION = "0.5.18";
 
 // ---------- i18n ----------
 const STR = {
@@ -443,10 +443,11 @@ function showModal(innerHTML, cls) {
     // 定位:画布右缘内收(与详情浮层一致),避开侧边栏
     const a = floatAnchor();
     const w = 480;
-    let x = Math.round(a.right - w - 24);
-    if (x < a.left + 10) x = a.left + 10;
+    // 画布中间偏右:右移 10% 画布宽,垂直留出工具栏高度
+    let x = Math.round(a.left + (a.right - a.left - w) / 2 + (a.right - a.left) * 0.10);
+    x = Math.max(a.left + 10, Math.min(x, a.right - w - 10));
     panel.style.left = x + "px";
-    panel.style.top = Math.max(10, Math.min(a.top + 56, window.innerHeight - 320)) + "px";
+    panel.style.top = Math.max(10, Math.min(a.top + 72, window.innerHeight - 320)) + "px";
     dragFloat(panel, panel.querySelector(".cs-float-head"));
     const close = () => {
         document.removeEventListener("keydown", escHandler);
@@ -687,10 +688,11 @@ function openFloatDetail() {
     document.body.appendChild(panel);
     const a = floatAnchor();
     const w = 440;
-    let x = Math.round(a.right - w - 24); // 画布右缘内收,避开侧边栏
-    if (x < a.left + 10) x = a.left + 10;
+    // 画布中间偏右,与弹窗定位一致
+    let x = Math.round(a.left + (a.right - a.left - w) / 2 + (a.right - a.left) * 0.10);
+    x = Math.max(a.left + 10, Math.min(x, a.right - w - 10));
     panel.style.left = x + "px";
-    panel.style.top = Math.max(10, Math.min(a.top + 56, window.innerHeight - 400)) + "px";
+    panel.style.top = Math.max(10, Math.min(a.top + 72, window.innerHeight - 400)) + "px";
     panel.querySelector(".cs-float-close").onclick = closeFloatDetail;
     // 标题栏拖动
     dragFloat(panel, panel.querySelector(".cs-float-head"));
