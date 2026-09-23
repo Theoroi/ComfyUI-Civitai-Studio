@@ -16,6 +16,7 @@ from aiohttp import web
 from yarl import URL
 
 from . import civitai_client, config, downloader, local_index
+from .version import VERSION
 
 _enums_cache = {"data": None, "ts": 0.0}
 _ENUMS_TTL = 6 * 3600.0
@@ -74,6 +75,12 @@ async def _read_json_dict(request):
 
 async def _scan_async(force=False):
     return await local_index.run_bg(local_index.scan, force)
+
+
+@_get("/civitai_studio/version")
+async def version_route(request):
+    """前端用它对照自身版本,检测"服务端还是重启前的旧代码"."""
+    return web.json_response({"version": VERSION})
 
 
 def _annotate_version(version, index):

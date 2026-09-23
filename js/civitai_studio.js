@@ -44,6 +44,8 @@ const NSFW_LEVELS = [
     { v: 2, label: "包含全部 NSFW" },
 ];
 
+const JS_VERSION = "0.2.0";
+
 const S = {
     cfg: { proxy_images: false, nsfw: 1, verify_hash: true },
     browse: {
@@ -149,7 +151,13 @@ function toast(sev, summary, detail) {
 }
 
 async function apiJson(url, opts) {
-    const resp = await api.fetchApi(url, opts);
+    // ComfyUI API 响应无缓存头,webview 启发式缓存会把旧响应(例如服务端重启前
+    // 的默认热榜)冒充新结果;no-store + 时间戳双保险绕开
+    let fullUrl = url;
+    if ((!opts || !opts.method) && url.startsWith("/civitai_studio/")) {
+        fullUrl += (url.includes("?") ? "&" : "?") + "_=" + Date.now();
+    }
+    const resp = await api.fetchApi(fullUrl, { ...(opts || {}), cache: "no-store" });
     let data = null;
     try { data = await resp.json(); } catch (e) { /* empty body */ }
     if (!resp.ok) {
@@ -1386,6 +1394,7 @@ function buildRoot(el) {
     const root = document.createElement("div");
     root.className = "cs-root";
     root.innerHTML = `
+        ${S.ui.backendStale ? '<div class="cs-banner cs-banner-warn" id="cs-stale-banner">⚠ 后端代码过旧(服务端运行的是重启前加载的版本),新功能不可用 — 请重启一次 ComfyUI。</div>' : ""}
         <div class="cs-topbar">
             <button class="cs-tab-btn active" data-tab="browse">🌐 浏览</button>
             <button class="cs-tab-btn" data-tab="local">📁 本地库</button>
@@ -1569,6 +1578,20 @@ app.registerExtension({
             S.browse.nsfw = Number(S.cfg.nsfw ?? 1); // 恢复持久化的 NSFW 偏好
         } catch (e) {
             console.warn("[Civitai-Studio] 读取配置失败:", e);
+        }
+        // 前后端版本自检:服务端代码比前端旧 = 重启前的内存态,直接横幅提示
+        try {
+            const v = await apiGet("/civitai_studio/version");
+            const num = (s) => String(s).split(".").map((x) => parseInt(x, 10) || 0);
+            const [a, b] = [num(v.version), num(JS_VERSION)];
+            const newer = (x, y) => x[0] !== y[0] ? x[0] > y[0] : x[1] !== y[1] ? x[1] > y[1] : (x[2] || 0) > (y[2] || 0);
+            if (newer(b, a)) {
+                S.ui.backendStale = true;
+                toast("warning", "Civitai Studio 后端代码过旧", `服务端 v${v.version} < 前端 v${JS_VERSION} — 请重启一次 ComfyUI 加载新功能`);
+            }
+        } catch (e) {
+            // /version 不存在 = 服务端更旧(无此路由),同样视为过旧
+            S.ui.backendStale = true;
         }
         app.extensionManager.registerSidebarTab({
             id: "civitai.studio",
