@@ -85,7 +85,7 @@ class CivitaiImageSearch:
     CATEGORY = "Civitai Studio"
 
     def run(self, keyword, base_model, tag, sort, period, nsfw, index):
-        params = {"limit": "50", "nsfw": str(nsfw), "sort": sort, "period": period}
+        params = {"limit": "50", "nsfw": str(nsfw), "sort": sort, "period": period, "withMeta": "true"}
         if keyword:
             params["query"] = keyword
         if base_model and base_model != "(any)":
@@ -102,13 +102,8 @@ class CivitaiImageSearch:
         if not vids:
             raise RuntimeError("该图片未关联模型版本,请换一张(index 调整)")
         vdata = _sync_get_json(f"/model-versions/{vids[0]}")
+        # withMeta=true 已在 feed 条目带回生成参数;个别图未公开则留空
         meta = item.get("meta") or {}
-        if not meta:
-            # 镜像在图片流里剥掉 meta:从版本数据里按 id 找回
-            for i in vdata.get("images") or []:
-                if str(i.get("id")) == str(item.get("id")) and i.get("meta"):
-                    meta = i["meta"]
-                    break
         pos = meta.get("prompt") or ""
         neg = meta.get("negativePrompt") or ""
         lora_parts = [

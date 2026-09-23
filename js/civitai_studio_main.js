@@ -30,7 +30,7 @@ const SORTS = ["Most Downloaded", "Highest Rated", "Newest"];
 const PERIODS = ["AllTime", "Month", "Week", "Day"];
 const NSFW_LEVELS = [0, 1, 2];
 
-const JS_VERSION = "0.5.0";
+const JS_VERSION = "0.5.1";
 
 // ---------- i18n ----------
 const STR = {
@@ -829,18 +829,8 @@ async function renderVersion(version, model, box) {
 }
 
 async function showImageMeta(image) {
-    let meta = image.meta;
-    // 镜像图片流不带 meta:逐个 modelVersionId 尝试,用 hash 匹配找回
-    if (!meta && Array.isArray(image.modelVersionIds) && image.modelVersionIds.length) {
-        for (const vid of image.modelVersionIds.slice(0, 3)) {
-            try {
-                const v = await apiGet(`/civitai_studio/version/${encodeURIComponent(String(vid))}`);
-                const match = image.hash ? (v.images || []).find((i) => i.hash === image.hash) : null;
-                if (match?.meta) { image = { ...image, meta: match.meta }; break; }
-            } catch (e) { /* 尝试下一个 */ }
-        }
-        meta = image.meta;
-    }
+    // feed 已带 withMeta=true,有则直接展示;两跳找回已证实不可行(镜像版本列表不含 feed 图)
+    const meta = image.meta;
     if (!meta) {
         // 仍无参数:降级展示作者/数据 + 存图入口
         const m0 = showModal(`
@@ -2025,10 +2015,12 @@ function injectStyles() {
 
 // ---------- 节点内缩略图(画布上的三个 Civitai 节点) ----------
 function fetchNodeThumbs(node, params) {
-    api.fetchApi(`/civitai_studio/search?${params}`, { cache: "no-store" })
+    // 必须用与节点执行相同的 /images 数据源(模型搜索接口条目没有封面 url),index 才对得上
+    api.fetchApi(`/civitai_studio/images?${params}`, { cache: "no-store" })
         .then((r) => r.json())
         .then((d) => {
             node.csResults = d.items || [];
+            node.csVids = node.csResults.slice(0, 8).map((it) => (it.type || "image") === "video");
             node.csImgs = node.csResults.slice(0, 8).map((it) => {
                 const im = new Image();
                 im.src = it.url || "";
@@ -2050,7 +2042,9 @@ app.registerExtension({
             const origCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
                 const r = origCreated?.apply(this, arguments);
-                this.size = [540, 260];
+                // 底部固定预留两排缩略图(120×160),避免遮住 widgets
+                const nat = this.computeSize ? this.computeSize() : [400, 300];
+                this.size = [540, Math.max(nat[1], 300) + 2 * 168 + 20];
                 this.csSig = "";
                 this.csImgs = [];
                 this.csRects = [];
@@ -2100,27 +2094,38 @@ app.registerExtension({
                     return;
                 }
                 const thumbW = 120, thumbH = 160, gap = 8;
-                const top = 30; // 固定在 widgets 下方
+                const perRow = Math.max(1, Math.floor((this.size[0] - 20) / (thumbW + gap)));
+                const rows = Math.ceil(this.csImgs.length / perRow);
+                const stripH = rows * (thumbH + gap) - gap;
+                const top = this.size[1] - stripH - 10; // 锚在节点底部,不与 widgets 重叠
                 this.csRects = [];
                 const idxW = (this.widgets || []).find((w2) => w2.name === "index");
                 this.csImgs.forEach((im, i) => {
-                    const x = 10 + i * (thumbW + gap);
+                    const x = 10 + (i % perRow) * (thumbW + gap);
+                    const y = top + Math.floor(i / perRow) * (thumbH + gap);
                     if (x + thumbW > this.size[0] - 10) return;
-                    this.csRects.push({ x, y: top, w: thumbW, h: thumbH, i });
-                    if (im.complete && im.naturalWidth > 0) {
-                        ctx.drawImage(im, x, top, thumbW, thumbH);
+                    this.csRects.push({ x, y, w: thumbW, h: thumbH, i });
+                    if (this.csVids?.[i]) {
+                        // 视频缩略图画占位框,保持与执行侧相同的 index 对齐
+                        ctx.fillStyle = "#26262a";
+                        ctx.fillRect(x, y, thumbW, thumbH);
+                        ctx.fillStyle = "#eee";
+                        ctx.font = "20px sans-serif";
+                        ctx.fillText("▶", x + thumbW / 2 - 7, y + thumbH / 2 + 7);
+                    } else if (im.complete && im.naturalWidth > 0) {
+                        ctx.drawImage(im, x, y, thumbW, thumbH);
                     } else {
                         ctx.fillStyle = "#26262a";
-                        ctx.fillRect(x, top, thumbW, thumbH);
+                        ctx.fillRect(x, y, thumbW, thumbH);
                     }
                     const selected = Number(idxW?.value) === i;
                     ctx.strokeStyle = selected ? "#4a90e2" : "#555";
                     ctx.lineWidth = selected ? 2 : 1;
-                    ctx.strokeRect(x, top, thumbW, thumbH);
+                    ctx.strokeRect(x, y, thumbW, thumbH);
                 });
                 ctx.fillStyle = "#999";
                 ctx.font = "10px sans-serif";
-                ctx.fillText("点击缩略图选择 index", 10, top - 4);
+                ctx.fillText("点击缩略图选择 index", 10, top - 5);
             };
             nodeType.prototype.onMouseDown = function (e, pos) {
                 if (!this.csRects?.length) return false;
@@ -2144,7 +2149,9 @@ app.registerExtension({
             const origCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
                 const r = origCreated?.apply(this, arguments);
-                this.size = [360, 260];
+                // 底部固定预留封面高度(140×186),避免遮住 widgets
+                const nat = this.computeSize ? this.computeSize() : [360, 220];
+                this.size = [360, Math.max(nat[1], 220) + 196];
                 const node = this;
                 node.csCover = null;
                 const drawCover = () => {
@@ -2187,9 +2194,10 @@ app.registerExtension({
                     origBg?.apply(this, arguments);
                     if (!node.csCover || !(node.csCover.complete && node.csCover.naturalWidth > 0)) return;
                     const w2 = 140, h2 = 186;
-                    ctx.drawImage(node.csCover, this.size[0] - w2 - 12, 40, w2, h2);
+                    const top2 = this.size[1] - h2 - 8; // 锚在底部,不与 widgets 重叠
+                    ctx.drawImage(node.csCover, this.size[0] - w2 - 12, top2, w2, h2);
                     ctx.strokeStyle = "#555";
-                    ctx.strokeRect(this.size[0] - w2 - 12, 40, w2, h2);
+                    ctx.strokeRect(this.size[0] - w2 - 12, top2, w2, h2);
                 };
                 return r;
             };

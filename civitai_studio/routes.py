@@ -228,6 +228,11 @@ async def version_images(request):
         params["username"] = q["username"]
     if q.get("postId"):
         params["postId"] = q["postId"]
+    for key in ("query", "baseModels", "tag"):
+        if q.get(key):
+            params[key] = q[key]
+    # 官方文档:meta 需 withMeta=true 显式请求,否则 feed 条目一律不带生成参数
+    params["withMeta"] = "true"
     if q.get("sort"):
         params["sort"] = q["sort"]
     if q.get("period"):
