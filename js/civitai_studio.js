@@ -916,6 +916,7 @@ function associateDialog(m) {
     if (!m) return;
     let searchItems = [];
     let selected = null; // {model_id}
+    let detailData = null;
     const md = showModal(`
         <h3 class="cs-modal-title">关联 Civitai 模型</h3>
         <div class="cs-form">
@@ -927,14 +928,17 @@ function associateDialog(m) {
             </label>
             <div id="cs-as-results" class="cs-as-results"><div class="cs-dim">搜索中…</div></div>
             <div id="cs-as-version-wrap" style="display:none">
-                <label>版本
-                    <select id="cs-as-version"></select>
-                </label>
+                <label>版本</label>
+                <div class="cs-as-version-row">
+                    <select id="cs-as-version" style="flex:1; min-width:0"></select>
+                    <img id="cs-as-thumb" class="cs-as-thumb" style="display:none" alt=""/>
+                    <a id="cs-as-open" class="cs-btn cs-btn-mini" target="_blank" rel="noopener noreferrer" style="display:none">网页确认 ↗</a>
+                </div>
             </div>
             <label>或直接粘贴页面链接 / 模型 ID
                 <input id="cs-as-ref" type="text" placeholder="https://civitai.com/models/12345 或 12345"/>
             </label>
-            <div class="cs-modal-msg">点选搜索结果(或粘贴链接)后点"关联",将写入 .civitai.json。关联后可用:查更新 / 详情 / 页面 / 下载新版本。</div>
+            <div class="cs-modal-msg">点选搜索结果(或粘贴链接)后点"关联",将写入 .civitai.json。可用"网页确认 ↗"在 Civitai 打开该版本核对。</div>
             <div class="cs-modal-actions">
                 <button class="cs-btn" data-act="cancel">取消</button>
                 <button class="cs-btn cs-btn-primary" data-act="ok" disabled>关联</button>
@@ -945,6 +949,25 @@ function associateDialog(m) {
     const versionSel = $("#cs-as-version", md.box);
     const okBtn = $("[data-act=ok]", md.box);
     const refInput = $("#cs-as-ref", md.box);
+
+    const updateVersionAux = () => {
+        if (!selected) return;
+        const vid = versionSel.value;
+        const v = ((detailData || {}).modelVersions || []).find((x) => String(x.id) === String(vid));
+        const thumb = $("#cs-as-thumb", md.box);
+        const open = $("#cs-as-open", md.box);
+        const firstImg = (v?.images || []).find((i) => i.url);
+        if (firstImg) {
+            thumb.style.display = "";
+            thumb.dataset.direct = firstImg.url;
+            thumb.src = imgSrc(firstImg.url);
+        } else {
+            thumb.style.display = "none";
+        }
+        open.style.display = "";
+        open.href = `${civitaiPage()}/models/${encodeURIComponent(String(selected.model_id))}?modelVersionId=${encodeURIComponent(String(vid || ""))}`;
+    };
+    versionSel.addEventListener("change", updateVersionAux);
 
     const doSearch = async () => {
         const q = $("#cs-as-query", md.box).value.trim();
@@ -983,9 +1006,11 @@ function associateDialog(m) {
         versionSel.innerHTML = '<option>版本加载中…</option>';
         try {
             const detail = await apiGet(`/civitai_studio/model/${encodeURIComponent(String(it.id))}`);
+            detailData = detail;
             const versions = (detail.modelVersions || []).filter((v) => v.id);
             versionSel.innerHTML = versions.map((v, i) =>
                 `<option value="${esc(String(v.id))}" ${i === 0 ? "selected" : ""}>${esc(v.name)} (${esc(v.baseModel || "?")})</option>`).join("");
+            updateVersionAux();
         } catch (e2) {
             versionWrap.style.display = "none";
         }
@@ -1464,6 +1489,8 @@ function injectStyles() {
 .cs-as-item.selected { border-color:var(--accent-color,#4a90e2); background:rgba(74,144,226,.15); }
 .cs-as-item-main { flex:1; min-width:0; }
 .cs-as-item-name { font-size:12px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.cs-as-version-row { display:flex; gap:8px; align-items:center; }
+.cs-as-thumb { width:36px; height:48px; object-fit:cover; border-radius:4px; flex-shrink:0; border:1px solid var(--border-color,#444); }
 .cs-local-update { font-size:11px; margin-top:4px; color:#e2a23f; display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
 .cs-local-update.cs-ok { color:#4caf50; }
 .cs-dim { color:var(--desc-text-color,#999); font-size:11px; }
