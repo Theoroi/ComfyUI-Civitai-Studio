@@ -165,7 +165,8 @@ function confirmModal(title, message, onOk) {
 }
 
 // ---------- 在线浏览:数据加载 ----------
-function browseParams(page) {
+// 翻页用 cursor(镜像站/官方站统一支持;page 参数在部分镜像上会触发忽略筛选的热榜路径)
+function browseParams(cursor) {
     const p = new URLSearchParams();
     if (S.browse.query) p.set("query", S.browse.query);
     if (S.browse.type) p.set("types", S.browse.type);
@@ -173,8 +174,8 @@ function browseParams(page) {
     p.set("sort", S.browse.sort);
     p.set("period", S.browse.period);
     p.set("nsfw", String(S.browse.nsfw));
-    p.set("page", String(page || 1));
     p.set("limit", "24");
+    if (cursor) p.set("cursor", cursor);
     return p.toString();
 }
 
@@ -185,16 +186,14 @@ async function fetchBrowse(reset) {
         if (reset) st.pendingReset = true;
         return;
     }
-    const attemptedPage = reset ? 1 : st.page + 1; // 页码只在成功后提交,失败可重试同一页
+    const cursor = reset ? "" : st.nextCursor;
+    if (!reset && !cursor) return; // 没有下一页了
     st.loading = true;
     updateStatusLine();
     try {
-        const data = await apiGet("/civitai_studio/search?" + browseParams(attemptedPage));
+        const data = await apiGet("/civitai_studio/search?" + browseParams(cursor));
         st.items = reset ? (data.items || []) : st.items.concat(data.items || []);
-        const cur = data.metadata?.currentPage ?? attemptedPage;
-        const total = data.metadata?.totalPages ?? 1;
-        st.meta = { page: cur, totalPages: total, nextPage: cur < total, total: data.metadata?.totalItem };
-        st.page = attemptedPage;
+        st.nextCursor = data.metadata?.nextCursor || "";
         st.dirty = false;
         st.error = "";
     } catch (e) {
@@ -253,10 +252,8 @@ function updateStatusLine() {
     const st = S.browse;
     if (st.loading) {
         el.textContent = "加载中…";
-    } else if (st.meta) {
-        el.textContent = st.meta.nextPage
-            ? `第 ${st.meta.page}/${st.meta.totalPages} 页 — 向下滚动加载更多`
-            : `已加载全部 (共 ${fmtNum(st.meta.total)} 个模型)`;
+    } else if (st.items.length) {
+        el.textContent = `已加载 ${st.items.length} 个` + (st.nextCursor ? " — 向下滚动加载更多" : "");
     } else {
         el.textContent = "";
     }
@@ -292,7 +289,9 @@ function makeCard(model) {
         img.loading = "lazy";
         img.alt = model.name;
         img.dataset.direct = cover.url;
-        img.onload = () => { $(".cs-card-placeholder", card).style.display = "none"; img.style.display = "block"; };
+        // 注意:不能用 display:none 等加载完再显示——display:none 的元素不进入视口交集,
+        // lazy 加载永不触发,形成死锁。用 opacity 过渡显示。
+        img.onload = () => { $(".cs-card-placeholder", card).style.display = "none"; img.classList.add("is-loaded"); };
         img.onerror = () => img.remove();
         img.src = imgSrc(cover.url);
         $(".cs-card-cover", card).prepend(img);
@@ -917,7 +916,7 @@ function buildBrowseView(root) {
         const el = e.target;
         S.ui.scrollTop = el.scrollTop;
         if (el.scrollTop + el.clientHeight >= el.scrollHeight - 400) {
-            if (!st.loading && st.meta?.nextPage && !st.dirty) fetchBrowse(false);
+            if (!st.loading && st.nextCursor && !st.dirty) fetchBrowse(false);
         }
     });
 }
@@ -1030,7 +1029,8 @@ function injectStyles() {
 .cs-card:hover { border-color:var(--accent-color,#4a90e2); transform:translateY(-2px); }
 .cs-card-installed { border-color:#4caf50; }
 .cs-card-cover { position:relative; width:100%; padding-top:130%; background:#222; }
-.cs-card-img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; display:none; }
+.cs-card-img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; opacity:0; transition:opacity .25s; }
+.cs-card-img.is-loaded { opacity:1; }
 .cs-card-placeholder { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:28px; opacity:.3; }
 .cs-card-badges { position:absolute; top:4px; left:4px; right:4px; display:flex; gap:4px; flex-wrap:wrap; z-index:2; }
 .cs-badge { background:rgba(0,0,0,.65); color:#fff; font-size:10px; padding:1px 6px; border-radius:8px; }

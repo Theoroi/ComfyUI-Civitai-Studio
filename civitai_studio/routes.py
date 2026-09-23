@@ -146,11 +146,14 @@ async def search_models(request):
     try:
         params = {
             "limit": min(60, max(1, int(q.get("limit", "24")))),
-            "page": max(1, int(q.get("page", "1"))),
             "nsfw": str(q.get("nsfw", "1")),
         }
     except ValueError:
-        return _json_error("page/limit 必须是数字", 400)
+        return _json_error("limit 必须是数字", 400)
+    # 注意:不要传 page 参数——镜像站带 page 时会走预物化热榜路径,忽略全部筛选;
+    # 翻页用 cursor(metadata.nextCursor)透传。
+    if q.get("cursor"):
+        params["cursor"] = q["cursor"]
     for key in ("query", "types", "baseModels", "sort", "period"):
         if q.get(key):
             params[key] = q[key]
