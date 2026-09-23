@@ -232,6 +232,8 @@ async def version_images(request):
     params = {}
     if q.get("modelVersionId"):
         params["modelVersionId"] = q["modelVersionId"]
+    if q.get("imageId"):
+        params["imageId"] = q["imageId"]
     try:
         params["limit"] = min(100, max(1, int(q.get("limit", "20"))))
     except ValueError:

@@ -79,9 +79,9 @@ class CivitaiImageSearch:
             "sort": (["Newest", "Most Reactions", "Most Comments"],),
             "limit": ("INT", {"default": 50, "min": 10, "max": 100, "step": 10}),
             "index": ("INT", {"default": 0, "min": 0, "max": 199}),
-            # 点选缩略图后由前端写入;URL 优先于 index,直接按此地址取图与参数
-            "image_url": ("STRING", {"default": "", "multiline": False,
-                                     "tooltip": "URL 优先:填入后忽略 index,直接按此地址取图与生成参数 / takes priority over index"}),
+            # 填入 Civitai 图片数字 ID 后,优先按 ID 精确取图与参数(忽略 index)
+            "image_id": ("STRING", {"default": "", "multiline": False,
+                                    "tooltip": "填入 Civitai 图片数字 ID:优先按此 ID 精确取图与生成参数(忽略 index)"}),
         }}
 
     RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING", "STRING", "IMAGE")
@@ -89,7 +89,7 @@ class CivitaiImageSearch:
     FUNCTION = "run"
     CATEGORY = "Civitai Studio"
 
-    def run(self, base_model, nsfw, tag, period, sort, limit, index, image_url):
+    def run(self, base_model, nsfw, tag, period, sort, limit, index, image_id):
         params = {
             "limit": str(min(100, max(10, int(limit)))),
             "nsfw": str(nsfw), "sort": sort, "period": period, "withMeta": "true",
@@ -101,29 +101,20 @@ class CivitaiImageSearch:
             ids = ",".join(t.strip() for t in tag.replace("，", ",").split(",") if t.strip().isdigit())
             if ids:
                 params["tags"] = ids
-        # URL 优先:填入 image_url 时沿游标翻页定位对应图片(最多 5 页),命中则
-        # 忽略 index;未填或未命中时退回 index 取第一页里的图
+        # ID 优先:填入 image_id 时按 ID 精确取图(带 meta),忽略 index 与筛选
         chosen = None
-        wanted = (image_url or "").strip()
-        if wanted:
-            cur = dict(params)
-            for _page in range(5):
-                page = _sync_get_json("/images", cur)
-                chosen = next((it for it in page.get("items") or [] if (it.get("url") or "") == wanted), None)
-                if chosen is not None:
-                    break
-                nxt = ((page.get("metadata") or {}).get("nextPage")) or ""
-                if not nxt:
-                    break
-                cur = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(nxt).query))
+        wanted_id = str(image_id or "").strip()
+        if wanted_id.isdigit():
+            page = _sync_get_json("/images", {
+                "imageId": wanted_id, "limit": "1", "withMeta": "true", "nsfw": "true",
+            })
+            items = page.get("items") or []
+            chosen = items[0] if items else None
         if chosen is None:
             data = _sync_get_json("/images", params)
             items = data.get("items") or []
             if not items:
                 raise RuntimeError("没有搜索结果,请调整筛选条件")
-            if wanted:
-                chosen = next((it for it in items if (it.get("url") or "") == wanted), None)
-        if chosen is None:
             idx = min(max(int(index), 0), len(items) - 1)
             chosen = items[idx]
         vids = chosen.get("modelVersionIds") or []

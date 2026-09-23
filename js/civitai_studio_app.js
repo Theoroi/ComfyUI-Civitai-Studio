@@ -955,7 +955,7 @@ async function showImageMeta(image) {
         return;
     }
     const kv = [
-        [t("kvModel"), meta.model], [t("kvSampler"), meta.sampler], [t("kvSteps"), meta.steps],
+        ["ID", image.id], [t("kvModel"), meta.model], [t("kvSampler"), meta.sampler], [t("kvSteps"), meta.steps],
         ["CFG", meta.cfgScale], ["Seed", meta.seed], [t("kvSize"), meta.size],
     ].filter(([, v]) => v !== undefined && v !== null && v !== "");
     const resources = (meta.resources || []).map((r) =>
@@ -2214,11 +2214,11 @@ function applyStripHeight(node) {
 function renderSelInfo(node) {
     const el = node?.csInfo;
     if (!el) return;
-    const uw = (node.widgets || []).find((w) => w.name === "image_url");
-    const wanted = (uw?.value || "").trim();
-    // 结果列表里找得到就用完整条目(带 meta);找不到(手动粘贴的 URL)也至少显示缩略图
-    let sel = (node.csResults || []).find((it) => it.url && it.url === wanted) || null;
-    if (!sel && wanted) sel = { url: wanted };
+    const idw = (node.widgets || []).find((w) => w.name === "image_id");
+    const wanted = String(idw?.value || "").trim();
+    let sel = /^\d+$/.test(wanted)
+        ? (node.csResults || []).find((it) => String(it.id) === wanted) || null
+        : null;
     if (!sel) {
         el.innerHTML = `<span style="color:#888;font-size:11px;">${esc(S.lang === "zh" ? "未选择(点击缩略图选择)" : "Nothing selected (click a thumbnail)")}</span>`;
         return;
@@ -2275,7 +2275,7 @@ function renderNodeThumbs(node) {
         .forEach((el) => el.remove());
     const st = node.csFetch || {};
     const total = (node.csResults || []).length;
-    const uw = (node.widgets || []).find((w) => w.name === "image_url");
+    const idw = (node.widgets || []).find((w) => w.name === "image_id");
     renderSelInfo(node); // 顶部信息面板(独立 widget,随选择刷新)
 
     // 状态条:提示 + 计数 + spinner
@@ -2328,7 +2328,7 @@ function renderNodeThumbs(node) {
             im.src = imgSrc(thumb);
             cell.appendChild(im);
         }
-        if (uw?.value && uw.value === it.url) cell.style.borderColor = "#4a90e2";
+        if (idw?.value && String(idw.value) === String(it.id)) cell.style.borderColor = "#4a90e2";
         cell.onclick = () => showNodeImageFloat(node, it);
         strip.appendChild(cell);
     });
@@ -2347,7 +2347,7 @@ function renderNodeThumbs(node) {
 // 点缩略图 → 悬浮层放大(视频可播放) + 元信息 + 选为输出
 function showNodeImageFloat(node, item) {
     const meta = item.meta || {};
-    const kvs = [["Seed", meta.seed], ["CFG", meta.cfgScale], ["Steps", meta.steps], ["Sampler", meta.sampler]]
+    const kvs = [["ID", item.id], ["Seed", meta.seed], ["CFG", meta.cfgScale], ["Steps", meta.steps], ["Sampler", meta.sampler]]
         .filter(([, v]) => v !== undefined && v !== null && v !== "");
     const m = showModal(`
         <div class="cs-media-view">${mediaViewerHtml(item)}</div>
@@ -2356,10 +2356,10 @@ function showNodeImageFloat(node, item) {
         <div class="cs-modal-actions"><button class="cs-btn cs-btn-primary" data-use>${esc(S.lang === "zh" ? "选为输出" : "Use as output")}</button></div>`);
     $("[data-use]", m.box).onclick = () => {
         const iw = (node.widgets || []).find((w) => w.name === "index");
-        const uw = (node.widgets || []).find((w) => w.name === "image_url");
+        const idw = (node.widgets || []).find((w) => w.name === "image_id");
         const i = (node.csResults || []).indexOf(item);
         if (iw && i >= 0) iw.value = i;
-        if (uw) uw.value = item.url || "";
+        if (idw) idw.value = String(item.id ?? "");
         m.close();
         renderNodeThumbs(node);
         toast("success", S.lang === "zh" ? "已选为输出" : "Selected as output", "index " + Math.max(0, i));
@@ -2486,9 +2486,9 @@ app.registerExtension({
                 // 轮询 sig 变化保证 tag 等改动最终一定触发刷新(csSchedule 内部去重)
                 node.csPoll = setInterval(() => {
                     node.csSchedule?.();
-                    // image_url 手动粘贴/修改也要刷新信息面板(文本输入不触发事件)
-                    const cur = widget("image_url")?.value || "";
-                    if (cur !== node.csLastUrl) { node.csLastUrl = cur; renderSelInfo(node); }
+                    // image_id 手动粘贴/修改也要刷新信息面板(文本输入不触发事件)
+                    const cur = widget("image_id")?.value || "";
+                    if (cur !== node.csLastId) { node.csLastId = cur; renderSelInfo(node); }
                 }, 700);
                 return r;
             };

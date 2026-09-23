@@ -7,69 +7,191 @@
     {
       "id": 1,
       "type": "CivitaiImageSearch",
-      "pos": [80, 120],
-      "size": [460, 900],
+      "pos": [
+        80,
+        120
+      ],
+      "size": [
+        460,
+        900
+      ],
       "flags": {},
       "order": 0,
       "mode": 0,
       "inputs": [],
       "outputs": [
-        {"name": "positive", "type": "STRING", "links": [1]},
-        {"name": "negative", "type": "STRING", "links": [2]},
-        {"name": "lora_string", "type": "STRING", "links": []},
-        {"name": "trigger_words", "type": "STRING", "links": []},
-        {"name": "base_model", "type": "STRING", "links": []},
-        {"name": "image", "type": "IMAGE", "links": [4]}
+        {
+          "name": "positive",
+          "type": "STRING",
+          "links": [
+            1
+          ]
+        },
+        {
+          "name": "negative",
+          "type": "STRING",
+          "links": [
+            2
+          ]
+        },
+        {
+          "name": "lora_string",
+          "type": "STRING",
+          "links": []
+        },
+        {
+          "name": "trigger_words",
+          "type": "STRING",
+          "links": []
+        },
+        {
+          "name": "base_model",
+          "type": "STRING",
+          "links": []
+        },
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "links": [
+            4
+          ]
+        }
       ],
       "properties": {},
-      "widgets_values": ["(any)", "false", "", "AllTime", "Newest", 50, 0, "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/eae2d40b-53a9-4085-b1fe-5edcfc673b0a/original=true/eae2d40b-53a9-4085-b1fe-5edcfc673b0a.jpeg"]
+      "widgets_values": [
+        "(any)",
+        "false",
+        "",
+        "AllTime",
+        "Newest",
+        50,
+        0,
+        "12097475"
+      ]
     },
     {
       "id": 2,
       "type": "CivitaiShowText",
       "title": "positive(运行后显示在这里)",
-      "pos": [620, 120],
-      "size": [460, 180],
+      "pos": [
+        620,
+        120
+      ],
+      "size": [
+        460,
+        180
+      ],
       "flags": {},
       "order": 1,
       "mode": 0,
-      "inputs": [{"name": "text", "type": "STRING", "link": 1}],
-      "outputs": [{"name": "text", "type": "STRING", "links": []}],
+      "inputs": [
+        {
+          "name": "text",
+          "type": "STRING",
+          "link": 1
+        }
+      ],
+      "outputs": [
+        {
+          "name": "text",
+          "type": "STRING",
+          "links": []
+        }
+      ],
       "properties": {}
     },
     {
       "id": 3,
       "type": "CivitaiShowText",
       "title": "negative(运行后显示在这里)",
-      "pos": [620, 360],
-      "size": [460, 180],
+      "pos": [
+        620,
+        360
+      ],
+      "size": [
+        460,
+        180
+      ],
       "flags": {},
       "order": 2,
       "mode": 0,
-      "inputs": [{"name": "text", "type": "STRING", "link": 2}],
-      "outputs": [{"name": "text", "type": "STRING", "links": []}],
+      "inputs": [
+        {
+          "name": "text",
+          "type": "STRING",
+          "link": 2
+        }
+      ],
+      "outputs": [
+        {
+          "name": "text",
+          "type": "STRING",
+          "links": []
+        }
+      ],
       "properties": {}
     },
     {
       "id": 4,
       "type": "PreviewImage",
-      "pos": [620, 600],
-      "size": [460, 380],
+      "pos": [
+        620,
+        600
+      ],
+      "size": [
+        460,
+        380
+      ],
       "flags": {},
       "order": 3,
       "mode": 0,
-      "inputs": [{"name": "images", "type": "IMAGE", "link": 4}],
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 4
+        }
+      ],
       "outputs": [],
       "properties": {}
     }
   ],
   "links": [
-    [1, 1, 0, 2, 0, "STRING"],
-    [2, 1, 1, 3, 0, "STRING"],
-    [4, 1, 5, 4, 0, "IMAGE"]
+    [
+      1,
+      1,
+      0,
+      2,
+      0,
+      "STRING"
+    ],
+    [
+      2,
+      1,
+      1,
+      3,
+      0,
+      "STRING"
+    ],
+    [
+      4,
+      1,
+      5,
+      4,
+      0,
+      "IMAGE"
+    ]
   ],
   "groups": [],
   "config": {},
-  "extra": {"ds": {"offset": [0, 0], "scale": 0.75}},
+  "extra": {
+    "ds": {
+      "offset": [
+        0,
+        0
+      ],
+      "scale": 0.75
+    }
+  },
   "version": 0.4
 }
