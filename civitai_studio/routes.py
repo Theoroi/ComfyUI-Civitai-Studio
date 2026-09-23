@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 import time
+import urllib.parse
 
 import aiohttp
 import folder_paths
@@ -573,6 +574,52 @@ async def local_refresh_meta(request):
     civitai_client.prime_model_cache(meta["model_id"], data)  # 让随后的 /model/{id} 读到新数据
     await _scan_async(True)
     return _ok()
+
+
+@_post("/civitai_studio/save_image")
+async def save_image(request):
+    """把 Civitai 预览图存入 ComfyUI output 目录."""
+    body = await _read_json_dict(request)
+    if body is None:
+        return _json_error("请求体必须是 JSON 对象", 400)
+    url = str(body.get("url") or "")
+    if not url.startswith(("http://", "https://")) or not civitai_client.host_allowed_image(url):
+        return _json_error("不允许的图片地址", 400)
+    base = urllib.parse.urlparse(url).path.rstrip("/").split("/")[-1] or "preview"
+    base = re.sub(r"[^A-Za-z0-9._\-一-龥]", "_", base)[:80]
+    fname = "civitai_" + str(int(time.time())) + "_" + base
+    if not os.path.splitext(fname)[1]:
+        fname += ".jpeg"
+    out_dir = folder_paths.get_output_directory()
+    out_path = os.path.join(out_dir, fname)
+    try:
+        timeout = aiohttp.ClientTimeout(total=120, connect=10)
+        async with civitai_client.open_isolated_stream(url, timeout=timeout) as resp:
+            if resp.status != 200:
+                return _json_error(f"HTTP {resp.status}", 502)
+            ctype = (resp.content_type or "").split(";")[0]
+            if not ctype.startswith("image/") and not ctype.startswith("video/"):
+                return _json_error("上游返回的不是图片/视频(可能被 WAF 拦截)", 502)
+            ext = {"image/jpeg": ".jpeg", "image/png": ".png", "image/webp": ".webp",
+                   "video/mp4": ".mp4"}.get(ctype, ".jpeg")
+            if not os.path.splitext(fname)[1]:
+                fname += ext
+                out_path += ext
+            with open(out_path, "wb") as f:
+                total = 0
+                while True:
+                    chunk = await resp.content.read(512 * 1024)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > 200 * 1024 * 1024:
+                        f.close()
+                        os.remove(out_path)
+                        return _json_error("文件超过 200MB 上限", 502)
+                    f.write(chunk)
+    except Exception as e:
+        return _json_error(f"保存失败: {civitai_client.net_error_message(e)}", 502)
+    return _ok(filename=fname, path=out_path)
 
 
 @_post("/civitai_studio/local/check_updates")

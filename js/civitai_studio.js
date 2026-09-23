@@ -123,6 +123,12 @@ const STR = {
         settingsSaved: "设置已保存", saveFailed: "保存失败",
         readCfgFailed: "读取配置失败", clearFailed: "清除失败",
         route405: "服务端尚未加载该功能 — 请重启一次 ComfyUI 后重试",
+        presetHotWeek: "🔥 本周热门", presetHotMonth: "📈 本月热门", presetBestMonth: "⭐ 本月高分",
+        saveBtn: "存图", saveBtnTitle: "保存到 ComfyUI output 目录",
+        saveOk: "已保存到 output: {name}", saveFailed: "保存失败",
+        applyBtn: "应用到工作流", applyNoKs: "未找到 KSampler 节点", applyFail: "应用失败",
+        applyDone: "已应用:提示词 ✓{lora}", applyLoraPart: ",LoRA ×{n}", loraMissing: "本地未找到: {names}",
+        noTextNode: "未找到 CLIPTextEncode 文本节点",
     },
     en: {
         tabBrowse: "🌐 Browse", tabLocal: "📁 Library", tabDownloads: "⬇ Downloads", settings: "Settings",
@@ -213,6 +219,12 @@ const STR = {
         settingsSaved: "Settings saved", saveFailed: "Save failed",
         readCfgFailed: "Failed to read settings", clearFailed: "Clear failed",
         route405: "The server has not loaded this feature — restart ComfyUI once and retry",
+        presetHotWeek: "🔥 Hot this week", presetHotMonth: "📈 Hot this month", presetBestMonth: "⭐ Top rated this month",
+        saveBtn: "⬇ Save", saveBtnTitle: "Save to the ComfyUI output folder",
+        saveOk: "Saved to output: {name}", saveFailed: "Save failed",
+        applyBtn: "Apply to workflow", applyNoKs: "No KSampler node found", applyFail: "Apply failed",
+        applyDone: "Applied: prompts ✓{lora}", applyLoraPart: ", {n} LoRA(s)", loraMissing: "Local LoRAs not found: {names}",
+        noTextNode: "No CLIPTextEncode text node found",
     },
 };
 
@@ -223,7 +235,7 @@ let S = {
         query: "", type: "", base: "", sort: "Most Downloaded", period: "AllTime",
         nsfw: 1, items: [], nextCursor: "", loading: false, dirty: true, pendingReset: false,
     },
-    local: { models: [], search: "", type: "", loading: false, updates: {}, truncated: false, expanded: new Set(), detailCache: {} },
+    local: { models: [], search: "", type: "", loading: false, updates: {}, truncated: false, openId: null, detailCache: {} },
     dl: { jobs: [], lastSig: "", failStreak: 0 },
     ui: { tab: "browse", root: null, scrollTop: 0, detailId: null, backendStale: false },
 };
@@ -664,16 +676,28 @@ function rewriteDescImages(root) {
 }
 
 function galleryItemHtml(img) {
-    // 预览条目可能是视频(mp4 封面):静音循环,进视口才加载
+    // 预览条目可能是视频(mp4 封面):静音循环,进视口才加载;右上角可存图到 output
     const src = esc(imgSrc(img.url));
     const direct = esc(img.url);
+    const save = `<button class="cs-save-btn" title="${esc(t("saveBtnTitle"))}" data-save-url="${direct}">⬇</button>`;
     if (img.type === "video") {
-        return `<div class="cs-gallery-item"><video muted loop playsinline preload="metadata"
+        return `<div class="cs-gallery-item">${save}<video muted loop playsinline preload="metadata"
                     src="${src}#t=0.001" data-direct="${direct}"
                     onerror="this.style.display='none'"></video></div>`;
     }
-    return `<div class="cs-gallery-item"><img loading="lazy" src="${src}" data-direct="${direct}"
+    return `<div class="cs-gallery-item">${save}<img loading="lazy" src="${src}" data-direct="${direct}"
                 onerror="this.style.display='none'"/></div>`;
+}
+
+async function saveImageToOutput(url, btn) {
+    if (btn) btn.disabled = true;
+    try {
+        const res = await apiPost("/civitai_studio/save_image", { url });
+        toast("success", t("saveOk", { name: res.filename }), "");
+    } catch (e) {
+        toast("error", t("saveFailed"), e.message);
+        if (btn) btn.disabled = false;
+    }
 }
 
 function renderVersion(version, model) {
@@ -721,6 +745,12 @@ function renderVersion(version, model) {
             showImageMeta(image);
         };
     });
+    $$("[data-save-url]", body).forEach((btn) => {
+        btn.onclick = (ev) => {
+            ev.stopPropagation();
+            saveImageToOutput(btn.dataset.saveUrl, btn);
+        };
+    });
 }
 
 function showImageMeta(image) {
@@ -747,13 +777,98 @@ function showImageMeta(image) {
             <textarea readonly rows="3">${esc(meta.negativePrompt || "")}</textarea>
         </div>` : ""}
         <div class="cs-kv-grid">${kv.map(([k, v]) => `<div><b>${esc(k)}</b><span>${esc(v)}</span></div>`).join("")}</div>
-        ${resources ? `<div class="cs-meta-block"><div class="cs-section-title">${esc(t("resources"))}</div><div class="cs-tags">${resources}</div></div>` : ""}`);
+        ${resources ? `<div class="cs-meta-block"><div class="cs-section-title">${esc(t("resources"))}</div><div class="cs-tags">${resources}</div></div>` : ""}
+        <div class="cs-modal-actions">
+            <button class="cs-btn cs-btn-primary" data-apply-workflow>${esc(t("applyBtn"))}</button>
+        </div>`);
     $$("[data-copy]", m.box).forEach((btn) => {
         btn.onclick = () => {
             const ta = $("textarea", btn.closest(".cs-meta-block"));
             copyText(ta.value, btn);
         };
     });
+    const applyBtn = $("[data-apply-workflow]", m.box);
+    if (applyBtn) applyBtn.onclick = () => {
+        applyBtn.disabled = true;
+        try {
+            const result = applyRecipeToWorkflow(meta);
+            const loraPart = result.loras ? t("applyLoraPart", { n: result.loras }) : "";
+            toast("success", t("applyDone", { lora: loraPart }),
+                  result.missing.length ? t("loraMissing", { names: result.missing.join(", ") }) : "");
+            m.close();
+        } catch (e) {
+            toast("error", t("applyFail"), e.message);
+            applyBtn.disabled = false;
+        }
+    };
+}
+
+// ---------- 配方应用:把生成参数写入当前工作流 ----------
+function applyRecipeToWorkflow(meta) {
+    const graph = app.graph;
+    const nodes = graph._nodes || [];
+    const byId = graph._nodes_by_id || {};
+    const ks = nodes.find((n) => n.type === "KSampler") || nodes.find((n) => (n.type || "").includes("KSampler"));
+    if (!ks) throw new Error(t("applyNoKs"));
+    const inputByName = (name) => (ks.inputs || []).find((i) => (i.name || "").toLowerCase() === name);
+    const modelInp = inputByName("model");
+    const clipInp = inputByName("clip");
+    const posInp = inputByName("positive");
+    const negInp = inputByName("negative");
+    const linkSrc = (inp) => {
+        const link = inp && inp.link != null ? graph.links[inp.link] : null;
+        return link ? { node: byId[link.origin_id], slot: link.origin_slot } : null;
+    };
+    const result = { pos: false, neg: false, loras: 0, missing: [] };
+    // 1) 提示词:沿 KSampler 的 positive/negative 连线找文本节点;兜底第一个 CLIPTextEncode
+    const setText = (inp, text) => {
+        const src = linkSrc(inp);
+        if (src?.node?.widgets?.length && src.node.widgets[0].name === "text") {
+            src.node.widgets[0].value = text;
+            return true;
+        }
+        const te = nodes.find((n) => n.type === "CLIPTextEncode" && n.widgets?.[0]?.name === "text");
+        if (te) { te.widgets[0].value = text; return true; }
+        return false;
+    };
+    if (meta.prompt) result.pos = setText(posInp, meta.prompt);
+    if (meta.negativePrompt) result.neg = setText(negInp, meta.negativePrompt);
+    // 2) LoRA 链:按名称匹配本地库,匹配到就新建 LoraLoader 串进 model/clip 链路
+    const libLoras = S.local.models.filter((m) => m.category === "loras");
+    let modelSrc = linkSrc(modelInp);
+    let clipSrc = linkSrc(clipInp);
+    const created = [];
+    for (const r of (meta.resources || []).filter((r) => (r.type || "lora").toLowerCase() === "lora")) {
+        const nm = String(r.name || r.modelName || "").toLowerCase();
+        if (!nm) continue;
+        const local = libLoras.find((m) => {
+            const a = ((m.civitai || {}).model_name || "").toLowerCase();
+            const b = m.name.toLowerCase();
+            return (a && a.includes(nm)) || nm.includes(a) || b.includes(nm.split(" ")[0]);
+        });
+        if (!local) { result.missing.push(nm); continue; }
+        const nn = LiteGraph.createNode("LoraLoader");
+        if (!nn) continue;
+        graph.add(nn);
+        nn.widgets[0].value = local.name;
+        const w = parseFloat(r.weight);
+        if (!isNaN(w)) { nn.widgets[1].value = w; nn.widgets[2].value = w; }
+        if (modelSrc) modelSrc.node.connect(modelSrc.slot, nn, 0);
+        if (clipSrc) clipSrc.node.connect(clipSrc.slot, nn, 1);
+        modelSrc = { node: nn, slot: 0 };
+        clipSrc = { node: nn, slot: 1 };
+        created.push(nn);
+        result.loras += 1;
+    }
+    // 3) 最后一级接回 KSampler
+    const modelIdx = ks.inputs.indexOf(modelInp);
+    const clipIdx = ks.inputs.indexOf(clipInp);
+    if (created.length) {
+        const last = created[created.length - 1];
+        if (modelIdx >= 0) last.connect(0, ks, modelIdx);
+        if (clipIdx >= 0) last.connect(1, ks, clipIdx);
+    }
+    return result;
 }
 
 // ---------- 下载对话框 ----------
@@ -915,7 +1030,7 @@ function renderLocalList() {
                  <button class="cs-btn cs-btn-mini cs-btn-primary" data-update="${esc(m.id)}">${esc(t("dlNewVersion"))}</button></div>`
             : (upd && !upd.update && !upd.error ? `<div class="cs-local-update cs-ok">${esc(t("upToDate"))}</div>` : "");
         return `
-        <div class="cs-local-row" data-id="${esc(m.id)}">
+        <div class="cs-local-row${S.local.openId === m.id ? " cs-local-row-active" : ""}" data-id="${esc(m.id)}">
             <div class="cs-local-main">
                 <div class="cs-local-name" title="${esc(m.path || m.rel)}">${esc(civ.model_name || m.name)}</div>
                 <div class="cs-local-sub">
@@ -955,7 +1070,7 @@ function renderLocalList() {
                     await apiPost("/civitai_studio/local/delete", { category: m.category, rel: m.rel });
                     toast("success", t("deleted"), m.name);
                     S.local.updates = {};
-                    S.local.expanded.delete(m.id);
+                    if (S.local.openId === m.id) closeLocalDetailPane();
                     S.local.detailCache[m.civitai?.model_id] = undefined;
                     loadLocal(true);
                 } catch (e) { toast("error", t("deleteFailed"), e.message); }
@@ -990,7 +1105,7 @@ function renderLocalList() {
     $$("[data-detail]", list).forEach((btn) => {
         btn.onclick = () => {
             const m = findLocalModel(btn.dataset.detail);
-            toggleLocalDetail(m, btn.closest(".cs-local-row"));
+            toggleLocalDetail(m);
         };
     });
     $$("[data-associate]", list).forEach((btn) => {
@@ -999,7 +1114,6 @@ function renderLocalList() {
     $$("[data-rename]", list).forEach((btn) => {
         btn.onclick = () => renameDialog(findLocalModel(btn.dataset.rename));
     });
-    restoreExpansions(list);
 }
 
 function findLocalModel(id) {
@@ -1007,56 +1121,38 @@ function findLocalModel(id) {
 }
 
 // ---------- 本地库:展开详情 / 重命名 / 手动关联 ----------
-function toggleLocalDetail(m, rowEl) {
+function toggleLocalDetail(m) {
+    // 详情在右侧独立面板展示:再点一次关闭
     if (!m || !m.civitai || !m.civitai.model_id) return;
-    const id = m.id;
-    if (S.local.expanded.has(id)) {
-        S.local.expanded.delete(id);
-        const ex = rowEl.nextElementSibling;
-        if (ex && ex.classList.contains("cs-expand")) ex.remove();
+    const pane = $("#cs-local-detail");
+    if (!pane) return;
+    if (S.local.openId === m.id) {
+        closeLocalDetailPane();
         return;
     }
-    S.local.expanded.add(id);
-    injectLocalExpand(m, rowEl);
-}
-
-function injectLocalExpand(m, rowEl) {
-    const old = rowEl.nextElementSibling;
-    if (old && old.classList.contains("cs-expand")) old.remove();
-    const ex = document.createElement("div");
-    ex.className = "cs-expand";
-    ex.innerHTML = `<div class="cs-expand-loading">${esc(t("loadingCivitai"))}</div>`;
-    rowEl.after(ex);
+    S.local.openId = m.id;
+    pane.style.display = "block";
+    pane.innerHTML = `<div class="cs-expand-loading">${esc(t("loadingCivitai"))}</div>`;
+    renderLocalList(); // 刷新行高亮
     const mid = m.civitai.model_id;
     const cached = S.local.detailCache[mid];
-    if (cached) { renderLocalExpand(ex, m, cached); return; }
+    if (cached) { renderLocalExpand(pane, m, cached); return; }
     apiGet(`/civitai_studio/model/${encodeURIComponent(String(mid))}`).then((data) => {
         S.local.detailCache[mid] = data;
-        if (S.local.expanded.has(m.id)) renderLocalExpand(ex, m, data);
+        if (S.local.openId === m.id) renderLocalExpand(pane, m, data);
     }).catch((e) => {
         const civ = m.civitai || {};
         if (civ.description_html) {
             // 离线回退:sidecar 里有落盘的说明
-            renderLocalExpand(ex, m, {
+            renderLocalExpand(pane, m, {
                 id: civ.model_id,
                 name: civ.model_name, description: civ.description_html,
                 stats: {}, modelVersions: [],
             }, { offline: true });
         } else {
-            ex.innerHTML = `<div class="cs-expand-loading">${esc(t("expandLoadFailed") + e.message)}</div>`;
+            pane.innerHTML = `<div class="cs-expand-loading">${esc(t("expandLoadFailed") + e.message)}</div>`;
         }
     });
-}
-
-function restoreExpansions(listEl) {
-    if (!listEl) return;
-    for (const id of Array.from(S.local.expanded)) {
-        const m = findLocalModel(id);
-        if (!m || !m.civitai || !m.civitai.model_id) { S.local.expanded.delete(id); continue; }
-        // 行因筛选/搜索不在当前 DOM 时保留展开态,清空筛选后自动恢复
-        const row = listEl.querySelector(`.cs-local-row[data-id="${CSS.escape(id)}"]`);
-        if (row) injectLocalExpand(m, row);
-    }
 }
 
 function renderLocalExpand(ex, m, data, opts = {}) {
@@ -1161,7 +1257,7 @@ function renameDialog(m) {
             await apiPost("/civitai_studio/local/rename", { category: m.category, rel: m.rel, new_name: $("#cs-rn-name", md.box).value.trim() });
             md.close();
             toast("success", t("renamed"), m.name);
-            S.local.expanded.delete(m.id);
+            if (S.local.openId === m.id) closeLocalDetailPane();
             delete S.local.updates[m.id];
             loadLocal(true);
         } catch (e) {
@@ -1511,6 +1607,11 @@ function buildBrowseView(root) {
         <div class="cs-toolbar">
             <input id="cs-search" type="search" placeholder="${esc(t("searchPlaceholder"))}"/>
         </div>
+        <div class="cs-presets">
+            <button class="cs-chip" data-preset="hot-week">${esc(t("presetHotWeek"))}</button>
+            <button class="cs-chip" data-preset="hot-month">${esc(t("presetHotMonth"))}</button>
+            <button class="cs-chip" data-preset="best-month">${esc(t("presetBestMonth"))}</button>
+        </div>
         <div class="cs-filters">
             <select id="cs-f-type"><option value="">${esc(t("allTypes"))}</option>${TYPE_OPTIONS.map((tp) => `<option value="${tp}" ${st.type === tp ? "selected" : ""}>${esc(typeLabel(tp))}</option>`).join("")}</select>
             <input id="cs-f-base" list="cs-base-list" type="text" placeholder="${esc(t("basePlaceholder"))}" value="${esc(st.base)}"/>
@@ -1545,6 +1646,17 @@ function buildBrowseView(root) {
             if (key === "nsfw") apiPost("/civitai_studio/config", { nsfw: st[key] }).catch(() => {}); // 偏好持久化
         });
     }
+    // 榜单预设:一键设置 排序+时间范围
+    $$(".cs-presets .cs-chip", view).forEach((chip) => {
+        chip.onclick = () => {
+            const preset = chip.dataset.preset;
+            if (preset === "hot-week") { st.sort = "Most Downloaded"; st.period = "Week"; }
+            else if (preset === "hot-month") { st.sort = "Most Downloaded"; st.period = "Month"; }
+            else { st.sort = "Highest Rated"; st.period = "Month"; }
+            backToListIfOpen();
+            triggerBrowseRefresh();
+        };
+    });
     // 底模为可输入枚举(datalist 联想),便于使用站方新增的底模名
     let debBase;
     $("#cs-f-base", view).addEventListener("input", (e) => {
@@ -1596,7 +1708,10 @@ function buildLocalView(root) {
             <button class="cs-btn" id="cs-local-refresh" title="${esc(t("rescanTitle"))}">🔄</button>
         </div>
         <div id="cs-local-chips" class="cs-chips"></div>
-        <div id="cs-local-list" class="cs-scroll"></div>`;
+        <div class="cs-local-split">
+            <div id="cs-local-list" class="cs-scroll" style="flex:1; min-width:0"></div>
+            <div id="cs-local-detail" class="cs-scroll cs-local-detail" style="display:none"></div>
+        </div>`;
     root.appendChild(view);
     $("#cs-local-refresh", view).onclick = () => { S.local.updates = {}; loadLocal(true); };
     $("#cs-check-updates", view).onclick = () => runUpdateCheck([]);
@@ -1605,6 +1720,12 @@ function buildLocalView(root) {
         clearTimeout(deb);
         deb = setTimeout(() => { S.local.search = e.target.value.trim(); renderLocalList(); }, 250);
     });
+}
+
+function closeLocalDetailPane() {
+    const pane = $("#cs-local-detail");
+    if (pane) { pane.style.display = "none"; pane.innerHTML = ""; }
+    S.local.openId = null;
 }
 
 function buildDownloadsView(root) {
@@ -1683,6 +1804,7 @@ function injectStyles() {
 .cs-toolbar { display:flex; gap:6px; padding:6px; flex-shrink:0; align-items:center; }
 .cs-toolbar input[type=search] { flex:1; min-width:0; }
 .cs-filters { display:grid; grid-template-columns:1fr 1fr; gap:4px; padding:0 6px 6px; flex-shrink:0; }
+.cs-presets { display:flex; gap:4px; padding:0 6px 6px; flex-shrink:0; flex-wrap:wrap; }
 .cs-filters select { width:100%; padding:3px; font-size:12px; }
 .cs-scroll { flex:1; min-height:0; overflow-y:auto; padding:0 6px; }
 .cs-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:8px; padding-bottom:20px; }
@@ -1730,7 +1852,11 @@ function injectStyles() {
 .cs-file-name { font-size:12px; word-break:break-all; }
 .cs-file-meta { font-size:10px; color:var(--desc-text-color,#999); }
 .cs-gallery { display:grid; grid-template-columns:repeat(auto-fill, minmax(105px, 1fr)); gap:6px; }
+.cs-gallery-item { position:relative; }
 .cs-gallery-item img, .cs-gallery-item video { width:100%; aspect-ratio:3/4; object-fit:cover; border-radius:4px; cursor:pointer; border:2px solid transparent; display:block; }
+.cs-gallery-item img:hover { border-color:var(--accent-color,#4a90e2); }
+.cs-save-btn { position:absolute; right:4px; bottom:4px; z-index:2; background:rgba(0,0,0,.65); color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:11px; padding:1px 5px; }
+.cs-save-btn:hover { background:var(--accent-color,#4a90e2); }
 .cs-gallery-item img:hover { border-color:var(--accent-color,#4a90e2); }
 .cs-desc { margin:8px 0; }
 .cs-desc summary { cursor:pointer; font-weight:600; font-size:12px; }
@@ -1771,6 +1897,11 @@ function injectStyles() {
 .cs-as-item-name { font-size:12px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .cs-as-version-row { display:flex; gap:8px; align-items:center; }
 .cs-as-thumb { width:36px; height:48px; object-fit:cover; border-radius:4px; flex-shrink:0; border:1px solid var(--border-color,#444); }
+.cs-local-split { flex:1; min-height:0; display:flex; gap:6px; padding:0 6px; }
+.cs-local-detail { width:340px; flex-shrink:0; border-left:1px solid var(--border-color,#444); padding:8px 6px; }
+.cs-local-detail .cs-expand-body { flex-direction:column; }
+.cs-local-detail .cs-expand-cover { width:100%; }
+.cs-local-row-active { border-color:var(--accent-color,#4a90e2) !important; }
 .cs-local-update { font-size:11px; margin-top:4px; color:#e2a23f; display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
 .cs-local-update.cs-ok { color:#4caf50; }
 .cs-dim { color:var(--desc-text-color,#999); font-size:11px; }
