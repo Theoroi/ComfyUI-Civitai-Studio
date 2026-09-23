@@ -1,6 +1,4 @@
-"""ComfyUI-Civitai-Studio — Civitai 模型浏览器 + 本地模型管理器(纯 UI 插件,无自定义节点)."""
-
-print("[Civitai-Studio] 加载中...")
+"""ComfyUI-Civitai-Studio — Civitai 模型浏览器 + 本地模型管理器(纯 UI 插件)."""
 
 from .civitai_studio import civitai_client  # noqa: E402
 from .civitai_studio import config  # noqa: E402

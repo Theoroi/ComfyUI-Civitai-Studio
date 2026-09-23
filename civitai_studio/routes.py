@@ -709,3 +709,18 @@ async def check_updates(request):
 
 if _routes is None:
     print("[Civitai-Studio] 警告: PromptServer 不可用,HTTP 路由未注册")
+else:
+    # 防缓存:覆盖 ComfyUI 静态路由,始终返回最新 JS 并发 no-cache 头。
+    # 没有这段,Desktop webview 会启发式缓存旧版 JS,导致更新后侧边栏消失。
+    @_routes.get("/extensions/ComfyUI-Civitai-Studio/{filename}")
+    async def serve_extension_js(request):
+        filename = request.match_info["filename"]
+        if "/" in filename or "\\" in filename or ".." in filename:
+            return web.Response(status=404)
+        fp = os.path.join(os.path.dirname(__file__), "..", "js", filename)
+        if not os.path.isfile(fp):
+            return web.Response(status=404)
+        with open(fp, "r", encoding="utf-8") as f:
+            content = f.read()
+        return web.Response(text=content, content_type="application/javascript",
+                            headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
