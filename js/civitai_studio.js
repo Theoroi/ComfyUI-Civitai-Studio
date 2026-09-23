@@ -13,7 +13,16 @@ const TYPE_LABELS = {
     Upscaler: "放大模型", Hypernetwork: "超网络", Motion: "动作模块",
     Poses: "姿势", Wildcards: "通配符", Other: "其他",
 };
-const BASE_MODELS = [
+function sortEnumNames(list) {
+    // 枚举名按字母序,"Other" 固定最后
+    return list.slice().sort((a, b) => {
+        if (String(a) === "Other") return 1;
+        if (String(b) === "Other") return -1;
+        return String(a).localeCompare(String(b));
+    });
+}
+
+const BASE_MODELS = sortEnumNames([
     "SD 1.4", "SD 1.5", "SD 1.5 LCM", "SD 2.0", "SD 2.1", "SD 2.1 Unclip",
     "SDXL 1.0", "SDXL Lightning", "SDXL Hyper", "SD 3", "SD 3.5", "SD 3.5 Medium",
     "SD 3.5 Large", "SD 3.5 Large Turbo", "Pony", "Illustrious", "NoobAI", "Anima",
@@ -24,7 +33,7 @@ const BASE_MODELS = [
     "Wan Video 1.3B t2v", "Wan Video 14B t2v", "Wan Video 14B i2v 480p", "Wan Video 14B i2v 720p",
     "Wan Video 2.2 TI2V-5B", "Wan Video 2.2 I2V-A14B", "Wan Video 2.2 T2V-A14B",
     "Wan Video 2.5 T2V", "Wan Video 2.5 I2V", "Other",
-];
+]);
 const SORTS = ["Most Downloaded", "Highest Rated", "Newest"];
 const SORT_LABELS = { "Most Downloaded": "最多下载", "Highest Rated": "最高评分", Newest: "最新发布" };
 const PERIODS = ["AllTime", "Month", "Week", "Day"];
@@ -979,16 +988,21 @@ function buildBrowseView(root) {
             triggerBrowseRefresh();
         }, 400);
     });
-    // 打开面板即拉取站方枚举,动态补全底模联想列表(失败保留内置种子)
+    // 打开面板即拉取站方枚举,动态补全底模联想列表与类型下拉(失败保留内置种子)
     apiGet("/civitai_studio/enums").then((d) => {
-        const list = (d.ActiveBaseModel || d.BaseModel || []).slice().sort((a, b) => {
-            if (a === "Other") return 1;
-            if (b === "Other") return -1;
-            return String(a).localeCompare(String(b));
-        });
-        if (!list.length) return;
-        const dl = $("#cs-base-list", view);
-        if (dl) dl.innerHTML = list.map((b) => `<option value="${esc(String(b))}"></option>`).join("");
+        const list = sortEnumNames(d.ActiveBaseModel || d.BaseModel || []);
+        if (list.length) {
+            const dl = $("#cs-base-list", view);
+            if (dl) dl.innerHTML = list.map((b) => `<option value="${esc(String(b))}"></option>`).join("");
+        }
+        const typeSel = $("#cs-f-type", view);
+        if (typeSel && Array.isArray(d.ModelType) && d.ModelType.length) {
+            const cur = st.type;
+            typeSel.innerHTML = ['<option value="">全部类型</option>']
+                .concat(sortEnumNames(d.ModelType)
+                    .map((t) => `<option value="${esc(String(t))}" ${String(t) === cur ? "selected" : ""}>${esc(TYPE_LABELS[t] || String(t))}</option>`))
+                .join("");
+        }
     }).catch(() => {});
     // 无限滚动(页码推进在 fetchBrowse 成功后提交,失败自动重试同一页)
     $("#cs-browse-content", view).addEventListener("scroll", (e) => {
