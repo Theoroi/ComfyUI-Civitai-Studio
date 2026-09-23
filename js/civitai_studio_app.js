@@ -2215,7 +2215,10 @@ function renderSelInfo(node) {
     const el = node?.csInfo;
     if (!el) return;
     const uw = (node.widgets || []).find((w) => w.name === "image_url");
-    const sel = (node.csResults || []).find((it) => it.url && it.url === uw?.value);
+    const wanted = (uw?.value || "").trim();
+    // 结果列表里找得到就用完整条目(带 meta);找不到(手动粘贴的 URL)也至少显示缩略图
+    let sel = (node.csResults || []).find((it) => it.url && it.url === wanted) || null;
+    if (!sel && wanted) sel = { url: wanted };
     if (!sel) {
         el.innerHTML = `<span style="color:#888;font-size:11px;">${esc(S.lang === "zh" ? "未选择(点击缩略图选择)" : "Nothing selected (click a thumbnail)")}</span>`;
         return;
@@ -2481,7 +2484,12 @@ app.registerExtension({
                 setTimeout(() => node.csSchedule?.(), 200); // 首次拉取
                 // 兜底轮询:部分文本输入在新前端不触发 widget.callback/inputEl 事件,
                 // 轮询 sig 变化保证 tag 等改动最终一定触发刷新(csSchedule 内部去重)
-                node.csPoll = setInterval(() => node.csSchedule?.(), 700);
+                node.csPoll = setInterval(() => {
+                    node.csSchedule?.();
+                    // image_url 手动粘贴/修改也要刷新信息面板(文本输入不触发事件)
+                    const cur = widget("image_url")?.value || "";
+                    if (cur !== node.csLastUrl) { node.csLastUrl = cur; renderSelInfo(node); }
+                }, 700);
                 return r;
             };
         }
