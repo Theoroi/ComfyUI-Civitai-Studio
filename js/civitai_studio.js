@@ -16,10 +16,11 @@ const TYPE_LABELS = {
 const BASE_MODELS = [
     "SD 1.4", "SD 1.5", "SD 1.5 LCM", "SD 2.0", "SD 2.1", "SD 2.1 Unclip",
     "SDXL 1.0", "SDXL Lightning", "SDXL Hyper", "SD 3", "SD 3.5", "SD 3.5 Medium",
-    "SD 3.5 Large", "SD 3.5 Large Turbo", "Pony", "Illustrious", "NoobAI",
-    "Flux.1 S", "Flux.1 D", "Flux.1 Krea", "Flux.1 Kontext", "Flux.1 Fill", "Chroma",
-    "HiDream", "Lumina", "Qwen", "Kolors", "AuraFlow", "PixArt Σ", "Hunyuan 1",
-    "Hunyuan Video", "LTXV", "Mochi", "CogVideoX", "SVD",
+    "SD 3.5 Large", "SD 3.5 Large Turbo", "Pony", "Illustrious", "NoobAI", "Anima",
+    "Flux.1 S", "Flux.1 D", "Flux.1 Krea", "Flux.1 Kontext", "Flux.1 Fill",
+    "Flux.2 D", "Flux.2 Klein 9B", "Chroma", "HiDream", "Lumina", "Qwen",
+    "Krea 2", "ZImageTurbo", "Kolors", "AuraFlow", "PixArt Σ", "Hunyuan 1",
+    "Hunyuan Video", "LTXV", "LTXV 2.3", "Mochi", "CogVideoX", "SVD", "ACE Audio",
     "Wan Video 1.3B t2v", "Wan Video 14B t2v", "Wan Video 14B i2v 480p", "Wan Video 14B i2v 720p",
     "Wan Video 2.2 TI2V-5B", "Wan Video 2.2 I2V-A14B", "Wan Video 2.2 T2V-A14B",
     "Wan Video 2.5 T2V", "Wan Video 2.5 I2V", "Other",
@@ -936,7 +937,8 @@ function buildBrowseView(root) {
         </div>
         <div class="cs-filters">
             <select id="cs-f-type"><option value="">全部类型</option>${TYPE_OPTIONS.map((t) => `<option value="${t}" ${st.type === t ? "selected" : ""}>${TYPE_LABELS[t]}</option>`).join("")}</select>
-            <select id="cs-f-base"><option value="">全部底模</option>${BASE_MODELS.map((b) => `<option value="${esc(b)}" ${st.base === b ? "selected" : ""}>${esc(b)}</option>`).join("")}</select>
+            <input id="cs-f-base" list="cs-base-list" type="text" placeholder="全部底模(可输入新枚举)" value="${esc(st.base)}"/>
+            <datalist id="cs-base-list">${BASE_MODELS.map((b) => `<option value="${esc(b)}"></option>`).join("")}</datalist>
             <select id="cs-f-sort">${SORTS.map((s) => `<option value="${s}" ${st.sort === s ? "selected" : ""}>${SORT_LABELS[s]}</option>`).join("")}</select>
             <select id="cs-f-period">${PERIODS.map((p) => `<option value="${p}" ${st.period === p ? "selected" : ""}>${PERIOD_LABELS[p]}</option>`).join("")}</select>
             <select id="cs-f-nsfw">${NSFW_LEVELS.map((n) => `<option value="${n.v}" ${st.nsfw === n.v ? "selected" : ""}>${n.label}</option>`).join("")}</select>
@@ -959,7 +961,7 @@ function buildBrowseView(root) {
             triggerBrowseRefresh();
         }, 500);
     });
-    for (const [sel, key] of [["#cs-f-type", "type"], ["#cs-f-base", "base"], ["#cs-f-sort", "sort"], ["#cs-f-period", "period"], ["#cs-f-nsfw", "nsfw"]]) {
+    for (const [sel, key] of [["#cs-f-type", "type"], ["#cs-f-sort", "sort"], ["#cs-f-period", "period"], ["#cs-f-nsfw", "nsfw"]]) {
         $(sel, view).addEventListener("change", (e) => {
             st[key] = key === "nsfw" ? parseInt(e.target.value, 10) : e.target.value;
             backToListIfOpen();
@@ -967,6 +969,27 @@ function buildBrowseView(root) {
             if (key === "nsfw") apiPost("/civitai_studio/config", { nsfw: st[key] }).catch(() => {}); // 偏好持久化
         });
     }
+    // 底模为可输入枚举(datalist 联想),便于使用站方新增的底模名
+    let debBase;
+    $("#cs-f-base", view).addEventListener("input", (e) => {
+        clearTimeout(debBase);
+        debBase = setTimeout(() => {
+            st.base = e.target.value.trim();
+            backToListIfOpen();
+            triggerBrowseRefresh();
+        }, 400);
+    });
+    // 打开面板即拉取站方枚举,动态补全底模联想列表(失败保留内置种子)
+    apiGet("/civitai_studio/enums").then((d) => {
+        const list = (d.ActiveBaseModel || d.BaseModel || []).slice().sort((a, b) => {
+            if (a === "Other") return 1;
+            if (b === "Other") return -1;
+            return String(a).localeCompare(String(b));
+        });
+        if (!list.length) return;
+        const dl = $("#cs-base-list", view);
+        if (dl) dl.innerHTML = list.map((b) => `<option value="${esc(String(b))}"></option>`).join("");
+    }).catch(() => {});
     // 无限滚动(页码推进在 fetchBrowse 成功后提交,失败自动重试同一页)
     $("#cs-browse-content", view).addEventListener("scroll", (e) => {
         const el = e.target;

@@ -7,6 +7,7 @@ import asyncio
 import os
 import subprocess
 import sys
+import time
 
 import aiohttp
 import folder_paths
@@ -14,6 +15,9 @@ from aiohttp import web
 from yarl import URL
 
 from . import civitai_client, config, downloader, local_index
+
+_enums_cache = {"data": None, "ts": 0.0}
+_ENUMS_TTL = 6 * 3600.0
 
 try:
     from server import PromptServer
@@ -239,6 +243,26 @@ async def image_proxy(request):
 
 
 # ---------- 下载 ----------
+
+@_get("/civitai_studio/enums")
+async def enums(request):
+    """代理站方枚举(ModelType/ActiveBaseModel/BaseModel...),内存缓存 6h."""
+    global _enums_cache
+    now = time.time()
+    if _enums_cache["data"] is None or now - _enums_cache["ts"] > _ENUMS_TTL:
+        try:
+            data = await civitai_client.get_json("/enums", timeout=aiohttp.ClientTimeout(total=20, connect=10))
+        except civitai_client.CivitaiError as e:
+            if _enums_cache["data"] is not None:  # 失败时回退旧缓存
+                return web.json_response(_enums_cache["data"])
+            return _json_error(e, 502)
+        except (asyncio.TimeoutError, aiohttp.ClientError) as e:
+            if _enums_cache["data"] is not None:
+                return web.json_response(_enums_cache["data"])
+            return _json_error(civitai_client.net_error_message(e), 502)
+        _enums_cache = {"data": data, "ts": now}
+    return web.json_response(_enums_cache["data"])
+
 
 @_get("/civitai_studio/destinations")
 async def destinations(request):
