@@ -30,7 +30,7 @@ const SORTS = ["Most Downloaded", "Highest Rated", "Newest"];
 const PERIODS = ["AllTime", "Month", "Week", "Day"];
 const NSFW_LEVELS = [0, 1, 2];
 
-const JS_VERSION = "0.5.15";
+const JS_VERSION = "0.5.16";
 
 // ---------- i18n ----------
 const STR = {
@@ -249,7 +249,7 @@ let S = {
     },
     local: { models: [], search: "", type: "", loading: false, updates: {}, truncated: false, openId: null, detailCache: {} },
     dl: { jobs: [], lastSig: "", failStreak: 0 },
-    gal: { items: [], next: [], sort: "Newest", period: "AllTime", base: "", tag: "", nsfwLevel: 1, loading: false, error: "" },
+    gal: { items: [], next: [], sort: "Newest", period: "AllTime", base: "", tag: "", nsfwLevel: 0, loading: false, error: "" },
     ui: { tab: "browse", root: null, scrollTop: 0, detailId: null, backendStale: false },
 };
 
@@ -440,13 +440,13 @@ function showModal(innerHTML, cls) {
         innerTitle.remove();
     }
     document.body.appendChild(panel);
-    // 定位:贴侧边栏右侧,多个浮层依次错开
-    const rect = S.ui.root ? S.ui.root.getBoundingClientRect() : { right: window.innerWidth / 2, top: 60 };
-    const w = 480, step = (S.ui.floatModals?.length || 0) * 26;
-    let x = Math.round(rect.right + 10) + step;
-    if (x + w > window.innerWidth - 10) x = Math.max(10, window.innerWidth - w - 10);
+    // 定位:画布右缘内收(与详情浮层一致),避开侧边栏
+    const a = floatAnchor();
+    const w = 480;
+    let x = Math.round(a.right - w - 24);
+    if (x < a.left + 10) x = a.left + 10;
     panel.style.left = x + "px";
-    panel.style.top = Math.max(10, Math.min(rect.top + step, window.innerHeight - 320)) + "px";
+    panel.style.top = Math.max(10, Math.min(a.top + 56, window.innerHeight - 320)) + "px";
     dragFloat(panel, panel.querySelector(".cs-float-head"));
     const close = () => {
         document.removeEventListener("keydown", escHandler);
@@ -651,6 +651,19 @@ function dragFloat(panel, head) {
     });
 }
 
+// 悬浮层锚点:始终以 ComfyUI 画布区域为基准。
+// 侧边栏切到非 Civitai 标签时 root 处于隐藏态(矩形为 0),按 root 定位会飘到左上角。
+function floatAnchor() {
+    const canvasR = document.querySelector("canvas")?.getBoundingClientRect();
+    if (canvasR && canvasR.width > 50) {
+        return { left: canvasR.left, right: canvasR.right, top: canvasR.top };
+    }
+    const rootR = S.ui.root?.getBoundingClientRect();
+    if (rootR && rootR.width > 0) return { left: rootR.left, right: rootR.right, top: rootR.top };
+    const w = window.innerWidth;
+    return { left: w / 2 - 240, right: w / 2 + 240, top: 60 };
+}
+
 function openFloatDetail() {
     closeAllFloats(); // 单实例:开新的浮层前关掉旧浮层
     const panel = document.createElement("div");
@@ -662,13 +675,12 @@ function openFloatDetail() {
         </div>
         <div class="cs-float-body"></div>`;
     document.body.appendChild(panel);
-    // 定位:贴着 ComfyUI 侧边栏右侧打开
-    const rect = S.ui.root ? S.ui.root.getBoundingClientRect() : { right: window.innerWidth / 2, top: 60 };
+    const a = floatAnchor();
     const w = 440;
-    let x = Math.round(rect.right + 10);
-    if (x + w > window.innerWidth - 10) x = Math.max(10, window.innerWidth - w - 10);
+    let x = Math.round(a.right - w - 24); // 画布右缘内收,避开侧边栏
+    if (x < a.left + 10) x = a.left + 10;
     panel.style.left = x + "px";
-    panel.style.top = Math.max(10, Math.min(rect.top, window.innerHeight - 400)) + "px";
+    panel.style.top = Math.max(10, Math.min(a.top + 56, window.innerHeight - 400)) + "px";
     panel.querySelector(".cs-float-close").onclick = closeFloatDetail;
     // 标题栏拖动
     dragFloat(panel, panel.querySelector(".cs-float-head"));
@@ -1876,7 +1888,7 @@ function buildBrowseView(root) {
             const cur = st.type;
             typeSel.innerHTML = [`<option value="">${esc(t("allTypes"))}</option>`]
                 .concat(sortEnumNames(d.ModelType)
-                    .map((tp) => `<option value="${esc(String(tp))}" ${String(tp) === cur ? "selected" : ""}>${esc(typeLabel(String(tp)))}</option>`))
+                    .map((tp) => `<option value="${esc(String(tp))}" ${String(tp) === cur ? "selected" : ""}>${esc(String(tp))}</option>`))
                 .join("");
         }
     }).catch(() => {});
