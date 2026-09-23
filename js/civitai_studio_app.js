@@ -30,7 +30,7 @@ const SORTS = ["Most Downloaded", "Highest Rated", "Newest"];
 const PERIODS = ["AllTime", "Month", "Week", "Day"];
 const NSFW_LEVELS = [0, 1, 2];
 
-const JS_VERSION = "0.5.2";
+const JS_VERSION = "0.5.6";
 
 // ---------- i18n ----------
 const STR = {
@@ -39,6 +39,8 @@ const STR = {
         staleBanner: "⚠ 后端代码过旧(服务端运行的是重启前加载的版本),新功能不可用 — 请重启一次 ComfyUI。",
         backendOutdatedTitle: "Civitai Studio 后端代码过旧",
         backendOutdatedMsg: "服务端 v{server} < 前端 v{client} — 请重启一次 ComfyUI 加载新功能",
+        frontendOutdatedTitle: "Civitai Studio 前端缓存过旧",
+        frontendOutdatedMsg: "前端 v{client} < 服务端 v{server} — 请强制刷新本页(Ctrl+F5)加载新功能",
         frontendTooOld: "当前 ComfyUI 前端过旧,不支持侧边栏 API (extensionManager.registerSidebarTab)",
         loadFailedTitle: "Civitai Studio 加载失败",
         frontendUpgradeHint: "前端版本过旧,请升级 ComfyUI",
@@ -137,6 +139,8 @@ const STR = {
         staleBanner: "⚠ Backend code is outdated (the server is still running the version loaded before the last restart) — new features are unavailable. Please restart ComfyUI.",
         backendOutdatedTitle: "Civitai Studio backend is outdated",
         backendOutdatedMsg: "server v{server} < frontend v{client} — restart ComfyUI once to load the new features",
+        frontendOutdatedTitle: "Civitai Studio frontend is stale",
+        frontendOutdatedMsg: "frontend v{client} < server v{server} — hard-refresh this page (Ctrl+F5) to load the new features",
         frontendTooOld: "This ComfyUI frontend is too old for the sidebar API (extensionManager.registerSidebarTab)",
         loadFailedTitle: "Civitai Studio failed to load",
         frontendUpgradeHint: "Frontend too old — please upgrade ComfyUI",
@@ -410,6 +414,7 @@ function copyText(text, btn) {
 
 // ---------- 通用模态框(悬浮元素:无遮罩、可拖动;✕/Esc/点画布关闭) ----------
 function showModal(innerHTML, cls) {
+    closeAllFloats(); // 单实例:同一时间只显示一个悬浮元素
     const panel = document.createElement("div");
     panel.className = "cs-float cs-float-modal " + (cls || "");
     panel.innerHTML = `
@@ -637,7 +642,7 @@ function dragFloat(panel, head) {
 }
 
 function openFloatDetail() {
-    closeFloatDetail();
+    closeAllFloats(); // 单实例:开新的浮层前关掉旧浮层
     const panel = document.createElement("div");
     panel.className = "cs-float";
     panel.innerHTML = `
@@ -665,6 +670,11 @@ function closeFloatDetail() {
     // 只关详情浮层;弹窗类浮层(cs-float-modal)有自己的生命周期
     document.querySelectorAll(".cs-float:not(.cs-float-modal)").forEach((n) => n.remove());
     S.ui.float = null;
+}
+
+function closeAllFloats() {
+    closeFloatDetail();
+    (S.ui.floatModals || []).slice().forEach((m) => m.close());
 }
 
 async function openBrowseFloat(modelId) {
@@ -2040,28 +2050,71 @@ function injectStyles() {
 }
 
 // ---------- 节点内缩略图(画布上的三个 Civitai 节点) ----------
+// 新版 ComfyUI 前端不再调用 onDrawBackground,节点内图全部走 DOM widget
+function nodeThumbsResize(node) {
+    // 让节点按 DOM widget 的实际高度重新计算尺寸
+    try { node.setSize([node.size[0], node.computeSize()[1]]); } catch (e) { /* 旧版接口缺失时忽略 */ }
+}
+
+function renderNodeThumbs(node) {
+    const strip = node.csStrip;
+    if (!strip) return;
+    strip.querySelectorAll(".cs-thumb,.cs-thumb-msg").forEach((el) => el.remove());
+    const items = (node.csResults || []).slice(0, 8);
+    const idxW = (node.widgets || []).find((w) => w.name === "index");
+    if (!items.length) {
+        const msg = document.createElement("div");
+        msg.className = "cs-thumb-msg";
+        msg.style.cssText = "width:100%;font-size:11px;color:#999;";
+        msg.textContent = node.csMsg || (S.lang === "zh" ? "没有结果" : "No results");
+        strip.appendChild(msg);
+        nodeThumbsResize(node);
+        return;
+    }
+    items.forEach((it, i) => {
+        const cell = document.createElement("div");
+        cell.className = "cs-thumb";
+        cell.title = "index " + i;
+        cell.style.cssText = "position:relative;width:100px;height:133px;flex:0 0 auto;background:#2e2e33;"
+            + "border:2px solid #555;border-radius:4px;overflow:hidden;cursor:pointer;";
+        if ((it.type || "image") === "video") {
+            // 视频缩略图画占位,保持与执行侧相同的 index 对齐
+            const v = document.createElement("div");
+            v.style.cssText = "width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:#eee;font-size:20px;";
+            v.textContent = "▶";
+            cell.appendChild(v);
+        } else {
+            const im = document.createElement("img");
+            im.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;";
+            const orig = it.url || "";
+            im.onerror = () => { if (!im.dataset.retried) { im.dataset.retried = "1"; im.src = altSrc(orig); } };
+            im.src = imgSrc(orig);
+            cell.appendChild(im);
+        }
+        if (Number(idxW?.value) === i) cell.style.borderColor = "#4a90e2";
+        cell.onclick = () => {
+            const w = (node.widgets || []).find((x) => x.name === "index");
+            if (w) { w.value = i; w.callback?.(i); }
+            renderNodeThumbs(node);
+        };
+        strip.appendChild(cell);
+    });
+    nodeThumbsResize(node);
+}
+
 function fetchNodeThumbs(node, params) {
     // 必须用与节点执行相同的 /images 数据源(模型搜索接口条目没有封面 url),index 才对得上
     api.fetchApi(`/civitai_studio/images?${params}`, { cache: "no-store" })
         .then((r) => r.json())
         .then((d) => {
             node.csResults = d.items || [];
-            node.csVids = node.csResults.slice(0, 8).map((it) => (it.type || "image") === "video");
-            node.csImgs = node.csResults.slice(0, 8).map((it) => {
-                const im = new Image();
-                const orig = it.url || "";
-                // 加载完成/失败都要触发重绘,否则画布停留在灰占位块
-                im.onload = () => app.canvas.setDirty(true, true);
-                im.onerror = () => {
-                    if (!im.dataset.retried) { im.dataset.retried = "1"; im.src = altSrc(orig); }
-                };
-                im.src = imgSrc(orig);
-                return im;
-            });
-            node.csMsg = node.csImgs.length ? "" : "没有结果";
-            app.canvas.setDirty(true, true);
+            renderNodeThumbs(node);
         })
-        .catch(() => { node.csMsg = "缩略图拉取失败"; });
+        .catch(() => {
+            node.csResults = [];
+            node.csMsg = "缩略图拉取失败";
+            renderNodeThumbs(node);
+        });
 }
 
 app.registerExtension({
@@ -2069,20 +2122,25 @@ app.registerExtension({
     beforeRegisterNodeDef(nodeType, nodeData) {
         const type = nodeData.name;
 
-        // 图片搜索节点:节点内画结果缩略图条,点击选择 index
+        // 图片搜索节点:DOM widget 缩略图条,点击选择 index
         if (type === "CivitaiImageSearch") {
             const origCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
                 const r = origCreated?.apply(this, arguments);
-                // 底部固定预留两排缩略图(120×160),避免遮住 widgets
-                const nat = this.computeSize ? this.computeSize() : [400, 300];
-                this.size = [540, Math.max(nat[1], 300) + 2 * 168 + 20];
                 this.csSig = "";
-                this.csImgs = [];
-                this.csRects = [];
-                this.csMsg = "";
+                this.csResults = [];
                 const node = this;
                 const widget = (name) => (node.widgets || []).find((x) => x.name === name);
+
+                const strip = document.createElement("div");
+                strip.style.cssText = "display:flex;flex-wrap:wrap;gap:6px;padding:4px;width:100%;align-content:flex-start;";
+                const hint = document.createElement("div");
+                hint.style.cssText = "width:100%;font-size:11px;color:#999;";
+                hint.textContent = S.lang === "zh" ? "点击缩略图选择 index" : "Click a thumbnail to set index";
+                strip.appendChild(hint);
+                node.csStrip = strip;
+                this.addDOMWidget("cs_thumbs", "cs_thumbs", strip);
+
                 const sig = () => ["keyword", "base_model", "tag", "sort", "period"].map((n) => widget(n)?.value ?? "").join("|");
                 node.csSchedule = () => {
                     const s2 = sig();
@@ -2099,97 +2157,44 @@ app.registerExtension({
                     p.set("period", widget("period")?.value || "AllTime");
                     fetchNodeThumbs(node, p.toString());
                 };
-                // 筛选变化 → 节流拉缩略图
+                // 筛选变化 → 节流拉缩略图;index 变化 → 刷新选中框
                 node.csDeb = null;
                 (node.widgets || []).forEach((wd) => {
-                    if (!["keyword", "base_model", "tag", "sort", "period", "nsfw"].includes(wd.name)) return;
+                    if (!["keyword", "base_model", "tag", "sort", "period", "nsfw", "index"].includes(wd.name)) return;
                     const oc = wd.callback;
                     wd.callback = function () {
-                        const r = oc?.apply(this, arguments);
+                        const r2 = oc?.apply(this, arguments);
+                        if (wd.name === "index") { renderNodeThumbs(node); return r2; }
                         clearTimeout(node.csDeb);
                         node.csDeb = setTimeout(() => node.csSchedule?.(), 600);
-                        return r;
+                        return r2;
                     };
                 });
                 setTimeout(() => node.csSchedule?.(), 200); // 首次拉取
                 return r;
             };
-            nodeType.prototype.onDrawBackground = function (ctx) {
-                if (!this.csImgs?.length) {
-                    if (this.csMsg) {
-                        ctx.save();
-                        ctx.fillStyle = "#888";
-                        ctx.font = "11px sans-serif";
-                        ctx.fillText(this.csMsg, 12, this.size[1] - 12);
-                        ctx.restore();
-                    }
-                    return;
-                }
-                const thumbW = 120, thumbH = 160, gap = 8;
-                const perRow = Math.max(1, Math.floor((this.size[0] - 20) / (thumbW + gap)));
-                const rows = Math.ceil(this.csImgs.length / perRow);
-                const stripH = rows * (thumbH + gap) - gap;
-                const top = this.size[1] - stripH - 10; // 锚在节点底部,不与 widgets 重叠
-                this.csRects = [];
-                const idxW = (this.widgets || []).find((w2) => w2.name === "index");
-                this.csImgs.forEach((im, i) => {
-                    const x = 10 + (i % perRow) * (thumbW + gap);
-                    const y = top + Math.floor(i / perRow) * (thumbH + gap);
-                    if (x + thumbW > this.size[0] - 10) return;
-                    this.csRects.push({ x, y, w: thumbW, h: thumbH, i });
-                    if (this.csVids?.[i]) {
-                        // 视频缩略图画占位框,保持与执行侧相同的 index 对齐
-                        ctx.fillStyle = "#2e2e33";
-                        ctx.fillRect(x, y, thumbW, thumbH);
-                        ctx.fillStyle = "#eee";
-                        ctx.font = "20px sans-serif";
-                        ctx.fillText("▶", x + thumbW / 2 - 7, y + thumbH / 2 + 7);
-                    } else if (im.complete && im.naturalWidth > 0) {
-                        ctx.drawImage(im, x, y, thumbW, thumbH);
-                    } else {
-                        ctx.fillStyle = "#2e2e33";
-                        ctx.fillRect(x, y, thumbW, thumbH);
-                    }
-                    const selected = Number(idxW?.value) === i;
-                    ctx.strokeStyle = selected ? "#4a90e2" : "#555";
-                    ctx.lineWidth = selected ? 2 : 1;
-                    ctx.strokeRect(x, y, thumbW, thumbH);
-                });
-                ctx.fillStyle = "#999";
-                ctx.font = "10px sans-serif";
-                ctx.fillText("点击缩略图选择 index", 10, top - 5);
-            };
-            nodeType.prototype.onMouseDown = function (e, pos) {
-                if (!this.csRects?.length) return false;
-                for (const r of this.csRects) {
-                    if (pos[0] >= r.x && pos[0] <= r.x + r.w && pos[1] >= r.y && pos[1] <= r.y + r.h) {
-                        const w = (this.widgets || []).find((x) => x.name === "index");
-                        if (w) {
-                            w.value = r.i;
-                            w.callback?.(r.i);
-                        }
-                        app.canvas.setDirty(true, true);
-                        return true;
-                    }
-                }
-                return false;
-            };
         }
 
-        // LoRA 两个节点:节点内画选中 LoRA 的封面
+        // LoRA 两个节点:DOM widget 显示选中 LoRA 的封面
         if (type === "CivitaiTriggerWords" || type === "CivitaiLoraRecipe") {
             const origCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
                 const r = origCreated?.apply(this, arguments);
-                // 底部固定预留封面高度(140×186),避免遮住 widgets
-                const nat = this.computeSize ? this.computeSize() : [360, 220];
-                this.size = [360, Math.max(nat[1], 220) + 196];
                 const node = this;
-                node.csCover = null;
+                const box = document.createElement("div");
+                box.style.cssText = "display:flex;justify-content:center;padding:4px;width:100%;";
+                const imgEl = document.createElement("img");
+                imgEl.style.cssText = "max-width:100%;max-height:190px;border-radius:6px;display:none;";
+                imgEl.onerror = () => { imgEl.style.display = "none"; nodeThumbsResize(node); };
+                imgEl.onload = () => nodeThumbsResize(node);
+                box.appendChild(imgEl);
+                node.csCoverEl = imgEl;
+                this.addDOMWidget("cs_cover", "cs_cover", box);
+
                 const drawCover = () => {
                     const loraW = (node.widgets || []).find((x) => x.name === "lora");
                     const id = loraW?.value;
-                    if (!id || id.includes("(")) { node.csCover = null; return; }
+                    if (!id || id.includes("(")) { imgEl.style.display = "none"; nodeThumbsResize(node); return; }
                     api.fetchApi("/civitai_studio/local", { cache: "no-store" })
                         .then((r2) => r2.json())
                         .then((d) => {
@@ -2203,13 +2208,9 @@ app.registerExtension({
                             const imgs = ((m.modelVersions || [])[0] || {}).images || [];
                             const first = imgs.find((i) => i.url && i.type === "image") || imgs.find((i) => i.url);
                             if (first?.url) {
-                                const im = new Image();
-                                im.onload = () => { node.setDirtyCanvas?.(true, true); };
-                                im.onerror = () => {
-                                    if (!im.dataset.retried) { im.dataset.retried = "1"; im.src = altSrc(first.url); }
-                                };
-                                im.src = imgSrc(first.url);
-                                node.csCover = im;
+                                imgEl.dataset.retried = "";
+                                imgEl.style.display = "block";
+                                imgEl.src = imgSrc(first.url);
                             }
                         })
                         .catch(() => {});
@@ -2219,21 +2220,11 @@ app.registerExtension({
                     if (wd.name !== "lora") return;
                     const oc = wd.callback;
                     wd.callback = function () {
-                        const r = oc?.apply(this, arguments);
+                        const r2 = oc?.apply(this, arguments);
                         setTimeout(drawCover, 100);
-                        return r;
+                        return r2;
                     };
                 });
-                const origBg = nodeType.prototype.onDrawBackground;
-                nodeType.prototype.onDrawBackground = function (ctx) {
-                    origBg?.apply(this, arguments);
-                    if (!node.csCover || !(node.csCover.complete && node.csCover.naturalWidth > 0)) return;
-                    const w2 = 140, h2 = 186;
-                    const top2 = this.size[1] - h2 - 8; // 锚在底部,不与 widgets 重叠
-                    ctx.drawImage(node.csCover, this.size[0] - w2 - 12, top2, w2, h2);
-                    ctx.strokeStyle = "#555";
-                    ctx.strokeRect(this.size[0] - w2 - 12, top2, w2, h2);
-                };
                 return r;
             };
         }
@@ -2272,6 +2263,9 @@ app.registerExtension({
             if (newer(b, a)) {
                 S.ui.backendStale = true;
                 toast("warning", t("backendOutdatedTitle"), t("backendOutdatedMsg", { server: v.version, client: JS_VERSION }));
+            } else if (newer(a, b)) {
+                // 反向:服务端比前端新 = 页面还在跑缓存的旧 JS(用户反复踩的坑)
+                toast("warning", t("frontendOutdatedTitle"), t("frontendOutdatedMsg", { server: v.version, client: JS_VERSION }));
             }
         } catch (e) {
             // /version 不存在 = 服务端更旧(无此路由),同样视为过旧
@@ -2296,12 +2290,10 @@ app.registerExtension({
         });
         if (pollTimer) clearInterval(pollTimer);
         pollTimer = setInterval(pollDownloads, 2000);
-        // 点击画布/页面其他区域时关闭悬浮层(侧边栏、浮层内的操作不触发);先关最上层弹窗,再关详情
+        // 点击画布/页面其他区域时关闭悬浮元素(单实例规则:点空白即全关)
         document.addEventListener("pointerdown", (e) => {
             if (e.target.closest(".cs-float") || e.target.closest(".cs-root") || e.target.closest(".cs-modal")) return;
-            const top = S.ui.floatModals?.[S.ui.floatModals.length - 1];
-            if (top) { top.close(); return; }
-            if (S.ui.float) closeFloatDetail();
+            closeAllFloats();
         }, true);
         console.log("[Civitai-Studio] " + t("readyLog"));
     },

@@ -43,6 +43,20 @@ def _parse_model_ref(text):
 try:
     from server import PromptServer
     _routes = PromptServer.instance.routes if PromptServer.instance else None
+
+    # ComfyUI 自身的 /api/extensions 响应没有 Cache-Control,Electron webview 会按启发式
+    # 把扩展清单缓存住:服务端更新后页面仍加载旧 JS 文件名。显式 no-store 才能压住。
+    if PromptServer.instance:
+        from aiohttp import web as _web
+
+        @_web.middleware
+        async def _no_cache_ext_middleware(request, handler):
+            resp = await handler(request)
+            if request.path.startswith(("/api/extensions", "/extensions/")):
+                resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            return resp
+
+        PromptServer.instance.app.middlewares.append(_no_cache_ext_middleware)
 except Exception:
     _routes = None
 
