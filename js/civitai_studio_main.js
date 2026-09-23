@@ -30,7 +30,7 @@ const SORTS = ["Most Downloaded", "Highest Rated", "Newest"];
 const PERIODS = ["AllTime", "Month", "Week", "Day"];
 const NSFW_LEVELS = [0, 1, 2];
 
-const JS_VERSION = "0.5.1";
+const JS_VERSION = "0.5.2";
 
 // ---------- i18n ----------
 const STR = {
@@ -408,23 +408,43 @@ function copyText(text, btn) {
     }).catch(() => {});
 }
 
-// ---------- 通用模态框 ----------
+// ---------- 通用模态框(悬浮元素:无遮罩、可拖动;✕/Esc/点画布关闭) ----------
 function showModal(innerHTML, cls) {
-    const overlay = document.createElement("div");
-    overlay.className = "cs-modal " + (cls || "");
-    overlay.innerHTML = `<div class="cs-modal-box">${innerHTML}</div>`;
-    document.body.appendChild(overlay);
-    // 只有按下和松开都发生在遮罩上才关闭,避免框内选中文本拖出窗外时误关
-    let pressedOnOverlay = false;
-    const escHandler = (e) => { if (e.key === "Escape") close(); };
+    const panel = document.createElement("div");
+    panel.className = "cs-float cs-float-modal " + (cls || "");
+    panel.innerHTML = `
+        <div class="cs-float-head">
+            <span class="cs-float-title"></span>
+            <button class="cs-float-close">✕</button>
+        </div>
+        <div class="cs-float-body">${innerHTML}</div>`;
+    // 内容自带的标题上移到拖动栏
+    const innerTitle = panel.querySelector(".cs-modal-title");
+    if (innerTitle) {
+        panel.querySelector(".cs-float-title").textContent = innerTitle.textContent;
+        innerTitle.remove();
+    }
+    document.body.appendChild(panel);
+    // 定位:贴侧边栏右侧,多个浮层依次错开
+    const rect = S.ui.root ? S.ui.root.getBoundingClientRect() : { right: window.innerWidth / 2, top: 60 };
+    const w = 480, step = (S.ui.floatModals?.length || 0) * 26;
+    let x = Math.round(rect.right + 10) + step;
+    if (x + w > window.innerWidth - 10) x = Math.max(10, window.innerWidth - w - 10);
+    panel.style.left = x + "px";
+    panel.style.top = Math.max(10, Math.min(rect.top + step, window.innerHeight - 320)) + "px";
+    dragFloat(panel, panel.querySelector(".cs-float-head"));
     const close = () => {
         document.removeEventListener("keydown", escHandler);
-        overlay.remove();
+        panel.remove();
+        const i = (S.ui.floatModals || []).indexOf(api);
+        if (i >= 0) S.ui.floatModals.splice(i, 1);
     };
-    overlay.addEventListener("mousedown", (e) => { pressedOnOverlay = e.target === overlay; });
-    overlay.addEventListener("click", (e) => { if (e.target === overlay && pressedOnOverlay) close(); });
+    const escHandler = (e) => { if (e.key === "Escape") close(); };
     document.addEventListener("keydown", escHandler);
-    return { overlay, box: $(".cs-modal-box", overlay), close };
+    panel.querySelector(".cs-float-close").onclick = close;
+    const api = { overlay: panel, box: panel.querySelector(".cs-float-body"), close };
+    (S.ui.floatModals = S.ui.floatModals || []).push(api);
+    return api;
 }
 
 function confirmModal(title, message, onOk) {
@@ -599,6 +619,23 @@ function makeCard(model) {
 }
 
 // ---------- 悬浮详情面板(独立于侧边栏,可拖动) ----------
+function dragFloat(panel, head) {
+    head.addEventListener("pointerdown", (e) => {
+        if (e.target.closest("button,a")) return;
+        const sx = e.clientX - panel.offsetLeft, sy = e.clientY - panel.offsetTop;
+        const move = (ev) => {
+            panel.style.left = Math.max(0, ev.clientX - sx) + "px";
+            panel.style.top = Math.max(0, ev.clientY - sy) + "px";
+        };
+        const up = () => {
+            window.removeEventListener("pointermove", move);
+            window.removeEventListener("pointerup", up);
+        };
+        window.addEventListener("pointermove", move);
+        window.addEventListener("pointerup", up);
+    });
+}
+
 function openFloatDetail() {
     closeFloatDetail();
     const panel = document.createElement("div");
@@ -619,27 +656,14 @@ function openFloatDetail() {
     panel.style.top = Math.max(10, Math.min(rect.top, window.innerHeight - 400)) + "px";
     panel.querySelector(".cs-float-close").onclick = closeFloatDetail;
     // 标题栏拖动
-    const head = panel.querySelector(".cs-float-head");
-    head.addEventListener("pointerdown", (e) => {
-        if (e.target.closest("button,a")) return;
-        const sx = e.clientX - panel.offsetLeft, sy = e.clientY - panel.offsetTop;
-        const move = (ev) => {
-            panel.style.left = Math.max(0, ev.clientX - sx) + "px";
-            panel.style.top = Math.max(0, ev.clientY - sy) + "px";
-        };
-        const up = () => {
-            window.removeEventListener("pointermove", move);
-            window.removeEventListener("pointerup", up);
-        };
-        window.addEventListener("pointermove", move);
-        window.addEventListener("pointerup", up);
-    });
+    dragFloat(panel, panel.querySelector(".cs-float-head"));
     S.ui.float = panel;
     return panel.querySelector(".cs-float-body");
 }
 
 function closeFloatDetail() {
-    document.querySelectorAll(".cs-float").forEach((n) => n.remove());
+    // 只关详情浮层;弹窗类浮层(cs-float-modal)有自己的生命周期
+    document.querySelectorAll(".cs-float:not(.cs-float-modal)").forEach((n) => n.remove());
     S.ui.float = null;
 }
 
@@ -2009,6 +2033,8 @@ function injectStyles() {
 .cs-float-close:hover { color:#e2543f; }
 .cs-float-body { overflow-y:auto; padding:10px 12px; }
 .cs-float .cs-detail-row select { width:100%; }
+.cs-float-modal { width:480px; }
+.cs-float-modal .cs-float-body { max-height:calc(100vh - 120px); }
 `;
     document.head.appendChild(style);
 }
@@ -2023,7 +2049,13 @@ function fetchNodeThumbs(node, params) {
             node.csVids = node.csResults.slice(0, 8).map((it) => (it.type || "image") === "video");
             node.csImgs = node.csResults.slice(0, 8).map((it) => {
                 const im = new Image();
-                im.src = it.url || "";
+                const orig = it.url || "";
+                // 加载完成/失败都要触发重绘,否则画布停留在灰占位块
+                im.onload = () => app.canvas.setDirty(true, true);
+                im.onerror = () => {
+                    if (!im.dataset.retried) { im.dataset.retried = "1"; im.src = altSrc(orig); }
+                };
+                im.src = imgSrc(orig);
                 return im;
             });
             node.csMsg = node.csImgs.length ? "" : "没有结果";
@@ -2107,7 +2139,7 @@ app.registerExtension({
                     this.csRects.push({ x, y, w: thumbW, h: thumbH, i });
                     if (this.csVids?.[i]) {
                         // 视频缩略图画占位框,保持与执行侧相同的 index 对齐
-                        ctx.fillStyle = "#26262a";
+                        ctx.fillStyle = "#2e2e33";
                         ctx.fillRect(x, y, thumbW, thumbH);
                         ctx.fillStyle = "#eee";
                         ctx.font = "20px sans-serif";
@@ -2115,7 +2147,7 @@ app.registerExtension({
                     } else if (im.complete && im.naturalWidth > 0) {
                         ctx.drawImage(im, x, y, thumbW, thumbH);
                     } else {
-                        ctx.fillStyle = "#26262a";
+                        ctx.fillStyle = "#2e2e33";
                         ctx.fillRect(x, y, thumbW, thumbH);
                     }
                     const selected = Number(idxW?.value) === i;
@@ -2173,7 +2205,10 @@ app.registerExtension({
                             if (first?.url) {
                                 const im = new Image();
                                 im.onload = () => { node.setDirtyCanvas?.(true, true); };
-                                im.src = first.url;
+                                im.onerror = () => {
+                                    if (!im.dataset.retried) { im.dataset.retried = "1"; im.src = altSrc(first.url); }
+                                };
+                                im.src = imgSrc(first.url);
                                 node.csCover = im;
                             }
                         })
@@ -2261,11 +2296,12 @@ app.registerExtension({
         });
         if (pollTimer) clearInterval(pollTimer);
         pollTimer = setInterval(pollDownloads, 2000);
-        // 点击画布/页面其他区域时关闭悬浮详情面板(侧边栏、浮层、模态内的操作不触发)
+        // 点击画布/页面其他区域时关闭悬浮层(侧边栏、浮层内的操作不触发);先关最上层弹窗,再关详情
         document.addEventListener("pointerdown", (e) => {
-            if (!S.ui.float) return;
             if (e.target.closest(".cs-float") || e.target.closest(".cs-root") || e.target.closest(".cs-modal")) return;
-            closeFloatDetail();
+            const top = S.ui.floatModals?.[S.ui.floatModals.length - 1];
+            if (top) { top.close(); return; }
+            if (S.ui.float) closeFloatDetail();
         }, true);
         console.log("[Civitai-Studio] " + t("readyLog"));
     },
