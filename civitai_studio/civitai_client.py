@@ -116,14 +116,6 @@ def host_allowed_image(url):
     return _host_match(host_of(url), tuple(domains))
 
 
-def append_official_token(url):
-    """官方域受限模型下载用 ?token= 传递鉴权(跨域重定向会剥 Authorization 头)."""
-    key = (config.load().get("api_key") or "").strip()
-    if not key or not is_official_host(url):
-        return url
-    return url + ("&" if "?" in url else "?") + "token=" + urllib.parse.quote(key)
-
-
 def net_error_message(e):
     """把底层网络异常翻译成可操作的中文提示."""
     proxy = _proxy()

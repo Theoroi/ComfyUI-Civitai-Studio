@@ -12,6 +12,7 @@ import hashlib
 import os
 import re
 import time
+import urllib.parse
 import uuid
 
 import aiohttp
@@ -228,6 +229,84 @@ def _content_range_start(resp):
     return int(m.group(1)) if m else None
 
 
+class _DownloadStatusError(Exception):
+    """下载返回鉴权类状态(401/403):换源(带 token / 换官方域)重试."""
+
+    def __init__(self, status):
+        super().__init__(f"HTTP {status}")
+        self.status = status
+
+
+async def _download_candidates(url):
+    """下载地址候选:原 URL → 原URL+token → 官方域 → 官方域+token(去重)."""
+    key = (config.load().get("api_key") or "").strip()
+    out = [url]
+    if key:
+        out.append(url + ("&" if "?" in url else "?") + "token=" + urllib.parse.quote(key))
+    com = re.sub(r"(?<=://)[^/]+", "civitai.com", url, count=1)
+    if com != url:
+        out.append(com)
+        if key:
+            out.append(com + ("&" if "?" in com else "?") + "token=" + urllib.parse.quote(key))
+    seen, dedup = set(), []
+    for c in out:
+        if c not in seen:
+            seen.add(c)
+            dedup.append(c)
+    return dedup
+
+
+async def _download_to_tmp(job, attempt_url, tmp, dl_timeout, started):
+    """对单个候选地址完成流式下载(含断点续传);401/403 抛 _DownloadStatusError."""
+    extra_headers = {"Accept": "*/*", "Accept-Encoding": "identity"}
+    resume_from = 0
+    if os.path.exists(tmp):
+        resume_from = os.path.getsize(tmp)
+        if resume_from > 0:
+            extra_headers["Range"] = f"bytes={resume_from}-"
+    received = 0
+    job["received"] = received
+    async with await civitai_client.open_isolated_stream(
+        attempt_url, extra_headers=extra_headers, timeout=dl_timeout
+    ) as resp:
+        if resp.status == 416:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+            raise ValueError("断点文件与服务器不匹配,已清除 .part 临时文件,请重试")
+        if resp.status in (401, 403):
+            raise _DownloadStatusError(resp.status)
+        if resp.status not in (200, 206):
+            raise ValueError(f"下载失败 HTTP {resp.status}")
+        if (resp.content_type or "").startswith("text/html"):
+            raise ValueError("下载被拦截(服务器返回的是网页)— 可能是 WAF 校验,换个代理节点后重试")
+        try:
+            content_length = int(resp.headers.get("Content-Length") or 0)
+        except ValueError:
+            content_length = 0
+        append_mode = resp.status == 206 and resume_from > 0
+        if append_mode:
+            start = _content_range_start(resp)
+            if start is None or start != resume_from:
+                # 起点缺失/不符都不盲续:206 而无 Content-Range 同样从头下
+                append_mode = False
+        received = resume_from if append_mode else 0
+        job["received"] = received
+        if content_length:
+            job["total"] = content_length + received
+        with open(tmp, "ab" if append_mode else "wb") as f:
+            async for chunk in resp.content.iter_chunked(512 * 1024):
+                if job["id"] in _cancel_flags:
+                    raise asyncio.CancelledError()
+                f.write(chunk)
+                received += len(chunk)
+                elapsed = max(time.time() - started, 1e-6)
+                job["received"] = received
+                job["speed"] = received / elapsed
+                if job["total"]:
+                    job["progress"] = min(1.0, received / job["total"])
+    return received
+
+
 async def _run_job(job):
     data = await civitai_client.get_json(f"/model-versions/{job['version_id']}")
     if not job.get("version_name"):
@@ -244,7 +323,6 @@ async def _run_job(job):
         url = f"{civitai_client.base_url()}/api/download/models/{job['version_id']}"
     if url.startswith("/"):
         url = civitai_client.base_url() + url
-    url = civitai_client.append_official_token(url)
 
     dest_dir = os.path.join(job["root"], job["subfolder"]) if job["subfolder"] else job["root"]
     os.makedirs(dest_dir, exist_ok=True)
@@ -257,59 +335,27 @@ async def _run_job(job):
     job["dest"] = dest
     job["total"] = int((file.get("sizeKB") or 0) * 1024)
 
-    extra_headers = {"Accept": "*/*", "Accept-Encoding": "identity"}
-    resume_from = 0
-    if os.path.exists(tmp):
-        resume_from = os.path.getsize(tmp)
-        if resume_from > 0:
-            extra_headers["Range"] = f"bytes={resume_from}-"
-    # 流式下载:不限总时长,只限单次读超时;允许重定向(下载落盘非浏览器,且
-    # Civitai 下载链路本身就会 302 到签名 CDN 域);用独立会话,不受共享会话退役影响
+    # 流式下载:不限总时长,只限单次读超时;用独立会话,不受共享会话退役影响;
+    # 401/403 时依次换源重试(带 token / 换官方域)
     dl_timeout = aiohttp.ClientTimeout(total=None, connect=20, sock_read=90)
-    received = 0
     started = time.time()
-    job["received"] = 0
-    async with civitai_client.open_isolated_stream(
-        url, extra_headers=extra_headers, timeout=dl_timeout
-    ) as resp:
-        if resp.status == 416:
-            if os.path.exists(tmp):
-                os.remove(tmp)
-            raise ValueError("断点文件与服务器不匹配,已清除 .part 临时文件,请重试")
-        if resp.status not in (200, 206):
-            raise ValueError(f"下载失败 HTTP {resp.status}")
-        if (resp.content_type or "").startswith("text/html"):
-            raise ValueError("下载被拦截(服务器返回的是网页)— 可能是 WAF 校验,换个代理节点后重试")
+    candidates = await _download_candidates(url)
+    last_status = None
+    used_url = url
+    for cand in candidates:
         try:
-            content_length = int(resp.headers.get("Content-Length") or 0)
-        except ValueError:
-            content_length = 0
-        append_mode = resp.status == 206 and resume_from > 0
-        if append_mode:
-            start = _content_range_start(resp)
-            if start is None or start != resume_from:
-                # 起点缺失/不符都不盲续:206 而无 Content-Range 同样从头下
-                append_mode = False
-        if append_mode:
-            received = resume_from
-        else:
-            received = 0
-            resume_from = 0
-        job["received"] = received
-        if content_length:
-            job["total"] = content_length + received
-        mode = "ab" if append_mode else "wb"
-        with open(tmp, mode) as f:
-            async for chunk in resp.content.iter_chunked(512 * 1024):
-                if job["id"] in _cancel_flags:
-                    raise asyncio.CancelledError()
-                f.write(chunk)
-                received += len(chunk)
-                elapsed = max(time.time() - started, 1e-6)
-                job["received"] = received
-                job["speed"] = received / elapsed
-                if job["total"]:
-                    job["progress"] = min(1.0, received / job["total"])
+            await _download_to_tmp(job, cand, tmp, dl_timeout, started)
+            used_url = cand
+            break
+        except _DownloadStatusError as e:
+            last_status = e.status
+            continue
+    else:
+        raise ValueError(
+            f"下载失败 HTTP {last_status}(该模型可能需要登录或为 Early Access:"
+            "请在设置里配置 API Key,或在浏览器打开模型页确认可下载)"
+        )
+    received = job.get("received", 0)
 
     expected = (file.get("hashes") or {}).get("SHA256")
     if config.load().get("verify_hash", True) and expected:

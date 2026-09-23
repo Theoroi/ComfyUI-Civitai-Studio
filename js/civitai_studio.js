@@ -872,12 +872,15 @@ function renderLocalExpand(ex, m, data, opts = {}) {
                 <div class="cs-expand-actions">
                     <a class="cs-btn cs-btn-mini" href="${esc(civitaiPage())}/models/${esc(String(data.id))}" target="_blank" rel="noopener noreferrer">Civitai 页面 ↗</a>
                     ${version.id ? `<button class="cs-btn cs-btn-mini cs-btn-primary" data-dl-version="${esc(String(version.id))}">下载此版本</button>` : ""}
+                    ${civ.model_id ? `<button class="cs-btn cs-btn-mini" data-re-associate>重新关联</button>` : ""}
                     ${civ.model_id ? `<button class="cs-btn cs-btn-mini" data-refresh-meta>刷新元数据</button>` : ""}
                 </div>
             </div>
         </div>`;
     $$(".cs-trigger", ex).forEach((el) => { el.onclick = () => copyText(el.textContent, el); });
     $$(".cs-copyable", ex).forEach((el) => { el.onclick = () => copyText(el.dataset.copyText || "", el); });
+    const reAssoc = $("[data-re-associate]", ex);
+    if (reAssoc) reAssoc.onclick = () => associateDialog(m);
     const rf = $("[data-refresh-meta]", ex);
     if (rf) rf.onclick = async () => {
         rf.disabled = true;
@@ -1582,9 +1585,15 @@ app.registerExtension({
         // 前后端版本自检:服务端代码比前端旧 = 重启前的内存态,直接横幅提示
         try {
             const v = await apiGet("/civitai_studio/version");
-            const num = (s) => String(s).split(".").map((x) => parseInt(x, 10) || 0);
+            const num = (s) => String(s ?? "").split(".").map((x) => parseInt(x, 10) || 0);
             const [a, b] = [num(v.version), num(JS_VERSION)];
-            const newer = (x, y) => x[0] !== y[0] ? x[0] > y[0] : x[1] !== y[1] ? x[1] > y[1] : (x[2] || 0) > (y[2] || 0);
+            const newer = (x, y) => {
+                for (let i = 0; i < Math.max(x.length, y.length); i++) {
+                    const xi = x[i] || 0, yi = y[i] || 0;
+                    if (xi !== yi) return xi > yi;
+                }
+                return false;
+            };
             if (newer(b, a)) {
                 S.ui.backendStale = true;
                 toast("warning", "Civitai Studio 后端代码过旧", `服务端 v${v.version} < 前端 v${JS_VERSION} — 请重启一次 ComfyUI 加载新功能`);
