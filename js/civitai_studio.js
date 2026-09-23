@@ -727,11 +727,20 @@ async function saveImageToOutput(url, btn) {
     }
 }
 
-function renderVersion(version, model, box) {
+async function renderVersion(version, model, box) {
     const body = box ? $("#cs-version-body", box) : null;
     if (!body || !version) return;
     const triggers = version.trainedWords || [];
-    const images = version.images || [];
+    let images = version.images || [];
+    // 镜像站的列表响应不含图片 meta:从 /version/{id} 拉全量(含生成参数)
+    try {
+        if (version.id && !images.some((i) => i.meta)) {
+            const vdata = await apiGet(`/civitai_studio/version/${encodeURIComponent(String(version.id))}`);
+            if (Array.isArray(vdata.images) && vdata.images.some((i) => i.meta)) {
+                images = vdata.images;
+            }
+        }
+    } catch (e) { /* 拉取失败用现有数据 */ }
     body.innerHTML = `
         ${triggers.length ? `
         <div class="cs-section">
@@ -780,10 +789,31 @@ function renderVersion(version, model, box) {
     });
 }
 
-function showImageMeta(image) {
-    const meta = image.meta;
+async function showImageMeta(image) {
+    let meta = image.meta;
+    if (!meta && Array.isArray(image.modelVersionIds) && image.modelVersionIds.length) {
+        // 镜像图片流不带 meta:两跳到版本接口找回生成参数
+        try {
+            const v = await apiGet(`/civitai_studio/version/${encodeURIComponent(String(image.modelVersionIds[0]))}`);
+            const match = (v.images || []).find((i) => String(i.id) === String(image.id) || (image.hash && i.hash === image.hash)) || {};
+            if (match.meta) image = { ...image, meta: match.meta };
+        } catch (e) { /* 保留无 meta 状态 */ }
+        meta = image.meta;
+    }
     if (!meta) {
-        showModal(`<h3 class="cs-modal-title">${esc(t("genParams"))}</h3><p class="cs-modal-msg">${esc(t("noGenParams"))}</p>`);
+        // 仍无参数:降级展示作者/数据 + 存图入口
+        const m0 = showModal(`
+            <h3 class="cs-modal-title">${esc(t("genParams"))}</h3>
+            <img src="${esc(imgSrc(image.url))}" style="width:100%;border-radius:8px;display:block;margin-bottom:10px" onerror="this.style.display='none'"/>
+            <div class="cs-kv-grid">
+                <div><b>${esc(t("galleryAuthor"))}</b><span>${esc(image.username || "-")}</span></div>
+                <div><b>❤</b><span>${fmtNum(image.stats?.heartCount ?? image.stats?.likeCount)}</span></div>
+            </div>
+            <div class="cs-modal-actions">
+                <button class="cs-btn cs-btn-primary" data-save-img>${esc(t("saveBtn"))}</button>
+            </div>`);
+        const sb = $("[data-save-img]", m0.box);
+        if (sb) sb.onclick = () => saveImageToOutput(image.url, sb);
         return;
     }
     const kv = [
@@ -2015,6 +2045,13 @@ function injectStyles() {
 .cs-check { flex-direction:row !important; align-items:center; gap:6px !important; }
 .cs-form-hint { font-size:11px; color:var(--desc-text-color,#999); opacity:.8; }
 .cs-dl-hint { background:rgba(0,0,0,.2); border-radius:6px; padding:6px 8px; }
+.cs-float { position:fixed; width:460px; max-width:calc(100vw - 20px); max-height:calc(100vh - 24px); background:var(--comfy-menu-bg,#2a2a2a); border:1px solid var(--border-color,#444); border-radius:10px; box-shadow:0 12px 40px rgba(0,0,0,.55); z-index:60000; display:flex; flex-direction:column; overflow:hidden; }
+.cs-float-head { display:flex; gap:8px; align-items:center; padding:8px 10px; border-bottom:1px solid var(--border-color,#444); cursor:move; user-select:none; }
+.cs-float-title { flex:1; min-width:0; font-weight:600; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.cs-float-close { background:transparent; border:none; color:var(--fg-color,#eee); font-size:14px; cursor:pointer; padding:0 2px; }
+.cs-float-close:hover { color:#e2543f; }
+.cs-float-body { overflow-y:auto; padding:10px 12px; }
+.cs-float .cs-detail-row select { width:100%; }
 `;
     document.head.appendChild(style);
 }
@@ -2075,6 +2112,12 @@ app.registerExtension({
         });
         if (pollTimer) clearInterval(pollTimer);
         pollTimer = setInterval(pollDownloads, 2000);
+        // 点击画布/页面其他区域时关闭悬浮详情面板(侧边栏、浮层、模态内的操作不触发)
+        document.addEventListener("pointerdown", (e) => {
+            if (!S.ui.float) return;
+            if (e.target.closest(".cs-float") || e.target.closest(".cs-root") || e.target.closest(".cs-modal")) return;
+            closeFloatDetail();
+        }, true);
         console.log("[Civitai-Studio] " + t("readyLog"));
     },
 });

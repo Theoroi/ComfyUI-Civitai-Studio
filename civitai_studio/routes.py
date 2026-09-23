@@ -591,6 +591,19 @@ async def local_refresh_meta(request):
     return _ok()
 
 
+@_get("/civitai_studio/version/{vid}")
+async def version_detail(request):
+    """单个版本的完整数据(含 images.meta — 列表接口在镜像上被剥掉,这里保留)."""
+    vid = request.match_info["vid"]
+    if not vid.isdigit():
+        return _json_error("版本 ID 必须是数字", 400)
+    try:
+        data = await civitai_client.get_json(f"/model-versions/{vid}")
+    except civitai_client.CivitaiError as e:
+        return _json_error(e, 502)
+    return web.json_response(data)
+
+
 @_post("/civitai_studio/save_image")
 async def save_image(request):
     """把 Civitai 预览图存入 ComfyUI output 目录."""
