@@ -30,7 +30,7 @@ const SORTS = ["Most Downloaded", "Highest Rated", "Newest"];
 const PERIODS = ["AllTime", "Month", "Week", "Day"];
 const NSFW_LEVELS = [0, 1, 2];
 
-const JS_VERSION = "0.5.18";
+const JS_VERSION = "0.5.19";
 
 // ---------- i18n ----------
 const STR = {
@@ -440,14 +440,9 @@ function showModal(innerHTML, cls) {
         innerTitle.remove();
     }
     document.body.appendChild(panel);
-    // 定位:画布右缘内收(与详情浮层一致),避开侧边栏
-    const a = floatAnchor();
-    const w = 480;
-    // 画布中间偏右:右移 10% 画布宽,垂直留出工具栏高度
-    let x = Math.round(a.left + (a.right - a.left - w) / 2 + (a.right - a.left) * 0.10);
-    x = Math.max(a.left + 10, Math.min(x, a.right - w - 10));
-    panel.style.left = x + "px";
-    panel.style.top = Math.max(10, Math.min(a.top + 72, window.innerHeight - 320)) + "px";
+    // 定位:吸附左侧边栏右缘(随侧边栏宽度变动)
+    positionFloat(panel, 480);
+    watchSidebarDock();
     dragFloat(panel, panel.querySelector(".cs-float-head"));
     const close = () => {
         document.removeEventListener("keydown", escHandler);
@@ -675,6 +670,48 @@ function floatAnchor() {
     return { left: w / 2 - 240, right: w / 2 + 240, top: 60 };
 }
 
+function sidebarDockRect() {
+    // 左侧边栏面板(排除右侧边栏与收起态)
+    const panels = [...document.querySelectorAll(".side-bar-panel")]
+        .map((p) => p.getBoundingClientRect())
+        .filter((r) => r.width > 60 && r.left < window.innerWidth / 2)
+        .sort((a, b) => b.right - a.right);
+    return panels[0] || null;
+}
+
+let csDockObserver = null;
+function watchSidebarDock() {
+    if (!window.ResizeObserver) return;
+    if (!csDockObserver) {
+        csDockObserver = new ResizeObserver(() => repositionFloats());
+        window.addEventListener("resize", repositionFloats);
+    }
+    document.querySelectorAll(".side-bar-panel").forEach((p) => csDockObserver.observe(p));
+}
+
+function repositionFloats() {
+    const floats = [];
+    if (S.ui.float) floats.push([S.ui.float, 440]);
+    for (const m of S.ui.floatModals || []) floats.push([m.overlay, parseFloat(m.overlay.dataset.csW) || 480]);
+    for (const [panel, w] of floats) positionFloat(panel, w);
+}
+
+// 悬浮层位置:优先吸附左侧边栏右缘并随其宽度变动;侧边栏收起时退回画布中间偏右
+function positionFloat(panel, w) {
+    panel.dataset.csW = String(w);
+    const sb = sidebarDockRect();
+    if (sb) {
+        panel.style.left = Math.round(sb.right + 8) + "px";
+        panel.style.top = Math.max(10, Math.min(sb.top + 8, window.innerHeight - 320)) + "px";
+        return;
+    }
+    const a = floatAnchor();
+    let x = Math.round(a.left + (a.right - a.left - w) / 2 + (a.right - a.left) * 0.10);
+    x = Math.max(a.left + 10, Math.min(x, a.right - w - 10));
+    panel.style.left = x + "px";
+    panel.style.top = Math.max(10, Math.min(a.top + 72, window.innerHeight - 320)) + "px";
+}
+
 function openFloatDetail() {
     closeAllFloats(); // 单实例:开新的浮层前关掉旧浮层
     const panel = document.createElement("div");
@@ -686,13 +723,8 @@ function openFloatDetail() {
         </div>
         <div class="cs-float-body"></div>`;
     document.body.appendChild(panel);
-    const a = floatAnchor();
-    const w = 440;
-    // 画布中间偏右,与弹窗定位一致
-    let x = Math.round(a.left + (a.right - a.left - w) / 2 + (a.right - a.left) * 0.10);
-    x = Math.max(a.left + 10, Math.min(x, a.right - w - 10));
-    panel.style.left = x + "px";
-    panel.style.top = Math.max(10, Math.min(a.top + 72, window.innerHeight - 400)) + "px";
+    positionFloat(panel, 440);
+    watchSidebarDock();
     panel.querySelector(".cs-float-close").onclick = closeFloatDetail;
     // 标题栏拖动
     dragFloat(panel, panel.querySelector(".cs-float-head"));
