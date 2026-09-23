@@ -1621,7 +1621,7 @@ function renderGallery(reset) {
                     src="${esc(imgSrc(img.url))}#t=0.001" data-direct="${esc(img.url)}"
                     onerror="this.style.display='none'"></video>`;
         } else {
-            item.innerHTML = `${save}<img loading="lazy" src="${esc(imgSrc(img.url))}" data-direct="${esc(img.url)}"
+            item.innerHTML = `${save}<img loading="lazy" src="${esc(imgSrc(cdnThumb(img.url)))}" data-direct="${esc(img.url)}"
                     onerror="this.style.display='none'"/>`;
         }
         const mediaEl = item.querySelector("img,video");
@@ -2197,6 +2197,60 @@ function isVideoItem(item) {
     return (item.type || "") === "video" || /\.mp4($|\?)/.test(item.url || "");
 }
 
+// Civitai CDN 缩放变体:把 original=true 段换成 width=N,体积可降两个数量级
+function cdnThumb(url, w = 256) {
+    if (!url) return "";
+    return url.replace("/original=true/", `/width=${w}/`);
+}
+
+// 面板最大高度固定:若跟随节点尺寸会形成正反馈(面板把节点撑大→上限跟着变大)
+function applyStripHeight(node) {
+    const strip = node?.csStrip;
+    if (!strip) return;
+    strip.style.maxHeight = "420px";
+}
+
+// 顶部信息面板:已选缩略图 + pos/neg/lora/base 摘要(写进 cs_info widget)
+function renderSelInfo(node) {
+    const el = node?.csInfo;
+    if (!el) return;
+    const uw = (node.widgets || []).find((w) => w.name === "image_url");
+    const sel = (node.csResults || []).find((it) => it.url && it.url === uw?.value);
+    if (!sel) {
+        el.innerHTML = `<span style="color:#888;font-size:11px;">${esc(S.lang === "zh" ? "未选择(点击缩略图选择)" : "Nothing selected (click a thumbnail)")}</span>`;
+        return;
+    }
+    const meta = sel.meta || {};
+    const loras = (meta.resources || [])
+        .filter((r) => (r.type || "lora").toLowerCase() === "lora")
+        .map((r) => `${r.name || "?"}×${r.weight ?? 1}`).join(", ");
+    const row = (label, text, color) => {
+        const t = text ? String(text) : "-";
+        const d = document.createElement("div");
+        d.style.cssText = "display:flex;gap:4px;min-width:0;";
+        d.title = t;
+        d.innerHTML = `<span style="color:${color};flex:0 0 auto;">${esc(label)}:</span>`
+            + `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(t.length > 120 ? t.slice(0, 120) + "…" : t)}</span>`;
+        return d;
+    };
+    el.innerHTML = "";
+    const pic = document.createElement("div");
+    pic.style.cssText = "flex:0 0 56px;height:74px;background:#2e2e33;border-radius:4px;overflow:hidden;";
+    const im = document.createElement("img");
+    im.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;";
+    im.src = imgSrc(cdnThumb(sel.url));
+    im.onerror = () => { pic.textContent = "!"; };
+    pic.appendChild(im);
+    el.appendChild(pic);
+    const lines = document.createElement("div");
+    lines.style.cssText = "flex:1;min-width:0;font-size:11px;line-height:1.5;overflow:hidden;color:#ccc;";
+    lines.appendChild(row("pos", meta.prompt, "#e2836b"));
+    lines.appendChild(row("neg", meta.negativePrompt, "#6ba1e2"));
+    lines.appendChild(row("lora", loras, "#e2b96b"));
+    lines.appendChild(row("base", sel.baseModel, "#8fd4a0"));
+    el.appendChild(lines);
+}
+
 // 悬浮层大图/播放器(图片与视频通用)
 function mediaViewerHtml(item) {
     const src = esc(item.url || "");
@@ -2212,11 +2266,14 @@ function mediaViewerHtml(item) {
 function renderNodeThumbs(node) {
     const strip = node.csStrip;
     if (!strip) return;
+    applyStripHeight(node);
     const keepScroll = strip.scrollTop; // 重建后保持滚动位置(加载更多不跳顶)
-    strip.querySelectorAll(".cs-thumb,.cs-thumb-msg,.cs-thumb-bar,.cs-thumb-more")
+    strip.querySelectorAll(".cs-thumb,.cs-thumb-msg,.cs-thumb-bar,.cs-thumb-more,.cs-selinfo")
         .forEach((el) => el.remove());
     const st = node.csFetch || {};
     const total = (node.csResults || []).length;
+    const uw = (node.widgets || []).find((w) => w.name === "image_url");
+    renderSelInfo(node); // 顶部信息面板(独立 widget,随选择刷新)
 
     // 状态条:提示 + 计数 + spinner
     const bar = document.createElement("div");
@@ -2243,7 +2300,6 @@ function renderNodeThumbs(node) {
         msg.textContent = node.csMsg || (S.lang === "zh" ? "没有结果" : "No results");
         strip.appendChild(msg);
     }
-    const uw = (node.widgets || []).find((w) => w.name === "image_url");
     items.forEach((it, i) => {
         const cell = document.createElement("div");
         cell.className = "cs-thumb";
@@ -2264,9 +2320,9 @@ function renderNodeThumbs(node) {
         } else {
             const im = document.createElement("img");
             im.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;";
-            const orig = it.url || "";
-            im.onerror = () => { if (!im.dataset.retried) { im.dataset.retried = "1"; im.src = altSrc(orig); } };
-            im.src = imgSrc(orig);
+            const thumb = cdnThumb(it.url || "");
+            im.onerror = () => { if (!im.dataset.retried) { im.dataset.retried = "1"; im.src = altSrc(thumb); } };
+            im.src = imgSrc(thumb);
             cell.appendChild(im);
         }
         if (uw?.value && uw.value === it.url) cell.style.borderColor = "#4a90e2";
@@ -2353,7 +2409,7 @@ app.registerExtension({
 
                 const strip = document.createElement("div");
                 strip.style.cssText = "display:flex;flex-wrap:wrap;gap:6px;padding:4px;width:100%;"
-                    + "align-content:flex-start;max-height:520px;overflow-y:auto;";
+                    + "align-content:flex-start;max-height:340px;overflow-y:auto;"; // 初始值,之后随节点高度更新
                 // 滚轮:挂到 window 捕获阶段(最早触发),命中面板时手动滚动并拦截,
                 // 防止 ComfyUI 高层 handler 先行 preventDefault/缩放画布
                 const wheelTarget = strip;
@@ -2368,6 +2424,18 @@ app.registerExtension({
                 node.csStrip = strip;
                 this.addDOMWidget("cs_thumbs", "cs_thumbs", strip);
                 if (this.size[0] < 460) this.size[0] = 460; // 保证默认 3 列以上
+                // 信息面板独立 widget,移到 widgets 首位:渲染在标题/输出端正下方
+                const infoEl = document.createElement("div");
+                infoEl.style.cssText = "width:100%;display:flex;gap:8px;align-items:flex-start;"
+                    + "background:rgba(255,255,255,.04);border:1px solid #3a3a40;border-radius:6px;padding:6px;";
+                infoEl.textContent = S.lang === "zh" ? "未选择(点击缩略图选择)" : "Nothing selected (click a thumbnail)";
+                node.csInfo = infoEl;
+                this.addDOMWidget("cs_info", "cs_info", infoEl);
+                const infoW = node.widgets.find((w2) => w2.name === "cs_info");
+                if (infoW) {
+                    node.widgets.splice(node.widgets.indexOf(infoW), 1);
+                    node.widgets.unshift(infoW);
+                }
 
                 const sig = () => ["base_model", "tag", "sort", "period", "nsfw", "limit"]
                     .map((n) => widget(n)?.value ?? "").join("|");
