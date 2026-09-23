@@ -72,7 +72,7 @@ class CivitaiImageSearch:
         # 分组顺序与 UI 两列排版意图一致:底模/NSFW → Tag → 时间/排序 → 数量/序号
         return {"required": {
             "base_model": (["(any)"] + sorted(_BASE_MODEL_OPTIONS, key=str.lower),),
-            "nsfw": (["true", "false"],),
+            "nsfw": (["false", "true"],),
             "tag": ("STRING", {"default": "", "multiline": False,
                                "tooltip": "仅数字 Tag ID,多个用逗号分隔 / numeric tag IDs only, comma-separated"}),
             "period": (["AllTime", "Month", "Week", "Day"],),
