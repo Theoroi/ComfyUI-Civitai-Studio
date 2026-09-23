@@ -221,7 +221,13 @@ async def close_session():
     _retire_session_later(old)
 
 
-async def open_stream(url, extra_headers=None, timeout=None, allow_redirects=False):
+def _clean_params(params):
+    if not params:
+        return None
+    return {k: v for k, v in params.items() if v not in (None, "", [])}
+
+
+async def open_stream(url, extra_headers=None, timeout=None, allow_redirects=False, params=None):
     """发起 GET,返回响应上下文:async with await open_stream(...) as resp.
 
     鉴权头按目标 url 的主机逐请求决定;默认不跟随重定向(调用方按需开启或手动逐跳)。
@@ -234,6 +240,8 @@ async def open_stream(url, extra_headers=None, timeout=None, allow_redirects=Fal
     kwargs = {"headers": _headers_for(url, extra_headers), "allow_redirects": allow_redirects}
     if timeout is not None:
         kwargs["timeout"] = timeout
+    if params is not None:
+        kwargs["params"] = _clean_params(params)
     if not via_connector:
         kwargs["proxy"] = p or None
     return await sess.get(url, **kwargs)
@@ -274,7 +282,7 @@ async def get_json(path, params=None, timeout=None):
     last_error = None
     for attempt in range(3):  # WAF 拦截/限流/网络抖动:换连接重试
         try:
-            async with await open_stream(url, timeout=timeout, allow_redirects=True) as resp:
+            async with await open_stream(url, params=params, timeout=timeout, allow_redirects=True) as resp:
                 # 状态码先判,网关故障的空/HTML 响应体不必解析
                 if resp.status in _RETRYABLE_STATUS:
                     try:
