@@ -82,6 +82,9 @@ class CivitaiImageSearch:
             # 填入 Civitai 图片数字 ID 后,优先按 ID 精确取图与参数(忽略 index)
             "image_id": ("STRING", {"default": "", "multiline": False,
                                     "tooltip": "填入 Civitai 图片数字 ID:优先按此 ID 精确取图与生成参数(忽略 index)"}),
+            # 面板布局参数:仅前端渲染使用
+            "thumbs_size": (["medium", "small", "large"],),
+            "panel_h": ("INT", {"default": 420, "min": 160, "max": 1600, "step": 20}),
         }}
 
     RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING", "STRING", "IMAGE")
@@ -89,7 +92,7 @@ class CivitaiImageSearch:
     FUNCTION = "run"
     CATEGORY = "Civitai Studio"
 
-    def run(self, base_model, nsfw, tag, period, sort, limit, index, image_id):
+    def run(self, base_model, nsfw, tag, period, sort, limit, index, image_id, thumbs_size, panel_h):
         params = {
             "limit": str(min(100, max(10, int(limit)))),
             "nsfw": str(nsfw), "sort": sort, "period": period, "withMeta": "true",

@@ -2203,13 +2203,6 @@ function cdnThumb(url, w = 256) {
     return url.replace("/original=true/", `/width=${w}/`);
 }
 
-// 面板最大高度固定:若跟随节点尺寸会形成正反馈(面板把节点撑大→上限跟着变大)
-function applyStripHeight(node) {
-    const strip = node?.csStrip;
-    if (!strip) return;
-    strip.style.maxHeight = "420px";
-}
-
 // 顶部信息面板:已选缩略图 + pos/neg/lora/base 摘要(写进 cs_info widget)
 function renderSelInfo(node) {
     const el = node?.csInfo;
@@ -2269,8 +2262,11 @@ function mediaViewerHtml(item) {
 function renderNodeThumbs(node) {
     const strip = node.csStrip;
     if (!strip) return;
-    applyStripHeight(node);
     const keepScroll = strip.scrollTop; // 重建后保持滚动位置(加载更多不跳顶)
+    const wv = (name) => { const w = (node.widgets || []).find((x) => x.name === name); return w ? w.value : undefined; };
+    const cols = { small: 6, medium: 4, large: 3 }[String(wv("thumbs_size") || "medium")] || 4;
+    const panelH = Math.max(160, parseInt(wv("panel_h"), 10) || 420);
+    strip.style.maxHeight = panelH + "px";
     strip.querySelectorAll(".cs-thumb,.cs-thumb-msg,.cs-thumb-bar,.cs-thumb-more,.cs-selinfo")
         .forEach((el) => el.remove());
     const st = node.csFetch || {};
@@ -2308,7 +2304,8 @@ function renderNodeThumbs(node) {
         cell.className = "cs-thumb";
         cell.title = "index " + i;
         // 固定 4 列等宽:末行不足时尺寸不变(flex-grow 会让末行撑大)
-        cell.style.cssText = "position:relative;flex:0 0 calc((100% - 18px)/4);max-width:calc((100% - 18px)/4);"
+        cell.style.cssText = `position:relative;flex:0 0 calc((100% - ${(cols - 1) * 6}px)/${cols});`
+            + `max-width:calc((100% - ${(cols - 1) * 6}px)/${cols});`
             + "aspect-ratio:3/4;background:#2e2e33;border:2px solid #555;border-radius:4px;overflow:hidden;cursor:pointer;";
         if (isVideoItem(it)) {
             // 静音取首帧作缩略图
@@ -2489,6 +2486,9 @@ app.registerExtension({
                     // image_id 手动粘贴/修改也要刷新信息面板(文本输入不触发事件)
                     const cur = widget("image_id")?.value || "";
                     if (cur !== node.csLastId) { node.csLastId = cur; renderSelInfo(node); }
+                    // 面板布局参数变化 → 只重排版不重新拉取
+                    const ss = String(widget("thumbs_size")?.value || "medium") + "|" + String(widget("panel_h")?.value || "");
+                    if (ss !== node.csLastSizeSig) { node.csLastSizeSig = ss; renderNodeThumbs(node); }
                 }, 700);
                 return r;
             };
