@@ -152,7 +152,13 @@ async function apiJson(url, opts) {
     const resp = await api.fetchApi(url, opts);
     let data = null;
     try { data = await resp.json(); } catch (e) { /* empty body */ }
-    if (!resp.ok) throw new Error((data && data.error) || `HTTP ${resp.status}`);
+    if (!resp.ok) {
+        if (resp.status === 405 && url.startsWith("/civitai_studio/")) {
+            // POST 落到了静态文件处理器 = 服务端还没有这条新路由
+            throw new Error("服务端尚未加载该功能 — 请重启一次 ComfyUI 后重试");
+        }
+        throw new Error((data && data.error) || `HTTP ${resp.status}`);
+    }
     return data;
 }
 
