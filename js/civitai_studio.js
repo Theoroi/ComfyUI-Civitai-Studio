@@ -30,7 +30,7 @@ const SORTS = ["Most Downloaded", "Highest Rated", "Newest"];
 const PERIODS = ["AllTime", "Month", "Week", "Day"];
 const NSFW_LEVELS = [0, 1, 2];
 
-const JS_VERSION = "0.3.0";
+const JS_VERSION = "0.4.0";
 
 // ---------- i18n ----------
 const STR = {
@@ -237,6 +237,7 @@ let S = {
     },
     local: { models: [], search: "", type: "", loading: false, updates: {}, truncated: false, openId: null, detailCache: {} },
     dl: { jobs: [], lastSig: "", failStreak: 0 },
+    gal: { items: [], next: [], sort: "Newest", period: "AllTime", loading: false, error: "" },
     ui: { tab: "browse", root: null, scrollTop: 0, detailId: null, backendStale: false },
 };
 
@@ -526,7 +527,6 @@ function renderResults(reset) {
 function updateStatusLine() {
     const el = $("#cs-status");
     if (!el) return;
-    if (S.ui.detailId) { el.textContent = ""; return; }
     const st = S.browse;
     if (st.loading) {
         el.textContent = t("statusLoading");
@@ -590,48 +590,75 @@ function makeCard(model) {
         el.src = imgSrc(url) + (isVideo ? "#t=0.001" : "");
         $(".cs-card-cover", card).prepend(el);
     }
-    card.onclick = () => openDetail(model.id);
+    card.onclick = () => openBrowseFloat(model.id);
     return card;
 }
 
-// ---------- 详情页 ----------
-async function openDetail(modelId) {
-    const listView = $("#cs-list-view");
-    const detailView = $("#cs-detail-view");
-    if (!detailView) return;
-    S.ui.detailId = String(modelId); // 先置,状态行立刻让位
-    updateStatusLine();
-    listView.style.display = "none";
-    detailView.style.display = "block";
-    detailView.innerHTML = `<div class="cs-empty">${esc(t("statusLoading"))}</div>`;
+// ---------- 悬浮详情面板(独立于侧边栏,可拖动) ----------
+function openFloatDetail() {
+    closeFloatDetail();
+    const panel = document.createElement("div");
+    panel.className = "cs-float";
+    panel.innerHTML = `
+        <div class="cs-float-head">
+            <span class="cs-float-title"></span>
+            <button class="cs-float-close">✕</button>
+        </div>
+        <div class="cs-float-body"></div>`;
+    document.body.appendChild(panel);
+    // 定位:贴着 ComfyUI 侧边栏右侧打开
+    const rect = S.ui.root ? S.ui.root.getBoundingClientRect() : { right: window.innerWidth / 2, top: 60 };
+    const w = 440;
+    let x = Math.round(rect.right + 10);
+    if (x + w > window.innerWidth - 10) x = Math.max(10, window.innerWidth - w - 10);
+    panel.style.left = x + "px";
+    panel.style.top = Math.max(10, Math.min(rect.top, window.innerHeight - 400)) + "px";
+    panel.querySelector(".cs-float-close").onclick = closeFloatDetail;
+    // 标题栏拖动
+    const head = panel.querySelector(".cs-float-head");
+    head.addEventListener("pointerdown", (e) => {
+        if (e.target.closest("button,a")) return;
+        const sx = e.clientX - panel.offsetLeft, sy = e.clientY - panel.offsetTop;
+        const move = (ev) => {
+            panel.style.left = Math.max(0, ev.clientX - sx) + "px";
+            panel.style.top = Math.max(0, ev.clientY - sy) + "px";
+        };
+        const up = () => {
+            window.removeEventListener("pointermove", move);
+            window.removeEventListener("pointerup", up);
+        };
+        window.addEventListener("pointermove", move);
+        window.addEventListener("pointerup", up);
+    });
+    S.ui.float = panel;
+    return panel.querySelector(".cs-float-body");
+}
+
+function closeFloatDetail() {
+    document.querySelectorAll(".cs-float").forEach((n) => n.remove());
+    S.ui.float = null;
+}
+
+async function openBrowseFloat(modelId) {
+    const body = openFloatDetail();
+    body.innerHTML = `<div class="cs-expand-loading">${esc(t("statusLoading"))}</div>`;
     try {
         const model = await apiGet(`/civitai_studio/model/${encodeURIComponent(String(modelId))}`);
-        S.browse.detail = model;
-        S.ui.detailId = String(model.id);
-        renderDetail(model);
+        renderDetail(model, body);
+        const title = $(".cs-float-head .cs-float-title");
+        if (title) title.textContent = model.name || "";
     } catch (e) {
-        S.ui.detailId = null;
-        updateStatusLine();
-        detailView.innerHTML = `<div class="cs-empty">${esc(t("detailLoadFailed") + e.message)}</div>
-            <div style="text-align:center"><button class="cs-btn" id="cs-detail-err-back">${esc(t("backList"))}</button></div>`;
-        $("#cs-detail-err-back", detailView).onclick = backToList;
+        body.innerHTML = `<div class="cs-empty">${esc(t("detailLoadFailed") + e.message)}</div>`;
     }
 }
 
-function backToList() {
-    S.browse.detail = null;
-    S.ui.detailId = null;
-    $("#cs-detail-view").style.display = "none";
-    $("#cs-list-view").style.display = "block";
-    updateStatusLine();
-}
-
-function renderDetail(model) {
-    const detailView = $("#cs-detail-view");
-    if (!detailView) return;
+// ---------- 详情页 ----------
+function renderDetail(model, container) {
+    const box = container;
+    if (!box) return;
     const versions = (model.modelVersions || []).filter((v) => v.id);
     const desc = sanitizeHtml(model.description);
-    detailView.innerHTML = `
+    box.innerHTML = `
         <div class="cs-detail-head">
             <button class="cs-btn" id="cs-detail-back">${esc(t("back"))}</button>
             <a class="cs-btn" href="${esc(civitaiPage())}/models/${esc(String(model.id))}" target="_blank" rel="noopener noreferrer">${esc(t("openOnCivitai"))}</a>
@@ -651,12 +678,12 @@ function renderDetail(model) {
         <div id="cs-version-body"></div>
         ${desc ? `<details class="cs-desc"><summary>${esc(t("modelDesc"))}</summary><div class="cs-desc-body">${desc}</div></details>` : ""}
     `;
-    $("#cs-detail-back", detailView).onclick = backToList;
-    rewriteDescImages(detailView);
-    const sel = $("#cs-version-sel", detailView);
+    $("#cs-detail-back", box).onclick = closeFloatDetail;
+    rewriteDescImages(box);
+    const sel = $("#cs-version-sel", box);
     const renderVer = () => {
         const idx = parseInt(sel.selectedOptions[0]?.dataset.idx || "0", 10);
-        renderVersion(versions[idx] || versions[0], model);
+        renderVersion(versions[idx] || versions[0], model, box);
     };
     sel.onchange = renderVer;
     renderVer();
@@ -700,8 +727,8 @@ async function saveImageToOutput(url, btn) {
     }
 }
 
-function renderVersion(version, model) {
-    const body = $("#cs-version-body");
+function renderVersion(version, model, box) {
+    const body = box ? $("#cs-version-body", box) : null;
     if (!body || !version) return;
     const triggers = version.trainedWords || [];
     const images = version.images || [];
@@ -1030,7 +1057,7 @@ function renderLocalList() {
                  <button class="cs-btn cs-btn-mini cs-btn-primary" data-update="${esc(m.id)}">${esc(t("dlNewVersion"))}</button></div>`
             : (upd && !upd.update && !upd.error ? `<div class="cs-local-update cs-ok">${esc(t("upToDate"))}</div>` : "");
         return `
-        <div class="cs-local-row${S.local.openId === m.id ? " cs-local-row-active" : ""}" data-id="${esc(m.id)}">
+        <div class="cs-local-row" data-id="${esc(m.id)}">
             <div class="cs-local-main">
                 <div class="cs-local-name" title="${esc(m.path || m.rel)}">${esc(civ.model_name || m.name)}</div>
                 <div class="cs-local-sub">
@@ -1070,7 +1097,7 @@ function renderLocalList() {
                     await apiPost("/civitai_studio/local/delete", { category: m.category, rel: m.rel });
                     toast("success", t("deleted"), m.name);
                     S.local.updates = {};
-                    if (S.local.openId === m.id) closeLocalDetailPane();
+                    closeFloatDetail();
                     S.local.detailCache[m.civitai?.model_id] = undefined;
                     loadLocal(true);
                 } catch (e) { toast("error", t("deleteFailed"), e.message); }
@@ -1122,35 +1149,34 @@ function findLocalModel(id) {
 
 // ---------- 本地库:展开详情 / 重命名 / 手动关联 ----------
 function toggleLocalDetail(m) {
-    // 详情在右侧独立面板展示:再点一次关闭
+    // 本地模型详情在悬浮面板展示:再点一次关闭
     if (!m || !m.civitai || !m.civitai.model_id) return;
-    const pane = $("#cs-local-detail");
-    if (!pane) return;
-    if (S.local.openId === m.id) {
-        closeLocalDetailPane();
+    if (S.ui.float && S.ui.float.dataset.mid === String(m.civitai.model_id)) {
+        closeFloatDetail();
         return;
     }
-    S.local.openId = m.id;
-    pane.style.display = "block";
-    pane.innerHTML = `<div class="cs-expand-loading">${esc(t("loadingCivitai"))}</div>`;
-    renderLocalList(); // 刷新行高亮
+    const body = openFloatDetail();
+    S.ui.float.dataset.mid = String(m.civitai.model_id);
+    const title = $(".cs-float-head .cs-float-title");
+    if (title) title.textContent = m.civitai.model_name || m.name;
+    body.innerHTML = `<div class="cs-expand-loading">${esc(t("loadingCivitai"))}</div>`;
     const mid = m.civitai.model_id;
     const cached = S.local.detailCache[mid];
-    if (cached) { renderLocalExpand(pane, m, cached); return; }
+    if (cached) { renderLocalExpand(body, m, cached); return; }
     apiGet(`/civitai_studio/model/${encodeURIComponent(String(mid))}`).then((data) => {
         S.local.detailCache[mid] = data;
-        if (S.local.openId === m.id) renderLocalExpand(pane, m, data);
+        if (S.ui.float && S.ui.float.dataset.mid === String(m.civitai.model_id)) renderLocalExpand(body, m, data);
     }).catch((e) => {
         const civ = m.civitai || {};
         if (civ.description_html) {
             // 离线回退:sidecar 里有落盘的说明
-            renderLocalExpand(pane, m, {
+            renderLocalExpand(body, m, {
                 id: civ.model_id,
                 name: civ.model_name, description: civ.description_html,
                 stats: {}, modelVersions: [],
             }, { offline: true });
         } else {
-            pane.innerHTML = `<div class="cs-expand-loading">${esc(t("expandLoadFailed") + e.message)}</div>`;
+            body.innerHTML = `<div class="cs-expand-loading">${esc(t("expandLoadFailed") + e.message)}</div>`;
         }
     });
 }
@@ -1257,7 +1283,7 @@ function renameDialog(m) {
             await apiPost("/civitai_studio/local/rename", { category: m.category, rel: m.rel, new_name: $("#cs-rn-name", md.box).value.trim() });
             md.close();
             toast("success", t("renamed"), m.name);
-            if (S.local.openId === m.id) closeLocalDetailPane();
+            closeFloatDetail();
             delete S.local.updates[m.id];
             loadLocal(true);
         } catch (e) {
@@ -1444,6 +1470,96 @@ async function runUpdateCheck(items) {
     }
 }
 
+// ---------- 社区画廊(images API) ----------
+async function fetchGallery(reset) {
+    const st = S.gal;
+    if (st.loading) return;
+    if (!reset && !(st.next && st.next.length)) return; // 没有下一页
+    st.loading = true;
+    renderGallery();
+    try {
+        const p = new URLSearchParams({ limit: "24", sort: st.sort, period: st.period });
+        p.set("nsfw", S.browse.nsfw > 0 ? "true" : "false");
+        if (!reset && st.next) for (const [k, v] of st.next) p.append(k, v);
+        const data = await apiGet("/civitai_studio/images?" + p.toString());
+        const items = data.items || [];
+        if (reset) {
+            st.items = items;
+        } else {
+            const seen = new Set(st.items.map((x) => x.id));
+            st.items = st.items.concat(items.filter((x) => !seen.has(x.id)));
+        }
+        st.next = data.next_query || [];
+        st.error = "";
+    } catch (e) {
+        st.error = t("loadFailed") + e.message;
+    } finally {
+        st.loading = false;
+        renderGallery(reset);
+    }
+}
+
+function renderGallery(reset) {
+    const grid = $("#cs-gal-grid");
+    if (!grid) return;
+    const st = S.gal;
+    if (st.error) {
+        grid.innerHTML = `<div class="cs-empty">${esc(st.error)}</div>`;
+        return;
+    }
+    if (reset) grid.innerHTML = "";
+    const frag = document.createDocumentFragment();
+    for (const img of st.items) {
+        if (img.__rendered) continue;
+        img.__rendered = true;
+        const item = document.createElement("div");
+        item.className = "cs-gal-item";
+        item.innerHTML = `<img loading="lazy" src="${esc(imgSrc(img.url))}" data-direct="${esc(img.url)}"/>
+            <button class="cs-save-btn" title="${esc(t("saveBtnTitle"))}" data-save-url="${esc(img.url)}">⬇</button>`;
+        item.querySelector("img").onclick = () => showImageMeta(img);
+        item.querySelector(".cs-save-btn").onclick = (ev) => {
+            ev.stopPropagation();
+            saveImageToOutput(img.url, ev.target);
+        };
+        frag.appendChild(item);
+    }
+    grid.appendChild(frag);
+    if (!st.items.length && !st.loading) {
+        grid.innerHTML = `<div class="cs-empty">${esc(t("galleryEmpty"))}</div>`;
+    }
+}
+
+async function fetchGalleryPage(reset) {
+    await fetchGallery(reset);
+}
+
+function buildGalleryView(root) {
+    const st = S.gal;
+    const view = document.createElement("div");
+    view.className = "cs-view";
+    view.dataset.view = "gallery";
+    view.innerHTML = `
+        <div class="cs-toolbar">
+            <select id="cs-gal-sort">
+                <option value="Newest">${esc(t("gallerySortNewest"))}</option>
+                <option value="Most Reactions">${esc(t("gallerySortReactions"))}</option>
+                <option value="Most Comments">${esc(t("gallerySortComments"))}</option>
+            </select>
+            <select id="cs-gal-period">${["AllTime", "Month", "Week", "Day"].map((p) => `<option value="${p}" ${st.period === p ? "selected" : ""}>${esc(periodLabel(p))}</option>`).join("")}</select>
+        </div>
+        <div id="cs-gal-content" class="cs-scroll">
+            <div id="cs-gal-grid" class="cs-gal-grid"></div>
+        </div>`;
+    root.appendChild(view);
+    $("#cs-gal-sort", view).value = st.sort;
+    $("#cs-gal-sort", view).addEventListener("change", (e) => { st.sort = e.target.value; fetchGallery(true); });
+    $("#cs-gal-period", view).addEventListener("change", (e) => { st.period = e.target.value; fetchGallery(true); });
+    $("#cs-gal-content", view).addEventListener("scroll", (e) => {
+        const el = e.target;
+        if (el.scrollTop + el.clientHeight >= el.scrollHeight - 400 && !st.loading && st.next.length) fetchGallery(false);
+    });
+}
+
 // ---------- 下载队列 ----------
 let pollTimer = null;
 let lastPollTs = 0;
@@ -1596,6 +1712,7 @@ function switchTab(tab) {
     $$(".cs-view", S.ui.root).forEach((v) => v.classList.toggle("active", v.dataset.view === tab));
     if (tab === "local") loadLocal(false); // TTL 在后端,重复加载代价极小,保证不陈旧
     if (tab === "downloads") renderDownloads(true);
+    if (tab === "gallery" && !S.gal.items.length && !S.gal.loading) fetchGallery(true);
 }
 
 function buildBrowseView(root) {
@@ -1621,10 +1738,7 @@ function buildBrowseView(root) {
             <select id="cs-f-nsfw">${NSFW_LEVELS.map((n) => `<option value="${n}" ${st.nsfw === n ? "selected" : ""}>${esc(nsfwLabel(n))}</option>`).join("")}</select>
         </div>
         <div id="cs-browse-content" class="cs-scroll">
-            <div id="cs-list-view" style="display:block">
-                <div id="cs-grid" class="cs-grid"></div>
-            </div>
-            <div id="cs-detail-view" style="display:none"></div>
+            <div id="cs-grid" class="cs-grid"></div>
         </div>
         <div id="cs-status" class="cs-status"></div>`;
     root.appendChild(view);
@@ -1634,14 +1748,12 @@ function buildBrowseView(root) {
         clearTimeout(deb);
         deb = setTimeout(() => {
             st.query = e.target.value.trim();
-            backToListIfOpen();
             triggerBrowseRefresh();
         }, 500);
     });
     for (const [sel, key] of [["#cs-f-type", "type"], ["#cs-f-sort", "sort"], ["#cs-f-period", "period"], ["#cs-f-nsfw", "nsfw"]]) {
         $(sel, view).addEventListener("change", (e) => {
             st[key] = key === "nsfw" ? parseInt(e.target.value, 10) : e.target.value;
-            backToListIfOpen();
             triggerBrowseRefresh();
             if (key === "nsfw") apiPost("/civitai_studio/config", { nsfw: st[key] }).catch(() => {}); // 偏好持久化
         });
@@ -1653,7 +1765,6 @@ function buildBrowseView(root) {
             if (preset === "hot-week") { st.sort = "Most Downloaded"; st.period = "Week"; }
             else if (preset === "hot-month") { st.sort = "Most Downloaded"; st.period = "Month"; }
             else { st.sort = "Highest Rated"; st.period = "Month"; }
-            backToListIfOpen();
             triggerBrowseRefresh();
         };
     });
@@ -1663,7 +1774,6 @@ function buildBrowseView(root) {
         clearTimeout(debBase);
         debBase = setTimeout(() => {
             st.base = e.target.value.trim();
-            backToListIfOpen();
             triggerBrowseRefresh();
         }, 400);
     });
@@ -1686,15 +1796,10 @@ function buildBrowseView(root) {
     // 无限滚动(页码推进在 fetchBrowse 成功后提交,失败自动重试同一页)
     $("#cs-browse-content", view).addEventListener("scroll", (e) => {
         const el = e.target;
-        if (!S.ui.detailId) S.ui.scrollTop = el.scrollTop; // 详情视图的滚动不污染列表还原位
         if (el.scrollTop + el.clientHeight >= el.scrollHeight - 400) {
             if (!st.loading && st.nextCursor && !st.dirty) fetchBrowse(false);
         }
     });
-}
-
-function backToListIfOpen() {
-    if (S.ui.detailId) backToList();
 }
 
 function buildLocalView(root) {
@@ -1708,10 +1813,7 @@ function buildLocalView(root) {
             <button class="cs-btn" id="cs-local-refresh" title="${esc(t("rescanTitle"))}">🔄</button>
         </div>
         <div id="cs-local-chips" class="cs-chips"></div>
-        <div class="cs-local-split">
-            <div id="cs-local-list" class="cs-scroll" style="flex:1; min-width:0"></div>
-            <div id="cs-local-detail" class="cs-scroll cs-local-detail" style="display:none"></div>
-        </div>`;
+        <div id="cs-local-list" class="cs-scroll"></div>`;
     root.appendChild(view);
     $("#cs-local-refresh", view).onclick = () => { S.local.updates = {}; loadLocal(true); };
     $("#cs-check-updates", view).onclick = () => runUpdateCheck([]);
@@ -1720,12 +1822,6 @@ function buildLocalView(root) {
         clearTimeout(deb);
         deb = setTimeout(() => { S.local.search = e.target.value.trim(); renderLocalList(); }, 250);
     });
-}
-
-function closeLocalDetailPane() {
-    const pane = $("#cs-local-detail");
-    if (pane) { pane.style.display = "none"; pane.innerHTML = ""; }
-    S.local.openId = null;
 }
 
 function buildDownloadsView(root) {
@@ -1755,6 +1851,7 @@ function buildRoot(el) {
             <button class="cs-tab-btn active" data-tab="browse">${esc(t("tabBrowse"))}</button>
             <button class="cs-tab-btn" data-tab="local">${esc(t("tabLocal"))}</button>
             <button class="cs-tab-btn" data-tab="downloads">${esc(t("tabDownloads"))} <span id="cs-dl-badge" class="cs-dl-badge" style="display:none"></span></button>
+            <button class="cs-tab-btn" data-tab="gallery">${esc(t("galleryTab"))}</button>
             <span class="cs-topbar-spacer"></span>
             <button class="cs-tab-btn" id="cs-settings-btn" title="${esc(t("settings"))}">⚙</button>
         </div>
@@ -1764,23 +1861,14 @@ function buildRoot(el) {
     buildBrowseView($(".cs-body", root));
     buildLocalView($(".cs-body", root));
     buildDownloadsView($(".cs-body", root));
+    buildGalleryView($(".cs-body", root));
     $$(".cs-tab-btn[data-tab]", root).forEach((b) => { b.onclick = () => switchTab(b.dataset.tab); });
     $("#cs-settings-btn", root).onclick = openSettings;
     switchTab("browse");
 }
 
 function restoreBrowseState() {
-    // 重开面板:恢复滚动位置与打开中的详情,避免全量重建丢状态
-    if (S.ui.detailId && S.browse.detail && !S.browse.dirty) {
-        const listView = $("#cs-list-view");
-        const detailView = $("#cs-detail-view");
-        if (listView && detailView) {
-            listView.style.display = "none";
-            detailView.style.display = "block";
-            renderDetail(S.browse.detail);
-            updateStatusLine();
-        }
-    }
+    // 重开面板:恢复滚动位置
     const content = $("#cs-browse-content");
     if (content) content.scrollTop = S.ui.scrollTop || 0;
 }
@@ -1897,13 +1985,15 @@ function injectStyles() {
 .cs-as-item-name { font-size:12px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .cs-as-version-row { display:flex; gap:8px; align-items:center; }
 .cs-as-thumb { width:36px; height:48px; object-fit:cover; border-radius:4px; flex-shrink:0; border:1px solid var(--border-color,#444); }
-.cs-local-split { flex:1; min-height:0; display:flex; gap:6px; padding:0 6px; }
-.cs-local-detail { width:340px; flex-shrink:0; border-left:1px solid var(--border-color,#444); padding:8px 6px; }
 .cs-local-detail .cs-expand-body { flex-direction:column; }
 .cs-local-detail .cs-expand-cover { width:100%; }
 .cs-local-row-active { border-color:var(--accent-color,#4a90e2) !important; }
 .cs-local-update { font-size:11px; margin-top:4px; color:#e2a23f; display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
 .cs-local-update.cs-ok { color:#4caf50; }
+.cs-gal-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(170px,1fr)); gap:6px; padding-bottom:20px; }
+.cs-gal-item { position:relative; border-radius:6px; overflow:hidden; background:#222; }
+.cs-gal-item img { width:100%; display:block; cursor:pointer; }
+.cs-gal-item img:hover { outline:2px solid var(--accent-color,#4a90e2); }
 .cs-dim { color:var(--desc-text-color,#999); font-size:11px; }
 .cs-dl-row { background:var(--comfy-box-bg, var(--comfy-input-bg,#333)); border-radius:6px; padding:8px; margin-bottom:6px; display:flex; gap:8px; align-items:center; }
 .cs-dl-info { flex:1; min-width:0; }
@@ -1975,9 +2065,6 @@ app.registerExtension({
                 detectLang(); // 跟随 ComfyUI 语言设置(切语言后重开面板生效)
                 buildRoot(el);
                 if (S.browse.dirty) {
-                    // 重拉分支不恢复详情(数据将失效),同步清理残留的详情态
-                    S.ui.detailId = null;
-                    S.browse.detail = null;
                     fetchBrowse(true);
                 } else {
                     renderResults(true);

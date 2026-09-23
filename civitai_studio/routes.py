@@ -213,19 +213,25 @@ async def model_detail(request):
 
 @_get("/civitai_studio/images")
 async def version_images(request):
-    """预留:分页拉取某版本更多预览图(当前前端只用详情内嵌 images)。"""
+    """代理 /images:模型版本预览 + 社区画廊(不传 modelVersionId 时为全站图片流)."""
     q = request.query
     params = {}
     if q.get("modelVersionId"):
         params["modelVersionId"] = q["modelVersionId"]
-    if not params.get("modelVersionId"):
-        return _json_error("缺少 modelVersionId", 400)
     try:
         params["limit"] = min(50, max(1, int(q.get("limit", "20"))))
     except ValueError:
         return _json_error("limit 必须是数字", 400)
     if q.get("cursor"):
         params["cursor"] = q["cursor"]
+    if q.get("username"):
+        params["username"] = q["username"]
+    if q.get("postId"):
+        params["postId"] = q["postId"]
+    if q.get("sort"):
+        params["sort"] = q["sort"]
+    if q.get("period"):
+        params["period"] = q["period"]
     if q.get("nsfw"):
         # 与搜索同档位;新 API 是布尔开关,映射后再透传
         params["nsfw"] = "false" if q["nsfw"] in ("0", "false") else "true"
@@ -233,7 +239,16 @@ async def version_images(request):
         data = await civitai_client.get_json("/images", params=params)
     except civitai_client.CivitaiError as e:
         return _json_error(e, 502)
-    return web.json_response(data)
+    # images 接口的翻页在 metadata.nextPage(完整 URL):解析成查询对回传给前端
+    next_page = ((data.get("metadata") or {}).get("nextPage")) or ""
+    next_query = []
+    if next_page:
+        try:
+            parsed = urllib.parse.urlparse(next_page)
+            next_query = urllib.parse.parse_qsl(parsed.query)
+        except Exception:
+            next_query = []
+    return web.json_response({"items": data.get("items", []), "next_query": next_query})
 
 
 @_get("/civitai_studio/image")
