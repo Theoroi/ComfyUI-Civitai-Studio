@@ -129,6 +129,8 @@ const STR = {
         applyBtn: "应用到工作流", applyNoKs: "未找到 KSampler 节点", applyFail: "应用失败",
         applyDone: "已应用:提示词 ✓{lora}", applyLoraPart: ",LoRA ×{n}", loraMissing: "本地未找到: {names}",
         noTextNode: "未找到 CLIPTextEncode 文本节点",
+        galleryTab: "🖼 画廊", gallerySortNewest: "最新发布", gallerySortReactions: "最多互动", gallerySortComments: "最多评论",
+        galleryEmpty: "没有图片。", galleryAuthor: "作者",
     },
     en: {
         tabBrowse: "🌐 Browse", tabLocal: "📁 Library", tabDownloads: "⬇ Downloads", settings: "Settings",
@@ -225,6 +227,8 @@ const STR = {
         applyBtn: "Apply to workflow", applyNoKs: "No KSampler node found", applyFail: "Apply failed",
         applyDone: "Applied: prompts ✓{lora}", applyLoraPart: ", {n} LoRA(s)", loraMissing: "Local LoRAs not found: {names}",
         noTextNode: "No CLIPTextEncode text node found",
+        galleryTab: "🖼 Gallery", gallerySortNewest: "Newest", gallerySortReactions: "Most reactions", gallerySortComments: "Most comments",
+        galleryEmpty: "No images.", galleryAuthor: "Author",
     },
 };
 
