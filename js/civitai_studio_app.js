@@ -30,7 +30,7 @@ const SORTS = ["Most Downloaded", "Highest Rated", "Newest"];
 const PERIODS = ["AllTime", "Month", "Week", "Day"];
 const NSFW_LEVELS = [0, 1, 2];
 
-const JS_VERSION = "0.5.20";
+const JS_VERSION = "0.5.21";
 
 // ---------- i18n ----------
 const STR = {
@@ -2354,8 +2354,13 @@ app.registerExtension({
                 const strip = document.createElement("div");
                 strip.style.cssText = "display:flex;flex-wrap:wrap;gap:6px;padding:4px;width:100%;"
                     + "align-content:flex-start;max-height:520px;overflow-y:auto;";
-                // 滚轮留给面板内部滚动,阻止画布缩放
-                strip.addEventListener("wheel", (e) => e.stopPropagation(), { passive: true, capture: true });
+                // 滚轮:ComfyUI 的容器级 handler 会 preventDefault 取消原生滚动并缩放画布,
+                // 这里手动接管滚动并阻断传播
+                strip.addEventListener("wheel", (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    strip.scrollTop += e.deltaY;
+                }, { passive: false, capture: true });
                 node.csStrip = strip;
                 this.addDOMWidget("cs_thumbs", "cs_thumbs", strip);
                 if (this.size[0] < 460) this.size[0] = 460; // 保证默认 3 列以上
