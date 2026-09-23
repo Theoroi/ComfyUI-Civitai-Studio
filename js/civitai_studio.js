@@ -2,8 +2,9 @@ import { app } from "/scripts/app.js";
 import { api } from "/scripts/api.js";
 
 // ============================================================
-// Civitai Studio — Civitai 浏览器 + 本地模型管理器
-// 侧边栏三个页签: 在线浏览 / 本地库 / 下载队列; ⚙ 打开设置
+// Civitai Studio — Civitai browser + local model manager
+// Sidebar tabs: Browse / Local library / Downloads; ⚙ settings
+// UI language follows ComfyUI's Comfy.Locale setting (zh/en).
 // ============================================================
 
 const TYPE_OPTIONS = ["Checkpoint", "LORA", "LoCon", "DoRA", "TextualInversion", "VAE", "Controlnet", "Upscaler", "Hypernetwork", "Motion", "Poses", "Wildcards", "Other"];
@@ -13,16 +14,7 @@ const TYPE_LABELS = {
     Upscaler: "放大模型", Hypernetwork: "超网络", Motion: "动作模块",
     Poses: "姿势", Wildcards: "通配符", Other: "其他",
 };
-function sortEnumNames(list) {
-    // 枚举名按字母序,"Other" 固定最后
-    return list.slice().sort((a, b) => {
-        if (String(a) === "Other") return 1;
-        if (String(b) === "Other") return -1;
-        return String(a).localeCompare(String(b));
-    });
-}
-
-const BASE_MODELS = sortEnumNames([
+const BASE_MODELS = [
     "SD 1.4", "SD 1.5", "SD 1.5 LCM", "SD 2.0", "SD 2.1", "SD 2.1 Unclip",
     "SDXL 1.0", "SDXL Lightning", "SDXL Hyper", "SD 3", "SD 3.5", "SD 3.5 Medium",
     "SD 3.5 Large", "SD 3.5 Large Turbo", "Pony", "Illustrious", "NoobAI", "Anima",
@@ -33,29 +25,242 @@ const BASE_MODELS = sortEnumNames([
     "Wan Video 1.3B t2v", "Wan Video 14B t2v", "Wan Video 14B i2v 480p", "Wan Video 14B i2v 720p",
     "Wan Video 2.2 TI2V-5B", "Wan Video 2.2 I2V-A14B", "Wan Video 2.2 T2V-A14B",
     "Wan Video 2.5 T2V", "Wan Video 2.5 I2V", "Other",
-]);
-const SORTS = ["Most Downloaded", "Highest Rated", "Newest"];
-const SORT_LABELS = { "Most Downloaded": "最多下载", "Highest Rated": "最高评分", Newest: "最新发布" };
-const PERIODS = ["AllTime", "Month", "Week", "Day"];
-const PERIOD_LABELS = { AllTime: "全部时间", Month: "本月", Week: "本周", Day: "今天" };
-const NSFW_LEVELS = [
-    { v: 0, label: "隐藏 NSFW" },
-    { v: 1, label: "包含部分 NSFW" },
-    { v: 2, label: "包含全部 NSFW" },
 ];
+const SORTS = ["Most Downloaded", "Highest Rated", "Newest"];
+const PERIODS = ["AllTime", "Month", "Week", "Day"];
+const NSFW_LEVELS = [0, 1, 2];
 
-const JS_VERSION = "0.2.0";
+const JS_VERSION = "0.3.0";
 
-const S = {
+// ---------- i18n ----------
+const STR = {
+    zh: {
+        tabBrowse: "🌐 浏览", tabLocal: "📁 本地库", tabDownloads: "⬇ 下载", settings: "设置",
+        staleBanner: "⚠ 后端代码过旧(服务端运行的是重启前加载的版本),新功能不可用 — 请重启一次 ComfyUI。",
+        backendOutdatedTitle: "Civitai Studio 后端代码过旧",
+        backendOutdatedMsg: "服务端 v{server} < 前端 v{client} — 请重启一次 ComfyUI 加载新功能",
+        frontendTooOld: "当前 ComfyUI 前端过旧,不支持侧边栏 API (extensionManager.registerSidebarTab)",
+        loadFailedTitle: "Civitai Studio 加载失败",
+        frontendUpgradeHint: "前端版本过旧,请升级 ComfyUI",
+        readyLog: "已就绪",
+        searchPlaceholder: "搜索 Civitai 模型…", allTypes: "全部类型",
+        basePlaceholder: "全部底模(可输入新枚举)",
+        sortMostDownloaded: "最多下载", sortHighestRated: "最高评分", sortNewest: "最新发布",
+        periodAllTime: "全部时间", periodMonth: "本月", periodWeek: "本周", periodDay: "今天",
+        nsfw0: "隐藏 NSFW", nsfw1: "包含部分 NSFW", nsfw2: "包含全部 NSFW",
+        statusLoading: "加载中…", statusLoaded: "已加载 {n} 个", statusMore: " — 向下滚动加载更多",
+        retry: "重试", noModels: "没有找到模型,换个关键词试试。",
+        loadFailed: "加载失败: ", detailLoadFailed: "详情加载失败: ",
+        back: "← 返回", backList: "返回列表", openOnCivitai: "在 Civitai 打开 ↗",
+        by: "by", unknown: "未知", unknownCreator: "未知作者", versionLabel: "版本",
+        installed: "已安装", installedMark: " ✔已装", modelDesc: "模型说明",
+        triggerWords: "触发词", copyAll: "复制全部", files: "文件", primaryFile: "主文件",
+        noFiles: "该版本没有文件", previews: "预览图 ({n}) — 点击查看生成参数",
+        genParams: "生成参数", noGenParams: "这张图没有公开生成参数。",
+        positivePrompt: "正面提示词", negativePrompt: "负面提示词", copy: "复制",
+        copied: "已复制", resources: "用到资源",
+        kvModel: "模型", kvSampler: "采样器", kvSteps: "步数", kvSize: "尺寸",
+        download: "⬇ 下载", startDownload: "开始下载", submitting: "提交中…",
+        dlDialogTitle: "下载 — {name}", fileLabel: "文件", targetFolder: "目标目录",
+        subfolder: "子文件夹(可选,自动创建)", subfolderPh: "例如: NSFW/角色",
+        saveName: "保存文件名",
+        dlHint: "下载完成后自动写入 .civitai.json 元数据{hash}",
+        dlHintHash: "并校验 SHA256", cancel: "取消", ok: "确定", save: "保存",
+        cantDownload: "无法下载", versionNotFound: "未找到该版本,请重新检查更新后再试",
+        destFetchFailed: "获取目录失败: ", noRegFolders: "未找到已注册的模型文件夹",
+        openDownloadFailed: "无法打开下载", queuedToast: "已加入下载队列",
+        queueFailed: "下载任务创建失败", unknownAuthor: "未知作者",
+        localSearchPh: "搜索本地模型…", checkUpdates: "检查更新", rescanTitle: "重新扫描",
+        scanning: "扫描模型目录中…", rescanning: "正在重新扫描模型目录…",
+        noModelFiles: "没有找到模型文件。", truncatedNote: "注意:文件数超过扫描上限。",
+        allN: "全部 ({n})", newVersion: "有新版本: ", dlNewVersion: "下载新版本",
+        upToDate: "已是最新版本", pageBtn: "页面", detailsBtn: "详情",
+        checkBtn: "查更新", associateBtn: "关联", renameBtn: "重命名",
+        revealBtn: "定位", deleteBtn: "删除", filePrefix: "文件: ",
+        deleteTitle: "删除模型", deleteMsg: "确定要删除「{name}」吗?\n该操作不可恢复。",
+        deleted: "已删除", deleteFailed: "删除失败", revealFailed: "打开文件夹失败",
+        loadingCivitai: "加载 Civitai 信息…", expandLoadFailed: "详情加载失败: ",
+        offlineBanner: "离线:显示本地缓存的说明(可能非最新)",
+        civName: "Civitai 名称", statsLabel: "数据", clickCopy: "点击复制",
+        dlThisVersion: "下载此版本", reAssociate: "重新关联", refreshMeta: "刷新元数据",
+        refreshing: "刷新中…", metaRefreshed: "元数据已刷新", metaRefreshFailed: "刷新元数据失败",
+        expandAll: "展开全部", collapse: "收起",
+        renameTitle: "重命名 — {name}", newFileName: "新文件名(含扩展名)",
+        renameMsg: "仅重命名模型文件并同步 .civitai.json 元数据;工作流中引用的旧文件名将失效。",
+        renamed: "已重命名", renameFailed: "重命名失败",
+        assocTitle: "关联 Civitai 模型", searchByFile: "按文件名搜索(已自动预填,可修改)",
+        searchBtn: "搜索", searching: "搜索中…", emptyQuery: "请输入搜索词,或直接粘贴页面链接 / 模型 ID",
+        noResults: "没有找到,试试更短的关键词", searchFailed: "搜索失败: ",
+        pasteRef: "或直接粘贴页面链接 / 模型 ID",
+        pasteRefPh: "https://civitai.com/models/12345 或 12345",
+        assocMsg: "点选搜索结果(或粘贴链接)后点「关联」,将写入 .civitai.json。可用「网页确认 ↗」在 Civitai 打开该版本核对。",
+        webConfirm: "网页确认 ↗", versionLoading: "版本加载中…",
+        pickFirst: "请先从搜索结果选择,或粘贴链接", associated: "已关联",
+        assocFailed: "关联失败",
+        updateCheckDone: "更新检查完成", updateCheckFailed: "更新检查失败",
+        updatesFound: "发现可更新的模型 — ", checkedAB: "已检查 {a}/{b} 个(单次上限 30,可对单个模型点「查更新」)",
+        checkedN: "已检查 {n} 个", failNote: ",{n} 个查询失败(多为模型已在站方删除)",
+        fetchingNewVersion: "获取新版本失败", newVersionAvail: "有新版本: ",
+        dlTabHint: "下载到 ComfyUI 模型目录,支持断点续传", clearFinished: "清除已完成",
+        noJobs: "暂无下载任务。去「浏览」页面挑个模型吧。",
+        pollFailBanner: "下载状态刷新失败(已连续多次),请检查 ComfyUI 后端;恢复后此提示会自动消失。",
+        stQueued: "排队中…", stDownloading: "下载中 {pct}% {speed}", stVerifying: "校验 SHA256…",
+        stDone: "完成 ✔", stCancelled: "已取消", stError: "失败: ",
+        cancelBtn: "取消" + "", cancelFailed: "取消失败", clearFailed: "清除失败",
+        settingsTitle: "⚙ Civitai Studio 设置",
+        keyLabel: "Civitai API Key(可选,下载受限模型/提高限额)",
+        keySetPh: "已设置(尾号 {tail}),留空保持不变", keyPh: "粘贴 API Key",
+        proxyLabel: "网络代理(HTTP / SOCKS 均可,裸地址自动按 HTTP 处理)",
+        proxyPh: "http://127.0.0.1:10808 或 socks5://127.0.0.1:10808,留空 = 直连",
+        proxyHint: "填 127.0.0.1 而非 localhost。v2rayN 混合端口 10808:优先填 socks5://127.0.0.1:10808(实测最稳),http://127.0.0.1:10808 亦可;API、下载、图片全部走此代理。",
+        mirrorLabel: "API 站点(默认 civitai.red,被拦时可改回 https://civitai.com)",
+        mirrorPh: "留空 = https://civitai.red",
+        concLabel: "下载并发数(1-4)",
+        pimgLabel: "预览图经服务端中转(直连打不开图片时开启)",
+        hashLabel: "下载完成后校验 SHA256",
+        pdescLabel: "说明落盘:把 Civitai 说明/标签/封面写进 .civitai.json(离线可看,默认关)",
+        settingsMsg: "API Key 在 Civitai 账户设置页生成,仅保存在本机 ComfyUI user 目录;Key 只会下发给官方站点,不会发给镜像。",
+        settingsSaved: "设置已保存", saveFailed: "保存失败",
+        readCfgFailed: "读取配置失败", clearFailed: "清除失败",
+        route405: "服务端尚未加载该功能 — 请重启一次 ComfyUI 后重试",
+    },
+    en: {
+        tabBrowse: "🌐 Browse", tabLocal: "📁 Library", tabDownloads: "⬇ Downloads", settings: "Settings",
+        staleBanner: "⚠ Backend code is outdated (the server is still running the version loaded before the last restart) — new features are unavailable. Please restart ComfyUI.",
+        backendOutdatedTitle: "Civitai Studio backend is outdated",
+        backendOutdatedMsg: "server v{server} < frontend v{client} — restart ComfyUI once to load the new features",
+        frontendTooOld: "This ComfyUI frontend is too old for the sidebar API (extensionManager.registerSidebarTab)",
+        loadFailedTitle: "Civitai Studio failed to load",
+        frontendUpgradeHint: "Frontend too old — please upgrade ComfyUI",
+        readyLog: "ready",
+        searchPlaceholder: "Search Civitai models…", allTypes: "All types",
+        basePlaceholder: "All base models (type to enter)",
+        sortMostDownloaded: "Most downloaded", sortHighestRated: "Highest rated", sortNewest: "Newest",
+        periodAllTime: "All time", periodMonth: "This month", periodWeek: "This week", periodDay: "Today",
+        nsfw0: "Hide NSFW", nsfw1: "Some NSFW", nsfw2: "All NSFW",
+        statusLoading: "Loading…", statusLoaded: "{n} loaded", statusMore: " — scroll down for more",
+        retry: "Retry", noModels: "No models found — try different keywords.",
+        loadFailed: "Load failed: ", detailLoadFailed: "Failed to load details: ",
+        back: "← Back", backList: "Back to list", openOnCivitai: "Open on Civitai ↗",
+        by: "by", unknown: "unknown", unknownCreator: "unknown creator", versionLabel: "Version",
+        installed: "Installed", installedMark: " ✔ installed", modelDesc: "Model description",
+        triggerWords: "Trigger words", copyAll: "Copy all", files: "Files", primaryFile: "primary file",
+        noFiles: "No files for this version", previews: "Previews ({n}) — click for generation params",
+        genParams: "Generation params", noGenParams: "This image has no public generation params.",
+        positivePrompt: "Positive prompt", negativePrompt: "Negative prompt", copy: "Copy",
+        copied: "Copied", resources: "Resources used",
+        kvModel: "Model", kvSampler: "Sampler", kvSteps: "Steps", kvSize: "Size",
+        download: "⬇ Download", startDownload: "Start download", submitting: "Submitting…",
+        dlDialogTitle: "Download — {name}", fileLabel: "File", targetFolder: "Target folder",
+        subfolder: "Subfolder (optional, created automatically)", subfolderPh: "e.g. NSFW/character",
+        saveName: "Filename",
+        dlHint: "Writes .civitai.json metadata on completion{hash}",
+        dlHintHash: " with SHA256 verification", cancel: "Cancel", ok: "OK", save: "Save",
+        cantDownload: "Cannot download", versionNotFound: "Version not found — check for updates again",
+        destFetchFailed: "Failed to list folders: ", noRegFolders: "No registered model folders found",
+        openDownloadFailed: "Cannot open download", queuedToast: "Added to download queue",
+        queueFailed: "Failed to queue download", unknownAuthor: "unknown creator",
+        localSearchPh: "Search local models…", checkUpdates: "Check updates", rescanTitle: "Rescan",
+        scanning: "Scanning model folders…", rescanning: "Rescanning model folders…",
+        noModelFiles: "No model files found.", truncatedNote: "Note: file count exceeds the scan cap.",
+        allN: "All ({n})", newVersion: "New version: ", dlNewVersion: "Download new version",
+        upToDate: "Up to date", pageBtn: "Page", detailsBtn: "Details",
+        checkBtn: "Check", associateBtn: "Associate", renameBtn: "Rename",
+        revealBtn: "Reveal", deleteBtn: "Delete", filePrefix: "File: ",
+        deleteTitle: "Delete model", deleteMsg: "Delete \"{name}\"?\nThis cannot be undone.",
+        deleted: "Deleted", deleteFailed: "Delete failed", revealFailed: "Failed to open folder",
+        loadingCivitai: "Loading Civitai info…", expandLoadFailed: "Failed to load details: ",
+        offlineBanner: "Offline: showing the locally cached description (may be stale)",
+        civName: "Civitai name", statsLabel: "Stats", clickCopy: "Click to copy",
+        dlThisVersion: "Download this version", reAssociate: "Re-associate", refreshMeta: "Refresh metadata",
+        refreshing: "Refreshing…", metaRefreshed: "Metadata refreshed", metaRefreshFailed: "Refresh failed",
+        expandAll: "Expand", collapse: "Collapse",
+        renameTitle: "Rename — {name}", newFileName: "New filename (with extension)",
+        renameMsg: "Renames the model file and updates its .civitai.json metadata; workflow references to the old filename will break.",
+        renamed: "Renamed", renameFailed: "Rename failed",
+        assocTitle: "Associate a Civitai model", searchByFile: "Search by filename (prefilled, editable)",
+        searchBtn: "Search", searching: "Searching…", emptyQuery: "Type a search term, or paste a page link / model ID",
+        noResults: "Nothing found — try shorter keywords", searchFailed: "Search failed: ",
+        pasteRef: "Or paste a page link / model ID",
+        pasteRefPh: "https://civitai.com/models/12345 or 12345",
+        assocMsg: "Pick a search result (or paste a link) and press「Associate」to write .civitai.json. Use「Verify on web ↗」to check the version on Civitai.",
+        webConfirm: "Verify on web ↗", versionLoading: "Loading versions…",
+        pickFirst: "Pick a search result first, or paste a link", associated: "Associated",
+        assocFailed: "Association failed",
+        updateCheckDone: "Update check finished", updateCheckFailed: "Update check failed",
+        updatesFound: "Models with updates — ", checkedAB: "checked {a}/{b} (cap 30 per run; use per-item Check for the rest)",
+        checkedN: "checked {n}", failNote: ", {n} lookups failed (usually models deleted upstream)",
+        fetchingNewVersion: "Failed to fetch the new version", newVersionAvail: "New version: ",
+        dlTabHint: "Downloads go to your ComfyUI model folders, resumable", clearFinished: "Clear finished",
+        noJobs: "No downloads yet — pick a model in Browse.",
+        pollFailBanner: "Refreshing download states failed repeatedly — check the ComfyUI backend; this notice clears itself on recovery.",
+        stQueued: "Queued…", stDownloading: "Downloading {pct}% {speed}", stVerifying: "Verifying SHA256…",
+        stDone: "Done ✔", stCancelled: "Cancelled", stError: "Failed: ",
+        cancelBtn: "Cancel", cancelFailed: "Cancel failed", clearFailed: "Clear failed",
+        settingsTitle: "⚙ Civitai Studio settings",
+        keyLabel: "Civitai API key (optional, for gated models / higher rate limits)",
+        keySetPh: "Set (ends with {tail}) — leave empty to keep", keyPh: "Paste API key",
+        proxyLabel: "Network proxy (HTTP / SOCKS; bare addresses are treated as HTTP)",
+        proxyPh: "http://127.0.0.1:10808 or socks5://127.0.0.1:10808, empty = direct",
+        proxyHint: "Use 127.0.0.1 instead of localhost. API, downloads and previews all go through this proxy.",
+        mirrorLabel: "API host (default civitai.red; switch back to https://civitai.com if blocked)",
+        mirrorPh: "empty = https://civitai.red",
+        concLabel: "Download concurrency (1-4)",
+        pimgLabel: "Route preview images through the backend (enable if direct loading fails)",
+        hashLabel: "Verify SHA256 after download",
+        pdescLabel: "Persist description: write Civitai description/tags/cover into .civitai.json (offline viewing, default off)",
+        settingsMsg: "Generate the key on the Civitai account page; it is stored locally in the ComfyUI user directory and only ever sent to official hosts.",
+        settingsSaved: "Settings saved", saveFailed: "Save failed",
+        readCfgFailed: "Failed to read settings", clearFailed: "Clear failed",
+        route405: "The server has not loaded this feature — restart ComfyUI once and retry",
+    },
+};
+
+let S = {
+    lang: "zh",
     cfg: { proxy_images: false, nsfw: 1, verify_hash: true },
     browse: {
         query: "", type: "", base: "", sort: "Most Downloaded", period: "AllTime",
-        nsfw: 1, page: 1, items: [], loading: false, dirty: true, pendingReset: false,
+        nsfw: 1, items: [], nextCursor: "", loading: false, dirty: true, pendingReset: false,
     },
     local: { models: [], search: "", type: "", loading: false, updates: {}, truncated: false, expanded: new Set(), detailCache: {} },
     dl: { jobs: [], lastSig: "", failStreak: 0 },
-    ui: { tab: "browse", root: null, scrollTop: 0, detailId: null },
+    ui: { tab: "browse", root: null, scrollTop: 0, detailId: null, backendStale: false },
 };
+
+function t(key, vars) {
+    const table = STR[S.lang] || STR.zh;
+    let s = table[key] ?? STR.zh[key] ?? key;
+    if (vars) for (const k in vars) s = s.replaceAll("{" + k + "}", String(vars[k]));
+    return s;
+}
+
+function detectLang() {
+    let loc = "";
+    try {
+        loc = String(app.ui.settings.getSettingValue?.("Comfy.Locale") || "");
+    } catch (e) { /* settings API 不可用 */ }
+    if (!loc) {
+        try { loc = String(navigator.language || ""); } catch (e) { loc = ""; }
+    }
+    S.lang = loc.toLowerCase().startsWith("zh") ? "zh" : "en";
+}
+
+function typeLabel(type) {
+    return S.lang === "zh" ? (TYPE_LABELS[type] || type) : type;
+}
+
+function sortLabel(s) {
+    return { "Most Downloaded": t("sortMostDownloaded"), "Highest Rated": t("sortHighestRated"), Newest: t("sortNewest") }[s] || s;
+}
+
+function periodLabel(p) {
+    return { AllTime: t("periodAllTime"), Month: t("periodMonth"), Week: t("periodWeek"), Day: t("periodDay") }[p] || p;
+}
+
+function nsfwLabel(v) {
+    return { 0: t("nsfw0"), 1: t("nsfw1"), 2: t("nsfw2") }[v] || String(v);
+}
 
 // ---------- 小工具 ----------
 const $ = (sel, root) => (root || document).querySelector(sel);
@@ -121,8 +326,7 @@ function altSrc(url) {
 }
 
 function pickCover(model) {
-    // 首版本可能没有预览(AutismMix)或首个是视频(Juggernaut):
-    // 优先跨版本找图片封面,全站只有视频封面时才回退视频
+    // 首版本可能没有预览或首个是视频:优先跨版本找图片封面,全站只有视频封面时才回退视频
     let video = null;
     for (const v of model.modelVersions || []) {
         for (const i of v.images || []) {
@@ -164,7 +368,7 @@ async function apiJson(url, opts) {
     if (!resp.ok) {
         if (resp.status === 405 && url.startsWith("/civitai_studio/")) {
             // POST 落到了静态文件处理器 = 服务端还没有这条新路由
-            throw new Error("服务端尚未加载该功能 — 请重启一次 ComfyUI 后重试");
+            throw new Error(t("route405"));
         }
         throw new Error((data && data.error) || `HTTP ${resp.status}`);
     }
@@ -182,7 +386,7 @@ function copyText(text, btn) {
     navigator.clipboard.writeText(text).then(() => {
         if (!btn) return;
         const old = btn.textContent;
-        btn.textContent = "已复制";
+        btn.textContent = t("copied");
         setTimeout(() => { btn.textContent = old; }, 1200);
     }).catch(() => {});
 }
@@ -211,8 +415,8 @@ function confirmModal(title, message, onOk) {
         <h3 class="cs-modal-title">${esc(title)}</h3>
         <p class="cs-modal-msg">${esc(message)}</p>
         <div class="cs-modal-actions">
-            <button class="cs-btn" data-act="cancel">取消</button>
-            <button class="cs-btn cs-btn-danger" data-act="ok">确定</button>
+            <button class="cs-btn" data-act="cancel">${esc(t("cancel"))}</button>
+            <button class="cs-btn cs-btn-danger" data-act="ok">${esc(t("ok"))}</button>
         </div>`);
     $("[data-act=cancel]", m.box).onclick = m.close;
     $("[data-act=ok]", m.box).onclick = () => { m.close(); onOk(); };
@@ -259,7 +463,7 @@ async function fetchBrowse(reset) {
         st.dirty = false;
         st.error = "";
     } catch (e) {
-        st.error = "加载失败: " + e.message;
+        st.error = t("loadFailed") + e.message;
         if (reset) st.dirty = true; // 失败不清空已有结果;标记 dirty 让重开面板时自动重拉
     } finally {
         const needReset = st.pendingReset;
@@ -296,13 +500,13 @@ function renderResults(reset) {
     if (S.browse.error) {
         const err = document.createElement("div");
         err.className = "cs-empty cs-error";
-        err.innerHTML = `${esc(S.browse.error)} <button class="cs-btn cs-btn-mini" id="cs-retry-btn">重试</button>`;
+        err.innerHTML = `${esc(S.browse.error)} <button class="cs-btn cs-btn-mini" id="cs-retry-btn">${esc(t("retry"))}</button>`;
         grid.appendChild(err);
         $("#cs-retry-btn", err).onclick = () => triggerBrowseRefresh();
     } else if (!S.browse.items.length && !S.browse.loading) {
         const empty = document.createElement("div");
         empty.className = "cs-empty";
-        empty.textContent = "没有找到模型,换个关键词试试。";
+        empty.textContent = t("noModels");
         grid.appendChild(empty);
     }
 }
@@ -313,9 +517,9 @@ function updateStatusLine() {
     if (S.ui.detailId) { el.textContent = ""; return; }
     const st = S.browse;
     if (st.loading) {
-        el.textContent = "加载中…";
+        el.textContent = t("statusLoading");
     } else if (st.items.length) {
-        el.textContent = `已加载 ${st.items.length} 个` + (st.nextCursor ? " — 向下滚动加载更多" : "");
+        el.textContent = t("statusLoaded", { n: st.items.length }) + (st.nextCursor ? t("statusMore") : "");
     } else {
         el.textContent = "";
     }
@@ -327,14 +531,14 @@ function makeCard(model) {
     const card = document.createElement("div");
     card.className = "cs-card" + (model.installed ? " cs-card-installed" : "");
     const cover = pickCover(model);
-    const creator = model.creator?.username || "未知作者";
+    const creator = model.creator?.username || t("unknownCreator");
     const rating = version.stats && typeof version.stats.thumbsUpCount === "number" ? version.stats.thumbsUpCount : (model.stats?.thumbsUpCount || 0);
     card.innerHTML = `
         <div class="cs-card-cover">
             <div class="cs-card-placeholder">🖼</div>
             <div class="cs-card-badges">
-                ${model.installed ? '<span class="cs-badge cs-badge-ok">已安装</span>' : ""}
-                <span class="cs-badge">${esc(TYPE_LABELS[model.type] || model.type)}</span>
+                ${model.installed ? `<span class="cs-badge cs-badge-ok">${esc(t("installed"))}</span>` : ""}
+                <span class="cs-badge">${esc(typeLabel(model.type))}</span>
             </div>
         </div>
         <div class="cs-card-info">
@@ -343,7 +547,7 @@ function makeCard(model) {
                 <span>${esc(version.baseModel || "")}</span>
                 <span>👍 ${fmtNum(rating)} · ⬇ ${fmtNum(model.stats?.downloadCount)}</span>
             </div>
-            <div class="cs-card-creator">by ${esc(creator)}</div>
+            <div class="cs-card-creator">${esc(t("by"))} ${esc(creator)}</div>
         </div>`;
     if (cover?.media?.url) {
         const url = cover.media.url;
@@ -387,7 +591,7 @@ async function openDetail(modelId) {
     updateStatusLine();
     listView.style.display = "none";
     detailView.style.display = "block";
-    detailView.innerHTML = '<div class="cs-empty">加载详情中…</div>';
+    detailView.innerHTML = `<div class="cs-empty">${esc(t("statusLoading"))}</div>`;
     try {
         const model = await apiGet(`/civitai_studio/model/${encodeURIComponent(String(modelId))}`);
         S.browse.detail = model;
@@ -396,8 +600,8 @@ async function openDetail(modelId) {
     } catch (e) {
         S.ui.detailId = null;
         updateStatusLine();
-        detailView.innerHTML = `<div class="cs-empty">详情加载失败: ${esc(e.message)}</div>
-            <div style="text-align:center"><button class="cs-btn" id="cs-detail-err-back">返回列表</button></div>`;
+        detailView.innerHTML = `<div class="cs-empty">${esc(t("detailLoadFailed") + e.message)}</div>
+            <div style="text-align:center"><button class="cs-btn" id="cs-detail-err-back">${esc(t("backList"))}</button></div>`;
         $("#cs-detail-err-back", detailView).onclick = backToList;
     }
 }
@@ -417,23 +621,23 @@ function renderDetail(model) {
     const desc = sanitizeHtml(model.description);
     detailView.innerHTML = `
         <div class="cs-detail-head">
-            <button class="cs-btn" id="cs-detail-back">← 返回</button>
-            <a class="cs-btn" href="${esc(civitaiPage())}/models/${esc(String(model.id))}" target="_blank" rel="noopener noreferrer">在 Civitai 打开 ↗</a>
+            <button class="cs-btn" id="cs-detail-back">${esc(t("back"))}</button>
+            <a class="cs-btn" href="${esc(civitaiPage())}/models/${esc(String(model.id))}" target="_blank" rel="noopener noreferrer">${esc(t("openOnCivitai"))}</a>
         </div>
         <h3 class="cs-detail-title" title="${esc(model.name)}">${esc(model.name)}</h3>
         <div class="cs-detail-meta">
-            by ${esc(model.creator?.username || "未知")} · ${esc(TYPE_LABELS[model.type] || model.type)}
+            ${esc(t("by"))} ${esc(model.creator?.username || t("unknown"))} · ${esc(typeLabel(model.type))}
             · ⬇ ${fmtNum(model.stats?.downloadCount)} · 👍 ${fmtNum(model.stats?.thumbsUpCount)}
         </div>
-        ${model.tags?.length ? `<div class="cs-tags">${model.tags.slice(0, 10).map((t) => `<span class="cs-tag">${esc(t)}</span>`).join("")}</div>` : ""}
+        ${model.tags?.length ? `<div class="cs-tags">${model.tags.slice(0, 10).map((tg) => `<span class="cs-tag">${esc(tg)}</span>`).join("")}</div>` : ""}
         <div class="cs-detail-row">
-            <label>版本</label>
+            <label>${esc(t("versionLabel"))}</label>
             <select id="cs-version-sel">${versions.map((v, i) =>
-                `<option value="${esc(String(v.id))}" data-idx="${i}">${esc(v.name)} (${esc(v.baseModel || "?")})${v.local ? " ✔已装" : ""}</option>`).join("")}
+                `<option value="${esc(String(v.id))}" data-idx="${i}">${esc(v.name)} (${esc(v.baseModel || "?")})${v.local ? esc(t("installedMark")) : ""}</option>`).join("")}
             </select>
         </div>
         <div id="cs-version-body"></div>
-        ${desc ? `<details class="cs-desc"><summary>模型说明</summary><div class="cs-desc-body">${desc}</div></details>` : ""}
+        ${desc ? `<details class="cs-desc"><summary>${esc(t("modelDesc"))}</summary><div class="cs-desc-body">${desc}</div></details>` : ""}
     `;
     $("#cs-detail-back", detailView).onclick = backToList;
     rewriteDescImages(detailView);
@@ -480,24 +684,24 @@ function renderVersion(version, model) {
     body.innerHTML = `
         ${triggers.length ? `
         <div class="cs-section">
-            <div class="cs-section-title">触发词 <button class="cs-btn cs-btn-mini" id="cs-copy-triggers">复制全部</button></div>
-            <div class="cs-tags">${triggers.map((t) => `<code class="cs-trigger">${esc(t)}</code>`).join("")}</div>
+            <div class="cs-section-title">${esc(t("triggerWords"))} <button class="cs-btn cs-btn-mini" id="cs-copy-triggers">${esc(t("copyAll"))}</button></div>
+            <div class="cs-tags">${triggers.map((tg) => `<code class="cs-trigger">${esc(tg)}</code>`).join("")}</div>
         </div>` : ""}
         <div class="cs-section">
-            <div class="cs-section-title">文件</div>
+            <div class="cs-section-title">${esc(t("files"))}</div>
             <div class="cs-files">${(version.files || []).map((f, i) => `
                 <div class="cs-file">
                     <div class="cs-file-info">
                         <div class="cs-file-name" title="${esc(f.name)}">${esc(f.name)}</div>
-                        <div class="cs-file-meta">${fmtSize((f.sizeKB || 0) * 1024)}${f.primary ? " · 主文件" : ""}</div>
+                        <div class="cs-file-meta">${fmtSize((f.sizeKB || 0) * 1024)}${f.primary ? " · " + esc(t("primaryFile")) : ""}</div>
                     </div>
-                    <button class="cs-btn cs-btn-primary" data-file-idx="${i}">⬇ 下载</button>
-                </div>`).join("") || '<div class="cs-empty">该版本没有文件</div>'}
+                    <button class="cs-btn cs-btn-primary" data-file-idx="${i}">${esc(t("download"))}</button>
+                </div>`).join("") || `<div class="cs-empty">${esc(t("noFiles"))}</div>`}
             </div>
         </div>
         ${images.length ? `
         <div class="cs-section">
-            <div class="cs-section-title">预览图 (${images.length}) — 点击查看生成参数</div>
+            <div class="cs-section-title">${esc(t("previews", { n: images.length }))}</div>
             <div class="cs-gallery">${images.map(galleryItemHtml).join("")}
             </div>
         </div>` : ""}
@@ -522,28 +726,28 @@ function renderVersion(version, model) {
 function showImageMeta(image) {
     const meta = image.meta;
     if (!meta) {
-        showModal('<h3 class="cs-modal-title">生成参数</h3><p class="cs-modal-msg">这张图没有公开生成参数。</p>');
+        showModal(`<h3 class="cs-modal-title">${esc(t("genParams"))}</h3><p class="cs-modal-msg">${esc(t("noGenParams"))}</p>`);
         return;
     }
     const kv = [
-        ["模型", meta.model], ["采样器", meta.sampler], ["步数", meta.steps],
-        ["CFG", meta.cfgScale], ["Seed", meta.seed], ["尺寸", meta.size],
+        [t("kvModel"), meta.model], [t("kvSampler"), meta.sampler], [t("kvSteps"), meta.steps],
+        ["CFG", meta.cfgScale], ["Seed", meta.seed], [t("kvSize"), meta.size],
     ].filter(([, v]) => v !== undefined && v !== null && v !== "");
     const resources = (meta.resources || []).map((r) =>
         `<code class="cs-trigger">${esc(r.name || r.modelName || "?")}${r.weight != null ? " × " + esc(r.weight) : ""}</code>`).join("");
     const m = showModal(`
-        <h3 class="cs-modal-title">生成参数</h3>
+        <h3 class="cs-modal-title">${esc(t("genParams"))}</h3>
         <div class="cs-meta-block">
-            <div class="cs-section-title">正面提示词 <button class="cs-btn cs-btn-mini" data-copy="prompt">复制</button></div>
+            <div class="cs-section-title">${esc(t("positivePrompt"))} <button class="cs-btn cs-btn-mini" data-copy="prompt">${esc(t("copy"))}</button></div>
             <textarea readonly rows="5">${esc(meta.prompt || "")}</textarea>
         </div>
         ${meta.negativePrompt ? `
         <div class="cs-meta-block">
-            <div class="cs-section-title">负面提示词 <button class="cs-btn cs-btn-mini" data-copy="negative">复制</button></div>
+            <div class="cs-section-title">${esc(t("negativePrompt"))} <button class="cs-btn cs-btn-mini" data-copy="negative">${esc(t("copy"))}</button></div>
             <textarea readonly rows="3">${esc(meta.negativePrompt || "")}</textarea>
         </div>` : ""}
         <div class="cs-kv-grid">${kv.map(([k, v]) => `<div><b>${esc(k)}</b><span>${esc(v)}</span></div>`).join("")}</div>
-        ${resources ? `<div class="cs-meta-block"><div class="cs-section-title">用到资源</div><div class="cs-tags">${resources}</div></div>` : ""}`);
+        ${resources ? `<div class="cs-meta-block"><div class="cs-section-title">${esc(t("resources"))}</div><div class="cs-tags">${resources}</div></div>` : ""}`);
     $$("[data-copy]", m.box).forEach((btn) => {
         btn.onclick = () => {
             const ta = $("textarea", btn.closest(".cs-meta-block"));
@@ -555,7 +759,7 @@ function showImageMeta(image) {
 // ---------- 下载对话框 ----------
 async function openDownloadDialog({ model, version, fileIndex = null, defaultRoot = "", defaultSub = "" }) {
     if (!version) {
-        toast("error", "无法下载", "未找到该版本,请重新检查更新后再试");
+        toast("error", t("cantDownload"), t("versionNotFound"));
         return;
     }
     let destinations = [];
@@ -567,7 +771,7 @@ async function openDownloadDialog({ model, version, fileIndex = null, defaultRoo
         destError = e.message;
     }
     if (!destinations.length) {
-        toast("error", "无法打开下载", destError ? `获取目录失败: ${destError}` : "未找到已注册的模型文件夹");
+        toast("error", t("openDownloadFailed"), destError ? t("destFetchFailed") + destError : t("noRegFolders"));
         return;
     }
     const files = version.files || [];
@@ -577,29 +781,29 @@ async function openDownloadDialog({ model, version, fileIndex = null, defaultRoo
     const matched = defaultRoot && destinations.find((d) => normPath(d.root) === normPath(defaultRoot));
     const preRoot = matched ? matched.root : destinations[0].root;
     const m = showModal(`
-        <h3 class="cs-modal-title">下载 — ${esc(version.name || model.name)}</h3>
+        <h3 class="cs-modal-title">${esc(t("dlDialogTitle", { name: version.name || model.name }))}</h3>
         <div class="cs-form">
             ${files.length > 1 ? `
-            <label>文件
+            <label>${esc(t("fileLabel"))}
                 <select id="cs-dl-file">${files.map((f, i) =>
                     `<option value="${i}" ${i === selIdx ? "selected" : ""}>${esc(f.name)} (${fmtSize((f.sizeKB || 0) * 1024)})</option>`).join("")}
                 </select>
             </label>` : ""}
-            <label>目标目录
+            <label>${esc(t("targetFolder"))}
                 <select id="cs-dl-root">${destinations.map((d) =>
                     `<option value="${esc(d.root)}" ${d.root === preRoot ? "selected" : ""}>${esc(d.label)}</option>`).join("")}
                 </select>
             </label>
-            <label>子文件夹(可选,自动创建)
-                <input id="cs-dl-sub" type="text" placeholder="例如: NSFW/角色" value="${esc(defaultSub)}"/>
+            <label>${esc(t("subfolder"))}
+                <input id="cs-dl-sub" type="text" placeholder="${esc(t("subfolderPh"))}" value="${esc(defaultSub)}"/>
             </label>
-            <label>保存文件名
+            <label>${esc(t("saveName"))}
                 <input id="cs-dl-name" type="text" value="${esc(files[selIdx]?.name || (version.name + ".safetensors"))}"/>
             </label>
-            <div class="cs-modal-msg cs-dl-hint">下载完成后自动写入 .civitai.json 元数据${S.cfg.verify_hash ? "并校验 SHA256" : ""}。</div>
+            <div class="cs-modal-msg cs-dl-hint">${esc(t("dlHint", { hash: S.cfg.verify_hash ? t("dlHintHash") : "" }))}</div>
             <div class="cs-modal-actions">
-                <button class="cs-btn" data-act="cancel">取消</button>
-                <button class="cs-btn cs-btn-primary" data-act="ok">开始下载</button>
+                <button class="cs-btn" data-act="cancel">${esc(t("cancel"))}</button>
+                <button class="cs-btn cs-btn-primary" data-act="ok">${esc(t("startDownload"))}</button>
             </div>
         </div>`);
     $("[data-act=cancel]", m.box).onclick = m.close;
@@ -613,7 +817,7 @@ async function openDownloadDialog({ model, version, fileIndex = null, defaultRoo
     $("[data-act=ok]", m.box).onclick = async () => {
         const btn = $("[data-act=ok]", m.box);
         btn.disabled = true;
-        btn.textContent = "提交中…";
+        btn.textContent = t("submitting");
         try {
             const body = {
                 version_id: version.id,
@@ -629,15 +833,15 @@ async function openDownloadDialog({ model, version, fileIndex = null, defaultRoo
             };
             const res = await apiPost("/civitai_studio/download", body);
             m.close();
-            toast("success", "已加入下载队列", `${model.name} — ${version.name}`);
+            toast("success", t("queuedToast"), `${model.name} — ${version.name}`);
             if (res.job) S.dl.jobs.unshift(res.job); // 立即入列,不等下一次轮询
             lastPollTs = 0;
             switchTab("downloads");
             pollDownloads();
         } catch (e) {
-            toast("error", "下载任务创建失败", e.message);
+            toast("error", t("queueFailed"), e.message);
             btn.disabled = false;
-            btn.textContent = "开始下载";
+            btn.textContent = t("startDownload");
         }
     };
 }
@@ -658,7 +862,7 @@ async function loadLocal(force) {
         st.error = "";
     } catch (e) {
         if (seq !== loadLocalSeq) return;
-        st.error = "加载失败: " + e.message;
+        st.error = t("loadFailed") + e.message;
         st.models = [];
     } finally {
         if (seq === loadLocalSeq) {
@@ -688,28 +892,28 @@ function renderLocalList() {
     const cats = [...new Set(st.models.map((m) => m.category))].sort();
     const chips = $("#cs-local-chips");
     if (chips) {
-        chips.innerHTML = `<button class="cs-chip ${!st.type ? "active" : ""}" data-cat="">全部 (${st.models.length})</button>` +
+        chips.innerHTML = `<button class="cs-chip ${!st.type ? "active" : ""}" data-cat="">${esc(t("allN", { n: st.models.length }))}</button>` +
             cats.map((c) => `<button class="cs-chip ${st.type === c ? "active" : ""}" data-cat="${esc(c)}">${esc(c)} (${st.models.filter((m) => m.category === c).length})</button>`).join("");
         $$(".cs-chip", chips).forEach((chip) => {
             chip.onclick = () => { st.type = chip.dataset.cat; renderLocalList(); };
         });
     }
     if (st.loading && !st.models.length) {
-        list.innerHTML = '<div class="cs-empty">扫描模型目录中…</div>';
+        list.innerHTML = `<div class="cs-empty">${esc(t("scanning"))}</div>`;
         return;
     }
     if (!models.length) {
-        list.innerHTML = '<div class="cs-empty">没有找到模型文件。</div>' + (st.truncated ? '<div class="cs-empty">注意:文件数超过扫描上限。</div>' : "");
+        list.innerHTML = `<div class="cs-empty">${esc(t("noModelFiles"))}</div>` + (st.truncated ? `<div class="cs-empty">${esc(t("truncatedNote"))}</div>` : "");
         return;
     }
-    const scanning = st.loading ? '<div class="cs-banner">正在重新扫描模型目录…</div>' : "";
+    const scanning = st.loading ? `<div class="cs-banner">${esc(t("rescanning"))}</div>` : "";
     list.innerHTML = scanning + models.map((m) => {
         const civ = m.civitai || {};
         const upd = st.updates[m.id];
         const updHtml = upd && upd.update
-            ? `<div class="cs-local-update">有新版本: ${esc(upd.update.version_name)} (${esc(upd.update.base_model || "")})
-                 <button class="cs-btn cs-btn-mini cs-btn-primary" data-update="${esc(m.id)}">下载新版本</button></div>`
-            : (upd && !upd.update && !upd.error ? '<div class="cs-local-update cs-ok">已是最新版本</div>' : "");
+            ? `<div class="cs-local-update">${esc(t("newVersion"))} ${esc(upd.update.version_name)} (${esc(upd.update.base_model || "")})
+                 <button class="cs-btn cs-btn-mini cs-btn-primary" data-update="${esc(m.id)}">${esc(t("dlNewVersion"))}</button></div>`
+            : (upd && !upd.update && !upd.error ? `<div class="cs-local-update cs-ok">${esc(t("upToDate"))}</div>` : "");
         return `
         <div class="cs-local-row" data-id="${esc(m.id)}">
             <div class="cs-local-main">
@@ -719,19 +923,19 @@ function renderLocalList() {
                     ${civ.base_model ? `<span class="cs-badge">${esc(civ.base_model)}</span>` : ""}
                     ${civ.version_name ? `<span class="cs-badge cs-badge-dim">v: ${esc(civ.version_name)}</span>` : ""}
                     <span class="cs-dim">${fmtSize(m.size)}</span>
-                    ${civ.model_name && civ.model_name !== m.name ? `<span class="cs-dim">文件: ${esc(m.name)}</span>` : ""}
+                    ${civ.model_name && civ.model_name !== m.name ? `<span class="cs-dim">${esc(t("filePrefix"))} ${esc(m.name)}</span>` : ""}
                 </div>
                 <div class="cs-local-path" title="${esc(m.rel)}">${esc(m.rel)}</div>
                 ${updHtml}
             </div>
             <div class="cs-local-actions">
-                ${civ.model_id ? `<a class="cs-btn cs-btn-mini" href="${esc(civitaiPage())}/models/${esc(String(civ.model_id))}" target="_blank" rel="noopener noreferrer">页面</a>` : ""}
-                ${civ.version_id ? `<button class="cs-btn cs-btn-mini" data-detail="${esc(m.id)}">详情</button>
-                <button class="cs-btn cs-btn-mini" data-check="${esc(m.id)}">查更新</button>` : `
-                <button class="cs-btn cs-btn-mini" data-associate="${esc(m.id)}">关联</button>`}
-                <button class="cs-btn cs-btn-mini" data-rename="${esc(m.id)}">重命名</button>
-                <button class="cs-btn cs-btn-mini" data-reveal="${esc(m.id)}">定位</button>
-                <button class="cs-btn cs-btn-mini cs-btn-danger" data-delete="${esc(m.id)}">删除</button>
+                ${civ.model_id ? `<a class="cs-btn cs-btn-mini" href="${esc(civitaiPage())}/models/${esc(String(civ.model_id))}" target="_blank" rel="noopener noreferrer">${esc(t("pageBtn"))}</a>` : ""}
+                ${civ.version_id ? `<button class="cs-btn cs-btn-mini" data-detail="${esc(m.id)}">${esc(t("detailsBtn"))}</button>
+                <button class="cs-btn cs-btn-mini" data-check="${esc(m.id)}">${esc(t("checkBtn"))}</button>` : `
+                <button class="cs-btn cs-btn-mini" data-associate="${esc(m.id)}">${esc(t("associateBtn"))}</button>`}
+                <button class="cs-btn cs-btn-mini" data-rename="${esc(m.id)}">${esc(t("renameBtn"))}</button>
+                <button class="cs-btn cs-btn-mini" data-reveal="${esc(m.id)}">${esc(t("revealBtn"))}</button>
+                <button class="cs-btn cs-btn-mini cs-btn-danger" data-delete="${esc(m.id)}">${esc(t("deleteBtn"))}</button>
             </div>
         </div>`;
     }).join("");
@@ -740,21 +944,21 @@ function renderLocalList() {
         btn.onclick = async () => {
             const m = findLocalModel(btn.dataset.reveal);
             try { await apiPost("/civitai_studio/local/reveal", { category: m.category, rel: m.rel }); }
-            catch (e) { toast("error", "打开文件夹失败", e.message); }
+            catch (e) { toast("error", t("revealFailed"), e.message); }
         };
     });
     $$("[data-delete]", list).forEach((btn) => {
         btn.onclick = () => {
             const m = findLocalModel(btn.dataset.delete);
-            confirmModal("删除模型", `确定要删除「${m.name}」吗?\n该操作不可恢复。`, async () => {
+            confirmModal(t("deleteTitle"), t("deleteMsg", { name: m.name }), async () => {
                 try {
                     await apiPost("/civitai_studio/local/delete", { category: m.category, rel: m.rel });
-                    toast("success", "已删除", m.name);
+                    toast("success", t("deleted"), m.name);
                     S.local.updates = {};
                     S.local.expanded.delete(m.id);
                     S.local.detailCache[m.civitai?.model_id] = undefined;
                     loadLocal(true);
-                } catch (e) { toast("error", "删除失败", e.message); }
+                } catch (e) { toast("error", t("deleteFailed"), e.message); }
             });
         };
     });
@@ -765,7 +969,7 @@ function renderLocalList() {
             btn.textContent = "…";
             await runUpdateCheck([{ category: m.category, rel: m.rel }]);
             btn.disabled = false;
-            btn.textContent = "查更新";
+            btn.textContent = t("checkBtn");
         };
     });
     $$("[data-update]", list).forEach((btn) => {
@@ -779,7 +983,7 @@ function renderLocalList() {
                 const ver = (model.modelVersions || []).find((v) => String(v.id) === String(info.update.version_id)) || model.modelVersions?.[0];
                 openDownloadDialog({ model, version: ver, defaultRoot: m.root, defaultSub: m.rel.includes("/") ? m.rel.slice(0, m.rel.lastIndexOf("/")) : "" });
             } catch (e) {
-                toast("error", "获取新版本失败", e.message);
+                toast("error", t("fetchingNewVersion"), e.message);
             } finally { btn.disabled = false; }
         };
     });
@@ -821,7 +1025,7 @@ function injectLocalExpand(m, rowEl) {
     if (old && old.classList.contains("cs-expand")) old.remove();
     const ex = document.createElement("div");
     ex.className = "cs-expand";
-    ex.innerHTML = '<div class="cs-expand-loading">加载 Civitai 信息…</div>';
+    ex.innerHTML = `<div class="cs-expand-loading">${esc(t("loadingCivitai"))}</div>`;
     rowEl.after(ex);
     const mid = m.civitai.model_id;
     const cached = S.local.detailCache[mid];
@@ -839,7 +1043,7 @@ function injectLocalExpand(m, rowEl) {
                 stats: {}, modelVersions: [],
             }, { offline: true });
         } else {
-            ex.innerHTML = `<div class="cs-expand-loading">详情加载失败: ${esc(e.message)}</div>`;
+            ex.innerHTML = `<div class="cs-expand-loading">${esc(t("expandLoadFailed") + e.message)}</div>`;
         }
     });
 }
@@ -867,30 +1071,30 @@ function renderLocalExpand(ex, m, data, opts = {}) {
     const triggers = version.trainedWords || civ.trained_words || [];
     const files = version.files || [];
     ex.innerHTML = `
-        ${opts.offline ? '<div class="cs-banner">离线:显示本地缓存的说明(可能非最新)</div>' : ""}
+        ${opts.offline ? `<div class="cs-banner">${esc(t("offlineBanner"))}</div>` : ""}
         <div class="cs-expand-body">
             ${cover?.url ? `<img class="cs-expand-cover" loading="lazy" src="${esc(imgSrc(cover.url))}" data-direct="${esc(cover.url)}" onerror="this.style.display='none'"/>` : ""}
             <div class="cs-expand-main">
                 <div class="cs-kv-grid">
-                    <div><b>Civitai 名称</b><span>${esc(data.name || civ.model_name || "-")}</span></div>
-                    <div><b>版本</b><span>${esc(version.name || civ.version_name || "-")}</span></div>
+                    <div><b>${esc(t("civName"))}</b><span>${esc(data.name || civ.model_name || "-")}</span></div>
+                    <div><b>${esc(t("versionLabel"))}</b><span>${esc(version.name || civ.version_name || "-")}</span></div>
                     <div><b>Base Model</b><span>${esc(version.baseModel || civ.base_model || "-")}</span></div>
-                    <div><b>数据</b><span>⬇ ${fmtNum(data.stats?.downloadCount)} · 👍 ${fmtNum(data.stats?.thumbsUpCount)}</span></div>
-                    <div><b>Model ID</b><span class="cs-copyable" title="点击复制" data-copy-text="${esc(String(data.id))}">${esc(String(data.id))}</span></div>
-                    <div><b>Version ID</b><span class="cs-copyable" title="点击复制" data-copy-text="${esc(String(version.id || ""))}">${esc(String(version.id || ""))}</span></div>
+                    <div><b>${esc(t("statsLabel"))}</b><span>⬇ ${fmtNum(data.stats?.downloadCount)} · 👍 ${fmtNum(data.stats?.thumbsUpCount)}</span></div>
+                    <div><b>Model ID</b><span class="cs-copyable" title="${esc(t("clickCopy"))}" data-copy-text="${esc(String(data.id))}">${esc(String(data.id))}</span></div>
+                    <div><b>Version ID</b><span class="cs-copyable" title="${esc(t("clickCopy"))}" data-copy-text="${esc(String(version.id || ""))}">${esc(String(version.id || ""))}</span></div>
                 </div>
-                ${triggers.length ? `<div class="cs-tags">${triggers.map((t) => `<code class="cs-trigger">${esc(t)}</code>`).join("")}</div>` : ""}
+                ${triggers.length ? `<div class="cs-tags">${triggers.map((tg) => `<code class="cs-trigger">${esc(tg)}</code>`).join("")}</div>` : ""}
                 ${desc ? `<div class="cs-expand-desc">${desc}</div>` : ""}
                 ${files.length ? `<div class="cs-files">${files.map((f) => `
                     <div class="cs-file"><div class="cs-file-info">
                         <div class="cs-file-name" title="${esc(f.name)}">${esc(f.name)}</div>
-                        <div class="cs-file-meta">${fmtSize((f.sizeKB || 0) * 1024)}${f.primary ? " · 主文件" : ""}</div>
+                        <div class="cs-file-meta">${fmtSize((f.sizeKB || 0) * 1024)}${f.primary ? " · " + esc(t("primaryFile")) : ""}</div>
                     </div></div>`).join("")}</div>` : ""}
                 <div class="cs-expand-actions">
-                    <a class="cs-btn cs-btn-mini" href="${esc(civitaiPage())}/models/${esc(String(data.id))}" target="_blank" rel="noopener noreferrer">Civitai 页面 ↗</a>
-                    ${version.id ? `<button class="cs-btn cs-btn-mini cs-btn-primary" data-dl-version="${esc(String(version.id))}">下载此版本</button>` : ""}
-                    ${civ.model_id ? `<button class="cs-btn cs-btn-mini" data-re-associate>重新关联</button>` : ""}
-                    ${civ.model_id ? `<button class="cs-btn cs-btn-mini" data-refresh-meta>刷新元数据</button>` : ""}
+                    <a class="cs-btn cs-btn-mini" href="${esc(civitaiPage())}/models/${esc(String(data.id))}" target="_blank" rel="noopener noreferrer">${esc(t("openOnCivitai"))}</a>
+                    ${version.id ? `<button class="cs-btn cs-btn-mini cs-btn-primary" data-dl-version="${esc(String(version.id))}">${esc(t("dlThisVersion"))}</button>` : ""}
+                    ${civ.model_id ? `<button class="cs-btn cs-btn-mini" data-re-associate>${esc(t("reAssociate"))}</button>` : ""}
+                    ${civ.model_id ? `<button class="cs-btn cs-btn-mini" data-refresh-meta>${esc(t("refreshMeta"))}</button>` : ""}
                 </div>
             </div>
         </div>`;
@@ -901,17 +1105,17 @@ function renderLocalExpand(ex, m, data, opts = {}) {
     const rf = $("[data-refresh-meta]", ex);
     if (rf) rf.onclick = async () => {
         rf.disabled = true;
-        rf.textContent = "刷新中…";
+        rf.textContent = t("refreshing");
         try {
             await apiPost("/civitai_studio/local/refresh_meta", { category: m.category, rel: m.rel });
             const fresh = await apiGet(`/civitai_studio/model/${encodeURIComponent(String(civ.model_id))}`);
             S.local.detailCache[civ.model_id] = fresh;
             renderLocalExpand(ex, m, fresh);
-            toast("success", "元数据已刷新", "");
+            toast("success", t("metaRefreshed"), "");
         } catch (e2) {
-            toast("error", "刷新元数据失败", e2.message);
+            toast("error", t("metaRefreshFailed"), e2.message);
             rf.disabled = false;
-            rf.textContent = "刷新元数据";
+            rf.textContent = t("refreshMeta");
         }
     };
     rewriteDescImages(ex);
@@ -921,10 +1125,10 @@ function renderLocalExpand(ex, m, data, opts = {}) {
         const tgl = document.createElement("button");
         tgl.className = "cs-btn cs-btn-mini";
         tgl.style.marginTop = "6px";
-        tgl.textContent = "展开全部";
+        tgl.textContent = t("expandAll");
         tgl.onclick = () => {
             const clamped = descEl.classList.toggle("cs-clamped");
-            tgl.textContent = clamped ? "展开全部" : "收起";
+            tgl.textContent = clamped ? t("expandAll") : t("collapse");
         };
         descEl.after(tgl);
     }
@@ -938,15 +1142,15 @@ function renderLocalExpand(ex, m, data, opts = {}) {
 function renameDialog(m) {
     if (!m) return;
     const md = showModal(`
-        <h3 class="cs-modal-title">重命名 — ${esc(m.name)}</h3>
+        <h3 class="cs-modal-title">${esc(t("renameTitle", { name: m.name }))}</h3>
         <div class="cs-form">
-            <label>新文件名(含扩展名)
+            <label>${esc(t("newFileName"))}
                 <input id="cs-rn-name" type="text" value="${esc(m.name)}"/>
             </label>
-            <div class="cs-modal-msg">仅重命名模型文件并同步 .civitai.json 元数据;工作流中引用的旧文件名将失效。</div>
+            <div class="cs-modal-msg">${esc(t("renameMsg"))}</div>
             <div class="cs-modal-actions">
-                <button class="cs-btn" data-act="cancel">取消</button>
-                <button class="cs-btn cs-btn-primary" data-act="ok">确定</button>
+                <button class="cs-btn" data-act="cancel">${esc(t("cancel"))}</button>
+                <button class="cs-btn cs-btn-primary" data-act="ok">${esc(t("ok"))}</button>
             </div>
         </div>`);
     $("[data-act=cancel]", md.box).onclick = md.close;
@@ -956,12 +1160,12 @@ function renameDialog(m) {
         try {
             await apiPost("/civitai_studio/local/rename", { category: m.category, rel: m.rel, new_name: $("#cs-rn-name", md.box).value.trim() });
             md.close();
-            toast("success", "已重命名", m.name);
+            toast("success", t("renamed"), m.name);
             S.local.expanded.delete(m.id);
             delete S.local.updates[m.id];
             loadLocal(true);
         } catch (e) {
-            toast("error", "重命名失败", e.message);
+            toast("error", t("renameFailed"), e.message);
             btn.disabled = false;
         }
     };
@@ -971,7 +1175,7 @@ function guessQueryFromFilename(name) {
     // 从文件名猜搜索词:去扩展名,按分隔符拆词,丢掉版本/精度/格式等噪声词
     const base = String(name || "").replace(/\.[a-z0-9]+$/i, "");
     const junk = /^(v\d+([._]\d+)*|final|prd|pruned|f16|f32|fp8|fp16|t5xxl|eps|ema|safetensors|bin|pt|pth|ckpt|lora|locon|dora|checkpoint|model|copy|combo|by|the)$/i;
-    const tokens = base.split(/[\s_\-.,()[\]【】·]+/).filter((t) => t && !junk.test(t) && !/^\d+$/.test(t));
+    const tokens = base.split(/[\s_\-.,()[\]【】·]+/).filter((tg) => tg && !junk.test(tg) && !/^\d+$/.test(tg));
     return tokens.slice(0, 5).join(" ").trim();
 }
 
@@ -981,30 +1185,30 @@ function associateDialog(m) {
     let selected = null; // {model_id}
     let detailData = null;
     const md = showModal(`
-        <h3 class="cs-modal-title">关联 Civitai 模型</h3>
+        <h3 class="cs-modal-title">${esc(t("assocTitle"))}</h3>
         <div class="cs-form">
-            <label>按文件名搜索(已自动预填,可修改)
+            <label>${esc(t("searchByFile"))}
                 <div class="cs-search-row">
                     <input id="cs-as-query" type="text" value="${esc(guessQueryFromFilename(m.name))}"/>
-                    <button class="cs-btn" id="cs-as-search">搜索</button>
+                    <button class="cs-btn" id="cs-as-search">${esc(t("searchBtn"))}</button>
                 </div>
             </label>
-            <div id="cs-as-results" class="cs-as-results"><div class="cs-dim">搜索中…</div></div>
+            <div id="cs-as-results" class="cs-as-results"><div class="cs-dim">${esc(t("searching"))}</div></div>
             <div id="cs-as-version-wrap" style="display:none">
-                <label>版本</label>
+                <label>${esc(t("versionLabel"))}</label>
                 <div class="cs-as-version-row">
                     <select id="cs-as-version" style="flex:1; min-width:0"></select>
                     <img id="cs-as-thumb" class="cs-as-thumb" style="display:none" alt=""/>
-                    <a id="cs-as-open" class="cs-btn cs-btn-mini" target="_blank" rel="noopener noreferrer" style="display:none">网页确认 ↗</a>
+                    <a id="cs-as-open" class="cs-btn cs-btn-mini" target="_blank" rel="noopener noreferrer" style="display:none">${esc(t("webConfirm"))}</a>
                 </div>
             </div>
-            <label>或直接粘贴页面链接 / 模型 ID
-                <input id="cs-as-ref" type="text" placeholder="https://civitai.com/models/12345 或 12345"/>
+            <label>${esc(t("pasteRef"))}
+                <input id="cs-as-ref" type="text" placeholder="${esc(t("pasteRefPh"))}"/>
             </label>
-            <div class="cs-modal-msg">点选搜索结果(或粘贴链接)后点"关联",将写入 .civitai.json。可用"网页确认 ↗"在 Civitai 打开该版本核对。</div>
+            <div class="cs-modal-msg">${esc(t("assocMsg"))}</div>
             <div class="cs-modal-actions">
-                <button class="cs-btn" data-act="cancel">取消</button>
-                <button class="cs-btn cs-btn-primary" data-act="ok" disabled>关联</button>
+                <button class="cs-btn" data-act="cancel">${esc(t("cancel"))}</button>
+                <button class="cs-btn cs-btn-primary" data-act="ok" disabled>${esc(t("associateBtn"))}</button>
             </div>
         </div>`);
     const resultsEl = $("#cs-as-results", md.box);
@@ -1035,26 +1239,26 @@ function associateDialog(m) {
     const doSearch = async () => {
         const q = $("#cs-as-query", md.box).value.trim();
         if (!q) {
-            resultsEl.innerHTML = '<div class="cs-dim">请输入搜索词,或直接粘贴页面链接 / 模型 ID</div>';
+            resultsEl.innerHTML = `<div class="cs-dim">${esc(t("emptyQuery"))}</div>`;
             return;
         }
-        resultsEl.innerHTML = '<div class="cs-dim">搜索中…</div>';
+        resultsEl.innerHTML = `<div class="cs-dim">${esc(t("searching"))}</div>`;
         try {
             const data = await apiGet(`/civitai_studio/search?query=${encodeURIComponent(q)}&limit=8&nsfw=true`);
             searchItems = data.items || [];
             if (!searchItems.length) {
-                resultsEl.innerHTML = '<div class="cs-dim">没有找到,试试更短的关键词</div>';
+                resultsEl.innerHTML = `<div class="cs-dim">${esc(t("noResults"))}</div>`;
                 return;
             }
             resultsEl.innerHTML = searchItems.map((it, i) => `
                 <div class="cs-as-item" data-i="${i}">
                     <div class="cs-as-item-main">
                         <div class="cs-as-item-name" title="${esc(it.name)}">${esc(it.name)}</div>
-                        <div class="cs-dim">${esc(TYPE_LABELS[it.type] || it.type)} · ${esc((it.modelVersions?.[0] || {}).baseModel || "?")} · ⬇ ${fmtNum(it.stats?.downloadCount)}</div>
+                        <div class="cs-dim">${esc(typeLabel(it.type))} · ${esc((it.modelVersions?.[0] || {}).baseModel || "?")} · ⬇ ${fmtNum(it.stats?.downloadCount)}</div>
                     </div>
                 </div>`).join("");
         } catch (e) {
-            resultsEl.innerHTML = `<div class="cs-dim">搜索失败: ${esc(e.message)}</div>`;
+            resultsEl.innerHTML = `<div class="cs-dim">${esc(t("searchFailed") + e.message)}</div>`;
         }
     };
     resultsEl.addEventListener("click", async (e) => {
@@ -1070,7 +1274,7 @@ function associateDialog(m) {
         okBtn.disabled = true; // 版本加载完成前禁止提交,避免发送垃圾 version_id
         versionSel.innerHTML = "";
         versionWrap.style.display = "";
-        versionSel.innerHTML = '<option>版本加载中…</option>';
+        versionSel.innerHTML = `<option>${esc(t("versionLoading"))}</option>`;
         try {
             const detail = await apiGet(`/civitai_studio/model/${encodeURIComponent(myId)}`);
             if (selected?.model_id !== myId) return; // 用户已改选其他模型,丢弃本次响应
@@ -1097,17 +1301,17 @@ function associateDialog(m) {
             } else if (refInput.value.trim()) {
                 body = { category: m.category, rel: m.rel, ref: refInput.value.trim() };
             } else {
-                toast("error", "请先从搜索结果选择,或粘贴链接", "");
+                toast("error", t("pickFirst"), "");
                 okBtn.disabled = false;
                 return;
             }
             const res = await apiPost("/civitai_studio/local/associate", body);
             md.close();
             delete S.local.updates[m.id];
-            toast("success", "已关联", `${res.associated?.model_name || m.name} — ${res.associated?.version_name || ""}`);
+            toast("success", t("associated"), `${res.associated?.model_name || m.name} — ${res.associated?.version_name || ""}`);
             loadLocal(true);
         } catch (e) {
-            toast("error", "关联失败", e.message);
+            toast("error", t("assocFailed"), e.message);
             okBtn.disabled = false;
         }
     };
@@ -1117,7 +1321,7 @@ function associateDialog(m) {
 async function runUpdateCheck(items) {
     const st = S.local;
     const btn = $("#cs-check-updates");
-    if (btn) { btn.disabled = true; btn.textContent = "检查中…"; }
+    if (btn) { btn.disabled = true; btn.textContent = "…"; }
     try {
         const data = await apiPost("/civitai_studio/local/check_updates", { items });
         const batch = !items?.length;
@@ -1125,7 +1329,7 @@ async function runUpdateCheck(items) {
         for (const r of data.results || []) {
             if (r.error) {
                 failCount += 1;
-                if (!batch) toast("error", "更新检查失败", `${r.id}: ${r.error}`);
+                if (!batch) toast("error", t("updateCheckFailed"), `${r.id}: ${r.error}`);
                 continue;
             }
             st.updates[r.id] = r;
@@ -1133,14 +1337,14 @@ async function runUpdateCheck(items) {
         renderLocalList();
         const hasUpdate = (data.results || []).some((r) => r.update);
         const scope = data.total_linked > data.checked
-            ? `已检查 ${data.checked}/${data.total_linked} 个(单次上限 30,可对单个模型点"查更新")`
-            : `已检查 ${data.checked} 个`;
-        const failNote = failCount ? `,${failCount} 个查询失败(多为模型已在站方删除)` : "";
-        toast("info", "更新检查完成", (hasUpdate ? "发现可更新的模型 — " : "") + scope + failNote);
+            ? t("checkedAB", { a: data.checked, b: data.total_linked })
+            : t("checkedN", { n: data.checked });
+        const failNote = failCount ? t("failNote", { n: failCount }) : "";
+        toast("info", t("updateCheckDone"), (hasUpdate ? t("updatesFound") : "") + scope + failNote);
     } catch (e) {
-        toast("error", "更新检查失败", e.message);
+        toast("error", t("updateCheckFailed"), e.message);
     } finally {
-        if (btn) { btn.disabled = false; btn.textContent = "检查更新"; }
+        if (btn) { btn.disabled = false; btn.textContent = t("checkUpdates"); }
     }
 }
 
@@ -1157,20 +1361,23 @@ function renderDownloads(force) {
     S.dl.lastSig = sig;
     let head = "";
     if (S.dl.failStreak >= 3) {
-        head = '<div class="cs-banner cs-banner-warn">下载状态刷新失败(已连续多次),请检查 ComfyUI 后端;恢复后此提示会自动消失。</div>';
+        head = `<div class="cs-banner cs-banner-warn">${esc(t("pollFailBanner"))}</div>`;
     }
     if (!S.dl.jobs.length) {
         const clrBtn = $("#cs-dl-clear");
         if (clrBtn) clrBtn.style.display = "none";
-        list.innerHTML = head + '<div class="cs-empty">暂无下载任务。去「浏览」页面挑个模型吧。</div>';
+        list.innerHTML = head + `<div class="cs-empty">${esc(t("noJobs"))}</div>`;
         return;
     }
     list.innerHTML = head + S.dl.jobs.map((j) => {
         const pct = Math.round((j.progress || 0) * 100);
         const statusText = {
-            queued: "排队中…", downloading: `下载中 ${pct}% ${fmtSpeed(j.speed)}`,
-            verifying: "校验 SHA256…", done: "完成 ✔", cancelled: "已取消",
-            error: "失败: " + (j.error || ""),
+            queued: t("stQueued"),
+            downloading: t("stDownloading", { pct, speed: fmtSpeed(j.speed) }),
+            verifying: t("stVerifying"),
+            done: t("stDone"),
+            cancelled: t("stCancelled"),
+            error: t("stError") + (j.error || ""),
         }[j.status] || j.status;
         const active = j.status === "downloading" || j.status === "verifying" || j.status === "queued";
         return `
@@ -1184,13 +1391,13 @@ function renderDownloads(force) {
                 </div>
                 ${j.warning ? `<div class="cs-local-update">${esc(j.warning)}</div>` : ""}
             </div>
-            ${active ? `<button class="cs-btn cs-btn-mini cs-btn-danger" data-cancel="${esc(j.id)}">取消</button>` : ""}
+            ${active ? `<button class="cs-btn cs-btn-mini cs-btn-danger" data-cancel="${esc(j.id)}">${esc(t("cancelBtn"))}</button>` : ""}
         </div>`;
     }).join("");
     $$("[data-cancel]", list).forEach((btn) => {
         btn.onclick = async () => {
             try { await apiPost("/civitai_studio/downloads/cancel", { id: btn.dataset.cancel }); }
-            catch (e) { toast("error", "取消失败", e.message); }
+            catch (e) { toast("error", t("cancelFailed"), e.message); }
         };
     });
     const clr = $("#cs-dl-clear");
@@ -1227,31 +1434,31 @@ async function pollDownloads() {
 async function openSettings() {
     let cfg;
     try { cfg = await apiGet("/civitai_studio/config"); }
-    catch (e) { toast("error", "读取配置失败", e.message); return; }
+    catch (e) { toast("error", t("readCfgFailed"), e.message); return; }
     const oldProxyImages = !!cfg.proxy_images;
     const m = showModal(`
-        <h3 class="cs-modal-title">⚙ Civitai Studio 设置</h3>
+        <h3 class="cs-modal-title">${esc(t("settingsTitle"))}</h3>
         <div class="cs-form">
-            <label>Civitai API Key(可选,下载受限模型/提高限额)
-                <input id="cs-set-key" type="password" placeholder="${cfg.api_key_set ? "已设置(尾号 " + esc(cfg.api_key_tail) + "),留空保持不变" : "粘贴 API Key"}"/>
+            <label>${esc(t("keyLabel"))}
+                <input id="cs-set-key" type="password" placeholder="${cfg.api_key_set ? esc(t("keySetPh", { tail: cfg.api_key_tail || "" })) : esc(t("keyPh"))}"/>
             </label>
-            <label>网络代理(HTTP / SOCKS 均可,裸地址自动按 HTTP 处理)
-                <input id="cs-set-proxy" type="text" value="${esc(cfg.proxy || "")}" placeholder="http://127.0.0.1:10808 或 socks5://127.0.0.1:10808,留空 = 直连"/>
-                <span class="cs-form-hint">填 127.0.0.1 而非 localhost。v2rayN 混合端口 10808:优先填 socks5://127.0.0.1:10808(实测最稳),http://127.0.0.1:10808 亦可;API、下载、图片全部走此代理。</span>
+            <label>${esc(t("proxyLabel"))}
+                <input id="cs-set-proxy" type="text" value="${esc(cfg.proxy || "")}" placeholder="${esc(t("proxyPh"))}"/>
+                <span class="cs-form-hint">${esc(t("proxyHint"))}</span>
             </label>
-            <label>API 站点(默认 civitai.red,被拦时可改回 https://civitai.com)
-                <input id="cs-set-mirror" type="text" value="${esc(cfg.mirror || "")}" placeholder="留空 = https://civitai.red"/>
+            <label>${esc(t("mirrorLabel"))}
+                <input id="cs-set-mirror" type="text" value="${esc(cfg.mirror || "")}" placeholder="${esc(t("mirrorPh"))}"/>
             </label>
-            <label>下载并发数(1-4)
+            <label>${esc(t("concLabel"))}
                 <input id="cs-set-conc" type="number" min="1" max="4" value="${cfg.max_concurrent || 1}"/>
             </label>
-            <label class="cs-check"><input id="cs-set-pimg" type="checkbox" ${cfg.proxy_images ? "checked" : ""}/> 预览图经服务端中转(直连打不开图片时开启)</label>
-            <label class="cs-check"><input id="cs-set-hash" type="checkbox" ${cfg.verify_hash ? "checked" : ""}/> 下载完成后校验 SHA256</label>
-            <label class="cs-check"><input id="cs-set-pdesc" type="checkbox" ${cfg.persist_description ? "checked" : ""}/> 说明落盘:把 Civitai 说明/标签/封面写进 .civitai.json(离线可看,默认关)</label>
-            <div class="cs-modal-msg">API Key 在 <a href="https://civitai.com/user/account" target="_blank" rel="noopener noreferrer">Civitai 账户设置</a> 页生成,仅保存在本机 ComfyUI user 目录;Key 只会下发给官方站点,不会发给镜像。</div>
+            <label class="cs-check"><input id="cs-set-pimg" type="checkbox" ${cfg.proxy_images ? "checked" : ""}/> ${esc(t("pimgLabel"))}</label>
+            <label class="cs-check"><input id="cs-set-hash" type="checkbox" ${cfg.verify_hash ? "checked" : ""}/> ${esc(t("hashLabel"))}</label>
+            <label class="cs-check"><input id="cs-set-pdesc" type="checkbox" ${cfg.persist_description ? "checked" : ""}/> ${esc(t("pdescLabel"))}</label>
+            <div class="cs-modal-msg">${esc(t("settingsMsg"))}</div>
             <div class="cs-modal-actions">
-                <button class="cs-btn" data-act="cancel">取消</button>
-                <button class="cs-btn cs-btn-primary" data-act="ok">保存</button>
+                <button class="cs-btn" data-act="cancel">${esc(t("cancel"))}</button>
+                <button class="cs-btn cs-btn-primary" data-act="ok">${esc(t("save"))}</button>
             </div>
         </div>`);
     $("[data-act=cancel]", m.box).onclick = m.close;
@@ -1270,10 +1477,10 @@ async function openSettings() {
             await apiPost("/civitai_studio/config", body);
             S.cfg = { ...S.cfg, ...body };
             m.close();
-            toast("success", "设置已保存", "");
+            toast("success", t("settingsSaved"), "");
             if (body.proxy_images !== oldProxyImages) refreshAllImages();
         } catch (e) {
-            toast("error", "保存失败", e.message);
+            toast("error", t("saveFailed"), e.message);
         }
     };
 }
@@ -1302,15 +1509,15 @@ function buildBrowseView(root) {
     view.dataset.view = "browse";
     view.innerHTML = `
         <div class="cs-toolbar">
-            <input id="cs-search" type="search" placeholder="搜索 Civitai 模型…"/>
+            <input id="cs-search" type="search" placeholder="${esc(t("searchPlaceholder"))}"/>
         </div>
         <div class="cs-filters">
-            <select id="cs-f-type"><option value="">全部类型</option>${TYPE_OPTIONS.map((t) => `<option value="${t}" ${st.type === t ? "selected" : ""}>${TYPE_LABELS[t]}</option>`).join("")}</select>
-            <input id="cs-f-base" list="cs-base-list" type="text" placeholder="全部底模(可输入新枚举)" value="${esc(st.base)}"/>
+            <select id="cs-f-type"><option value="">${esc(t("allTypes"))}</option>${TYPE_OPTIONS.map((tp) => `<option value="${tp}" ${st.type === tp ? "selected" : ""}>${esc(typeLabel(tp))}</option>`).join("")}</select>
+            <input id="cs-f-base" list="cs-base-list" type="text" placeholder="${esc(t("basePlaceholder"))}" value="${esc(st.base)}"/>
             <datalist id="cs-base-list">${BASE_MODELS.map((b) => `<option value="${esc(b)}"></option>`).join("")}</datalist>
-            <select id="cs-f-sort">${SORTS.map((s) => `<option value="${s}" ${st.sort === s ? "selected" : ""}>${SORT_LABELS[s]}</option>`).join("")}</select>
-            <select id="cs-f-period">${PERIODS.map((p) => `<option value="${p}" ${st.period === p ? "selected" : ""}>${PERIOD_LABELS[p]}</option>`).join("")}</select>
-            <select id="cs-f-nsfw">${NSFW_LEVELS.map((n) => `<option value="${n.v}" ${st.nsfw === n.v ? "selected" : ""}>${n.label}</option>`).join("")}</select>
+            <select id="cs-f-sort">${SORTS.map((s) => `<option value="${s}" ${st.sort === s ? "selected" : ""}>${esc(sortLabel(s))}</option>`).join("")}</select>
+            <select id="cs-f-period">${PERIODS.map((p) => `<option value="${p}" ${st.period === p ? "selected" : ""}>${esc(periodLabel(p))}</option>`).join("")}</select>
+            <select id="cs-f-nsfw">${NSFW_LEVELS.map((n) => `<option value="${n}" ${st.nsfw === n ? "selected" : ""}>${esc(nsfwLabel(n))}</option>`).join("")}</select>
         </div>
         <div id="cs-browse-content" class="cs-scroll">
             <div id="cs-list-view" style="display:block">
@@ -1358,9 +1565,9 @@ function buildBrowseView(root) {
         const typeSel = $("#cs-f-type", view);
         if (typeSel && Array.isArray(d.ModelType) && d.ModelType.length) {
             const cur = st.type;
-            typeSel.innerHTML = ['<option value="">全部类型</option>']
+            typeSel.innerHTML = [`<option value="">${esc(t("allTypes"))}</option>`]
                 .concat(sortEnumNames(d.ModelType)
-                    .map((t) => `<option value="${esc(String(t))}" ${String(t) === cur ? "selected" : ""}>${esc(TYPE_LABELS[t] || String(t))}</option>`))
+                    .map((tp) => `<option value="${esc(String(tp))}" ${String(tp) === cur ? "selected" : ""}>${esc(typeLabel(String(tp)))}</option>`))
                 .join("");
         }
     }).catch(() => {});
@@ -1384,9 +1591,9 @@ function buildLocalView(root) {
     view.dataset.view = "local";
     view.innerHTML = `
         <div class="cs-toolbar">
-            <input id="cs-local-search" type="search" placeholder="搜索本地模型…"/>
-            <button class="cs-btn" id="cs-check-updates">检查更新</button>
-            <button class="cs-btn" id="cs-local-refresh" title="重新扫描">🔄</button>
+            <input id="cs-local-search" type="search" placeholder="${esc(t("localSearchPh"))}"/>
+            <button class="cs-btn" id="cs-check-updates">${esc(t("checkUpdates"))}</button>
+            <button class="cs-btn" id="cs-local-refresh" title="${esc(t("rescanTitle"))}">🔄</button>
         </div>
         <div id="cs-local-chips" class="cs-chips"></div>
         <div id="cs-local-list" class="cs-scroll"></div>`;
@@ -1406,14 +1613,14 @@ function buildDownloadsView(root) {
     view.dataset.view = "downloads";
     view.innerHTML = `
         <div class="cs-toolbar">
-            <span class="cs-dim">下载到 ComfyUI 模型目录,支持断点续传</span>
-            <button class="cs-btn" id="cs-dl-clear" style="display:none">清除已完成</button>
+            <span class="cs-dim">${esc(t("dlTabHint"))}</span>
+            <button class="cs-btn" id="cs-dl-clear" style="display:none">${esc(t("clearFinished"))}</button>
         </div>
         <div id="cs-dl-list" class="cs-scroll"></div>`;
     root.appendChild(view);
     $("#cs-dl-clear", view).onclick = async () => {
         try { await apiPost("/civitai_studio/downloads/clear", {}); pollDownloads(); }
-        catch (e) { toast("error", "清除失败", e.message); }
+        catch (e) { toast("error", t("clearFailed"), e.message); }
     };
 }
 
@@ -1422,13 +1629,13 @@ function buildRoot(el) {
     const root = document.createElement("div");
     root.className = "cs-root";
     root.innerHTML = `
-        ${S.ui.backendStale ? '<div class="cs-banner cs-banner-warn" id="cs-stale-banner">⚠ 后端代码过旧(服务端运行的是重启前加载的版本),新功能不可用 — 请重启一次 ComfyUI。</div>' : ""}
+        ${S.ui.backendStale ? `<div class="cs-banner cs-banner-warn" id="cs-stale-banner">${esc(t("staleBanner"))}</div>` : ""}
         <div class="cs-topbar">
-            <button class="cs-tab-btn active" data-tab="browse">🌐 浏览</button>
-            <button class="cs-tab-btn" data-tab="local">📁 本地库</button>
-            <button class="cs-tab-btn" data-tab="downloads">⬇ 下载 <span id="cs-dl-badge" class="cs-dl-badge" style="display:none"></span></button>
+            <button class="cs-tab-btn active" data-tab="browse">${esc(t("tabBrowse"))}</button>
+            <button class="cs-tab-btn" data-tab="local">${esc(t("tabLocal"))}</button>
+            <button class="cs-tab-btn" data-tab="downloads">${esc(t("tabDownloads"))} <span id="cs-dl-badge" class="cs-dl-badge" style="display:none"></span></button>
             <span class="cs-topbar-spacer"></span>
-            <button class="cs-tab-btn" id="cs-settings-btn" title="设置">⚙</button>
+            <button class="cs-tab-btn" id="cs-settings-btn" title="${esc(t("settings"))}">⚙</button>
         </div>
         <div class="cs-body"></div>`;
     el.appendChild(root);
@@ -1595,10 +1802,11 @@ function injectStyles() {
 app.registerExtension({
     name: "Civitai.Studio",
     async setup() {
+        detectLang();
         injectStyles();
         if (!app.extensionManager?.registerSidebarTab) {
-            console.error("[Civitai-Studio] 当前 ComfyUI 前端过旧,不支持侧边栏 API (extensionManager.registerSidebarTab)");
-            toast("error", "Civitai Studio 加载失败", "前端版本过旧,请升级 ComfyUI");
+            console.error("[Civitai-Studio] " + t("frontendTooOld"));
+            toast("error", t("loadFailedTitle"), t("frontendUpgradeHint"));
             return;
         }
         try {
@@ -1621,7 +1829,7 @@ app.registerExtension({
             };
             if (newer(b, a)) {
                 S.ui.backendStale = true;
-                toast("warning", "Civitai Studio 后端代码过旧", `服务端 v${v.version} < 前端 v${JS_VERSION} — 请重启一次 ComfyUI 加载新功能`);
+                toast("warning", t("backendOutdatedTitle"), t("backendOutdatedMsg", { server: v.version, client: JS_VERSION }));
             }
         } catch (e) {
             // /version 不存在 = 服务端更旧(无此路由),同样视为过旧
@@ -1631,8 +1839,9 @@ app.registerExtension({
             id: "civitai.studio",
             title: "Civitai",
             icon: "pi pi-images",
-            tooltip: "Civitai 模型浏览器与本地管理器",
+            tooltip: "Civitai Studio",
             render(el) {
+                detectLang(); // 跟随 ComfyUI 语言设置(切语言后重开面板生效)
                 buildRoot(el);
                 if (S.browse.dirty) {
                     // 重拉分支不恢复详情(数据将失效),同步清理残留的详情态
@@ -1648,6 +1857,6 @@ app.registerExtension({
         });
         if (pollTimer) clearInterval(pollTimer);
         pollTimer = setInterval(pollDownloads, 2000);
-        console.log("[Civitai-Studio] 已就绪");
+        console.log("[Civitai-Studio] " + t("readyLog"));
     },
 });
