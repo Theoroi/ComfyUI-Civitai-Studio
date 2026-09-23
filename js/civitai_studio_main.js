@@ -1252,8 +1252,6 @@ function toggleLocalDetail(m) {
     });
 }
 
-}
-
 function renameDialog(m) {
     if (!m) return;
     const md = showModal(`
