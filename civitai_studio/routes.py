@@ -5,6 +5,7 @@
 
 import asyncio
 import os
+import re
 import subprocess
 import sys
 import time
@@ -18,6 +19,39 @@ from . import civitai_client, config, downloader, local_index
 
 _enums_cache = {"data": None, "ts": 0.0}
 _ENUMS_TTL = 6 * 3600.0
+
+_model_cache = {}  # model_id(str) -> (ts, data),LRU+TTL,避免本地库反复展开详情重复打 Civitai
+_MODEL_TTL = 600.0
+_MODEL_CACHE_MAX = 50
+
+
+async def _get_model_cached(mid):
+    key = str(mid)
+    hit = _model_cache.get(key)
+    now = time.time()
+    if hit and now - hit[0] < _MODEL_TTL:
+        return hit[1]
+    data = await civitai_client.get_json(f"/models/{key}")
+    if len(_model_cache) >= _MODEL_CACHE_MAX:
+        oldest = min(_model_cache, key=lambda k: _model_cache[k][0])
+        _model_cache.pop(oldest, None)
+    _model_cache[key] = (now, data)
+    return data
+
+
+def _parse_model_ref(text):
+    """从页面链接或纯数字里提取 (model_id, version_id|None)。
+
+    支持: https://civitai.com/models/12345、...?modelVersionId=678、纯 '12345'。
+    """
+    t = str(text or "").strip()
+    if not t:
+        return None, None
+    m = re.search(r"models/(\d+)", t)
+    mid = m.group(1) if m else (t if t.isdigit() else None)
+    mv = re.search(r"modelVersionId=(\d+)", t)
+    vid = mv.group(1) if mv else None
+    return mid, vid
 
 try:
     from server import PromptServer
@@ -174,7 +208,7 @@ async def search_models(request):
 async def model_detail(request):
     mid = request.match_info["mid"]
     try:
-        data = await civitai_client.get_json(f"/models/{mid}")
+        data = await _get_model_cached(mid)
     except civitai_client.CivitaiError as e:
         return _json_error(e, 502)
     index = await _scan_async(False)
@@ -386,6 +420,82 @@ async def local_reveal(request):
     except OSError as e:
         return _json_error(f"打开文件夹失败: {e}", 500)
     return _ok()
+
+
+@_post("/civitai_studio/local/rename")
+async def local_rename(request):
+    body = await _read_json_dict(request)
+    if body is None:
+        return _json_error("请求体必须是 JSON 对象", 400)
+    await _scan_async(False)
+    path = local_index.resolve(body.get("category"), body.get("rel"))
+    if not path or not os.path.isfile(path):
+        return _json_error("文件不存在或不在模型目录内", 404)
+    new_name = downloader.sanitize_filename(body.get("new_name"))
+    if not new_name or new_name in (".", ".."):
+        return _json_error("新文件名无效", 400)
+    dest = os.path.join(os.path.dirname(path), new_name)
+    if os.path.exists(dest):
+        return _json_error("目标文件名已存在", 400)
+    try:
+        os.rename(path, dest)
+    except OSError as e:
+        return _json_error(f"重命名失败(文件可能被占用): {e}", 500)
+    old_sidecar = local_index.sidecar_path(path)
+    if os.path.exists(old_sidecar):
+        meta = local_index.read_sidecar(path) or {}
+        meta["file_name"] = new_name
+        local_index.write_sidecar(dest, meta)
+        try:
+            os.remove(old_sidecar)
+        except OSError:
+            pass
+    await _scan_async(True)
+    return _ok(new_name=new_name)
+
+
+@_post("/civitai_studio/local/associate")
+async def local_associate(request):
+    """为未关联的本地文件手动建立 Civitai 关联:写入 sidecar(关联最新发布版本)."""
+    body = await _read_json_dict(request)
+    if body is None:
+        return _json_error("请求体必须是 JSON 对象", 400)
+    await _scan_async(False)
+    path = local_index.resolve(body.get("category"), body.get("rel"))
+    if not path or not os.path.isfile(path):
+        return _json_error("文件不存在或不在模型目录内", 404)
+    mid, vid = _parse_model_ref(body.get("ref"))
+    if not mid:
+        return _json_error("无法解析模型 ID:请粘贴 Civitai 页面链接或纯数字 ID", 400)
+    try:
+        data = await _get_model_cached(mid)
+    except civitai_client.CivitaiError as e:
+        return _json_error(e, 502)
+    versions = [v for v in data.get("modelVersions", []) if v.get("id")]
+    version = None
+    if vid:
+        version = next((v for v in versions if str(v.get("id")) == str(vid)), None)
+        if version is None:
+            return _json_error(f"该模型下未找到版本 {vid}", 400)
+    elif versions:
+        version = versions[0]
+    meta = {
+        "source": "civitai",
+        "model_id": data.get("id"),
+        "version_id": str(version.get("id")) if version else "",
+        "model_name": data.get("name"),
+        "version_name": (version or {}).get("name"),
+        "base_model": (version or {}).get("baseModel"),
+        "type": data.get("type"),
+        "file_name": os.path.basename(path),
+        "trained_words": (version or {}).get("trainedWords") or [],
+        "manual": True,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    if not local_index.write_sidecar(path, meta):
+        return _json_error("写入 .civitai.json 失败(权限/磁盘?)", 500)
+    await _scan_async(True)
+    return _ok(associated=meta)
 
 
 @_post("/civitai_studio/local/check_updates")

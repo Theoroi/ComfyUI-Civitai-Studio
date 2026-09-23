@@ -50,7 +50,7 @@ const S = {
         query: "", type: "", base: "", sort: "Most Downloaded", period: "AllTime",
         nsfw: 1, page: 1, items: [], loading: false, dirty: true, pendingReset: false,
     },
-    local: { models: [], search: "", type: "", loading: false, updates: {}, truncated: false },
+    local: { models: [], search: "", type: "", loading: false, updates: {}, truncated: false, expanded: new Set(), detailCache: {} },
     dl: { jobs: [], lastSig: "", failStreak: 0 },
     ui: { tab: "browse", root: null, scrollTop: 0, detailId: null },
 };
@@ -427,7 +427,7 @@ function renderDetail(model) {
 
 function rewriteDescImages(root) {
     // 模型说明里的外链图也走代理开关,并禁 referrer(防打点/防直连失败);挂图直接隐藏
-    $$(".cs-desc-body img", root).forEach((img) => {
+    $$(".cs-desc-body img, .cs-expand-desc img", root).forEach((img) => {
         const orig = img.getAttribute("src") || "";
         if (!orig) return;
         img.dataset.direct = orig;
@@ -698,7 +698,10 @@ function renderLocalList() {
             </div>
             <div class="cs-local-actions">
                 ${civ.model_id ? `<a class="cs-btn cs-btn-mini" href="${esc(civitaiPage())}/models/${esc(String(civ.model_id))}" target="_blank" rel="noopener noreferrer">页面</a>` : ""}
-                ${civ.version_id ? `<button class="cs-btn cs-btn-mini" data-check="${esc(m.id)}">查更新</button>` : ""}
+                ${civ.version_id ? `<button class="cs-btn cs-btn-mini" data-detail="${esc(m.id)}">详情</button>
+                <button class="cs-btn cs-btn-mini" data-check="${esc(m.id)}">查更新</button>` : `
+                <button class="cs-btn cs-btn-mini" data-associate="${esc(m.id)}">关联</button>`}
+                <button class="cs-btn cs-btn-mini" data-rename="${esc(m.id)}">重命名</button>
                 <button class="cs-btn cs-btn-mini" data-reveal="${esc(m.id)}">定位</button>
                 <button class="cs-btn cs-btn-mini cs-btn-danger" data-delete="${esc(m.id)}">删除</button>
             </div>
@@ -720,6 +723,8 @@ function renderLocalList() {
                     await apiPost("/civitai_studio/local/delete", { category: m.category, rel: m.rel });
                     toast("success", "已删除", m.name);
                     S.local.updates = {};
+                    S.local.expanded.delete(m.id);
+                    S.local.detailCache[m.civitai?.model_id] = undefined;
                     loadLocal(true);
                 } catch (e) { toast("error", "删除失败", e.message); }
             });
@@ -750,10 +755,183 @@ function renderLocalList() {
             } finally { btn.disabled = false; }
         };
     });
+    $$("[data-detail]", list).forEach((btn) => {
+        btn.onclick = () => {
+            const m = findLocalModel(btn.dataset.detail);
+            toggleLocalDetail(m, btn.closest(".cs-local-row"));
+        };
+    });
+    $$("[data-associate]", list).forEach((btn) => {
+        btn.onclick = () => associateDialog(findLocalModel(btn.dataset.associate));
+    });
+    $$("[data-rename]", list).forEach((btn) => {
+        btn.onclick = () => renameDialog(findLocalModel(btn.dataset.rename));
+    });
+    restoreExpansions(list);
 }
 
 function findLocalModel(id) {
     return S.local.models.find((m) => m.id === id);
+}
+
+// ---------- 本地库:展开详情 / 重命名 / 手动关联 ----------
+function toggleLocalDetail(m, rowEl) {
+    if (!m || !m.civitai || !m.civitai.model_id) return;
+    const id = m.id;
+    if (S.local.expanded.has(id)) {
+        S.local.expanded.delete(id);
+        const ex = rowEl.nextElementSibling;
+        if (ex && ex.classList.contains("cs-expand")) ex.remove();
+        return;
+    }
+    S.local.expanded.add(id);
+    injectLocalExpand(m, rowEl);
+}
+
+function injectLocalExpand(m, rowEl) {
+    const old = rowEl.nextElementSibling;
+    if (old && old.classList.contains("cs-expand")) old.remove();
+    const ex = document.createElement("div");
+    ex.className = "cs-expand";
+    ex.innerHTML = '<div class="cs-expand-loading">加载 Civitai 信息…</div>';
+    rowEl.after(ex);
+    const mid = m.civitai.model_id;
+    const cached = S.local.detailCache[mid];
+    if (cached) { renderLocalExpand(ex, m, cached); return; }
+    apiGet(`/civitai_studio/model/${encodeURIComponent(String(mid))}`).then((data) => {
+        S.local.detailCache[mid] = data;
+        if (S.local.expanded.has(m.id)) renderLocalExpand(ex, m, data);
+    }).catch((e) => {
+        ex.innerHTML = `<div class="cs-expand-loading">详情加载失败: ${esc(e.message)}</div>`;
+    });
+}
+
+function restoreExpansions(listEl) {
+    if (!listEl) return;
+    for (const id of Array.from(S.local.expanded)) {
+        const m = findLocalModel(id);
+        const row = listEl.querySelector(`.cs-local-row[data-id="${CSS.escape(id)}"]`);
+        if (!m || !row || !m.civitai || !m.civitai.model_id) { S.local.expanded.delete(id); continue; }
+        injectLocalExpand(m, row);
+    }
+}
+
+function renderLocalExpand(ex, m, data) {
+    const civ = m.civitai || {};
+    const versions = (data.modelVersions || []).filter((v) => v.id);
+    const version = versions.find((v) => String(v.id) === String(civ.version_id)) || versions[0] || {};
+    const images = version.images || [];
+    const cover = images.find((i) => i.url && i.type === "image") || images.find((i) => i.url);
+    const desc = sanitizeHtml(data.description || "");
+    const triggers = version.trainedWords || civ.trained_words || [];
+    const files = version.files || [];
+    ex.innerHTML = `
+        <div class="cs-expand-body">
+            ${cover?.url ? `<img class="cs-expand-cover" loading="lazy" src="${esc(imgSrc(cover.url))}" data-direct="${esc(cover.url)}" onerror="this.style.display='none'"/>` : ""}
+            <div class="cs-expand-main">
+                <div class="cs-kv-grid">
+                    <div><b>Civitai 名称</b><span>${esc(data.name || civ.model_name || "-")}</span></div>
+                    <div><b>版本</b><span>${esc(version.name || civ.version_name || "-")}</span></div>
+                    <div><b>Base Model</b><span>${esc(version.baseModel || civ.base_model || "-")}</span></div>
+                    <div><b>数据</b><span>⬇ ${fmtNum(data.stats?.downloadCount)} · 👍 ${fmtNum(data.stats?.thumbsUpCount)}</span></div>
+                    <div><b>Model ID</b><span class="cs-copyable" title="点击复制" data-copy-text="${esc(String(data.id))}">${esc(String(data.id))}</span></div>
+                    <div><b>Version ID</b><span class="cs-copyable" title="点击复制" data-copy-text="${esc(String(version.id || ""))}">${esc(String(version.id || ""))}</span></div>
+                </div>
+                ${triggers.length ? `<div class="cs-tags">${triggers.map((t) => `<code class="cs-trigger">${esc(t)}</code>`).join("")}</div>` : ""}
+                ${desc ? `<div class="cs-expand-desc">${desc}</div>` : ""}
+                ${files.length ? `<div class="cs-files">${files.map((f) => `
+                    <div class="cs-file"><div class="cs-file-info">
+                        <div class="cs-file-name" title="${esc(f.name)}">${esc(f.name)}</div>
+                        <div class="cs-file-meta">${fmtSize((f.sizeKB || 0) * 1024)}${f.primary ? " · 主文件" : ""}</div>
+                    </div></div>`).join("")}</div>` : ""}
+                <div class="cs-expand-actions">
+                    <a class="cs-btn cs-btn-mini" href="${esc(civitaiPage())}/models/${esc(String(data.id))}" target="_blank" rel="noopener noreferrer">Civitai 页面 ↗</a>
+                    ${version.id ? `<button class="cs-btn cs-btn-mini cs-btn-primary" data-dl-version="${esc(String(version.id))}">下载此版本</button>` : ""}
+                </div>
+            </div>
+        </div>`;
+    $$(".cs-trigger", ex).forEach((el) => { el.onclick = () => copyText(el.textContent, el); });
+    $$(".cs-copyable", ex).forEach((el) => { el.onclick = () => copyText(el.dataset.copyText || "", el); });
+    rewriteDescImages(ex);
+    const descEl = $(".cs-expand-desc", ex);
+    if (descEl) {
+        descEl.classList.add("cs-clamped");
+        const tgl = document.createElement("button");
+        tgl.className = "cs-btn cs-btn-mini";
+        tgl.style.marginTop = "6px";
+        tgl.textContent = "展开全部";
+        tgl.onclick = () => {
+            const clamped = descEl.classList.toggle("cs-clamped");
+            tgl.textContent = clamped ? "展开全部" : "收起";
+        };
+        descEl.after(tgl);
+    }
+    const dlBtn = $("[data-dl-version]", ex);
+    if (dlBtn) dlBtn.onclick = () => {
+        const ver = versions.find((v) => String(v.id) === dlBtn.dataset.dlVersion) || version;
+        openDownloadDialog({ model: data, version: ver, defaultRoot: m.root, defaultSub: m.rel.includes("/") ? m.rel.slice(0, m.rel.lastIndexOf("/")) : "" });
+    };
+}
+
+function renameDialog(m) {
+    if (!m) return;
+    const md = showModal(`
+        <h3 class="cs-modal-title">重命名 — ${esc(m.name)}</h3>
+        <div class="cs-form">
+            <label>新文件名(含扩展名)
+                <input id="cs-rn-name" type="text" value="${esc(m.name)}"/>
+            </label>
+            <div class="cs-modal-msg">仅重命名模型文件并同步 .civitai.json 元数据;工作流中引用的旧文件名将失效。</div>
+            <div class="cs-modal-actions">
+                <button class="cs-btn" data-act="cancel">取消</button>
+                <button class="cs-btn cs-btn-primary" data-act="ok">确定</button>
+            </div>
+        </div>`);
+    $("[data-act=cancel]", md.box).onclick = md.close;
+    $("[data-act=ok]", md.box).onclick = async () => {
+        const btn = $("[data-act=ok]", md.box);
+        btn.disabled = true;
+        try {
+            await apiPost("/civitai_studio/local/rename", { category: m.category, rel: m.rel, new_name: $("#cs-rn-name", md.box).value.trim() });
+            md.close();
+            toast("success", "已重命名", m.name);
+            S.local.expanded.delete(m.id);
+            loadLocal(true);
+        } catch (e) {
+            toast("error", "重命名失败", e.message);
+            btn.disabled = false;
+        }
+    };
+}
+
+function associateDialog(m) {
+    if (!m) return;
+    const md = showModal(`
+        <h3 class="cs-modal-title">关联 Civitai 模型</h3>
+        <div class="cs-form">
+            <label>Civitai 页面链接或模型 ID
+                <input id="cs-as-ref" type="text" placeholder="https://civitai.com/models/12345 或 12345"/>
+            </label>
+            <div class="cs-modal-msg">将写入 .civitai.json 并关联到该模型的最新发布版本(粘贴带 ?modelVersionId= 的链接可指定版本)。关联后可用:查更新 / 详情 / 页面 / 下载新版本。</div>
+            <div class="cs-modal-actions">
+                <button class="cs-btn" data-act="cancel">取消</button>
+                <button class="cs-btn cs-btn-primary" data-act="ok">关联</button>
+            </div>
+        </div>`);
+    $("[data-act=cancel]", md.box).onclick = md.close;
+    $("[data-act=ok]", md.box).onclick = async () => {
+        const btn = $("[data-act=ok]", md.box);
+        btn.disabled = true;
+        try {
+            const res = await apiPost("/civitai_studio/local/associate", { category: m.category, rel: m.rel, ref: $("#cs-as-ref", md.box).value.trim() });
+            md.close();
+            toast("success", "已关联", `${res.associated?.model_name || m.name} — ${res.associated?.version_name || ""}`);
+            loadLocal(true);
+        } catch (e) {
+            toast("error", "关联失败", e.message);
+            btn.disabled = false;
+        }
+    };
 }
 
 async function runUpdateCheck(items) {
@@ -1181,7 +1359,18 @@ function injectStyles() {
 .cs-local-name { font-weight:600; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .cs-local-sub { display:flex; gap:4px; align-items:center; flex-wrap:wrap; margin:3px 0; }
 .cs-local-path { font-size:10px; color:var(--desc-text-color,#999); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.cs-local-actions { display:flex; flex-direction:column; gap:4px; flex-shrink:0; }
+.cs-local-actions { display:flex; flex-wrap:wrap; gap:4px; flex-shrink:0; justify-content:flex-end; max-width:230px; }
+.cs-expand { margin:-2px 0 8px; background:var(--comfy-box-bg, var(--comfy-input-bg,#333)); border:1px solid var(--border-color,#444); border-radius:6px; padding:8px; }
+.cs-expand-body { display:flex; gap:10px; }
+.cs-expand-cover { width:110px; aspect-ratio:3/4; object-fit:cover; border-radius:6px; flex-shrink:0; align-self:flex-start; }
+.cs-expand-main { flex:1; min-width:0; }
+.cs-expand-desc { font-size:12px; background:rgba(0,0,0,.2); border-radius:6px; padding:8px; margin-top:6px; overflow-wrap:break-word; }
+.cs-expand-desc.cs-clamped { max-height:180px; overflow:hidden; }
+.cs-expand-desc img { max-width:100%; height:auto; }
+.cs-expand-actions { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; }
+.cs-expand-loading { padding:10px; color:var(--desc-text-color,#999); font-size:12px; text-align:center; }
+.cs-copyable { cursor:pointer; }
+.cs-copyable:hover { color:var(--accent-color,#4a90e2); }
 .cs-local-update { font-size:11px; margin-top:4px; color:#e2a23f; display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
 .cs-local-update.cs-ok { color:#4caf50; }
 .cs-dim { color:var(--desc-text-color,#999); font-size:11px; }
