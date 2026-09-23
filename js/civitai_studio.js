@@ -1064,8 +1064,7 @@ function associateDialog(m) {
         item.classList.add("selected");
         const it = searchItems[parseInt(item.dataset.i, 10)];
         if (!it) return;
-        selected = { model_id: it.id };
-        const myId = String(it.id);
+        selected = { model_id: myId }; // 统一存字符串,便于 await 后比较
         refInput.value = "";
         okBtn.disabled = true; // 版本加载完成前禁止提交,避免发送垃圾 version_id
         versionSel.innerHTML = "";

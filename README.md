@@ -50,7 +50,7 @@ git clone <本仓库> ComfyUI-Civitai-Studio
 ## 数据位置
 
 - 配置:`<ComfyUI>/user/civitai_studio/config.json`
-- 模型元数据:模型文件旁的 `<文件名>.civitai.json`(可随文件一起移动/分享)。开启「说明落盘」后额外包含 `description_html`(截断至 5 万字符)/`tags`/`cover_url`,离线也能看详情;本地库详情区提供「刷新元数据」重写。
+- 模型元数据:模型文件旁的 `<文件名>.civitai.json`(可随文件一起移动/分享)。开启「说明落盘」后额外包含 `description_html`(截断至 51200 字符)/`tags`/`cover_url`,离线也能看详情;本地库详情区提供「刷新元数据」重写。
 - 下载临时文件:`<目标目录>/xxx.<哈希>.part`(断点续传,失败可手动删除所有 `.part` 结尾文件)
 
 ## 卸载

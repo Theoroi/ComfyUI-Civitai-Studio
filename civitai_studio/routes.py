@@ -503,10 +503,14 @@ async def local_associate(request):
         "manual": True,
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
-    if str(old.get("model_id") or "") != str(meta["model_id"]):
-        # 换了模型:旧版本的哈希/下载地址/落盘说明不再适用
+    model_changed = str(old.get("model_id") or "") != str(meta["model_id"])
+    version_changed = str(old.get("version_id") or "") != str(meta["version_id"])
+    if model_changed or version_changed:
+        # 关联目标变化:旧版本的哈希/下载地址不再适用
         meta.pop("sha256", None)
         meta.pop("download_url", None)
+    if model_changed:
+        # 换了模型:落盘说明/标签/封面也要换(persist 开则用新模型数据回填)
         if config.load().get("persist_description"):
             meta["description_html"] = local_index.truncate_desc(data.get("description"))
             meta["tags"] = data.get("tags") or []

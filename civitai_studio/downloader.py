@@ -382,6 +382,8 @@ async def _run_job(job):
         job["verified"] = None
 
     # 目标名可能被并发任务占掉,落盘前最后再排重;此时再响应一次取消。
+    # 防覆盖语义:Windows 的 os.rename 目标存在即抛 FileExistsError,循环重试;
+    # POSIX 会静默替换,若需跨平台防覆盖应改用 os.link 占位(本插件面向 Windows)
     # rename(Windows 目标存在即抛)循环到成功,杜绝并发覆盖已完成下载
     if job["id"] in _cancel_flags:
         try:

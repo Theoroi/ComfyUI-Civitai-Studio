@@ -52,7 +52,7 @@ Note: **the key is only sent to official hosts (civitai.com / civitai.green)**; 
 ## Data locations
 
 - Settings: `<ComfyUI>/user/civitai_studio/config.json`
-- Model metadata: `<file>.civitai.json` next to each model file (travels with the file, shareable). With「description persistence」on it also holds `description_html` (capped at 50k chars) / `tags` / `cover_url` so details work offline; the local library's detail view has a「Refresh metadata」action.
+- Model metadata: `<file>.civitai.json` next to each model file (travels with the file, shareable). With「description persistence」on it also holds `description_html` (capped at 51200 chars) / `tags` / `cover_url` so details work offline; the local library's detail view has a「Refresh metadata」action.
 - Download temp files: `<target>/xxx.<hash>.part` (resumable; safe to delete any `*.part` when a job fails)
 
 ## Uninstall
