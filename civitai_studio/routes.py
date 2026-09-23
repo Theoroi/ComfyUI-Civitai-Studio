@@ -465,8 +465,11 @@ async def local_associate(request):
     if not path or not os.path.isfile(path):
         return _json_error("文件不存在或不在模型目录内", 404)
     mid, vid = _parse_model_ref(body.get("ref"))
-    if not mid:
-        return _json_error("无法解析模型 ID:请粘贴 Civitai 页面链接或纯数字 ID", 400)
+    # 搜索选择的走显式 model_id/version_id 字段,优先于 ref 解析
+    mid = str(body.get("model_id") or mid or "").strip()
+    vid = str(body.get("version_id") or vid or "").strip()
+    if not mid.isdigit():
+        return _json_error("无法解析模型 ID:请从搜索结果选择,或粘贴页面链接/模型 ID", 400)
     try:
         data = await _get_model_cached(mid)
     except civitai_client.CivitaiError as e:

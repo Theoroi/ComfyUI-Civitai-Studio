@@ -904,34 +904,119 @@ function renameDialog(m) {
     };
 }
 
+function guessQueryFromFilename(name) {
+    // 从文件名猜搜索词:去扩展名,按分隔符拆词,丢掉版本/精度/格式等噪声词
+    const base = String(name || "").replace(/\.[a-z0-9]+$/i, "");
+    const junk = /^(v\d+([._]\d+)*|final|prd|pruned|f16|f32|fp8|fp16|t5xxl|eps|ema|safetensors|bin|pt|pth|ckpt|lora|locon|dora|checkpoint|model|copy|combo|by|the)$/i;
+    const tokens = base.split(/[\s_\-.,()[\]【】·]+/).filter((t) => t && !junk.test(t) && !/^\d+$/.test(t));
+    return tokens.slice(0, 5).join(" ").trim();
+}
+
 function associateDialog(m) {
     if (!m) return;
+    let searchItems = [];
+    let selected = null; // {model_id}
     const md = showModal(`
         <h3 class="cs-modal-title">关联 Civitai 模型</h3>
         <div class="cs-form">
-            <label>Civitai 页面链接或模型 ID
+            <label>按文件名搜索(已自动预填,可修改)
+                <div class="cs-search-row">
+                    <input id="cs-as-query" type="text" value="${esc(guessQueryFromFilename(m.name))}"/>
+                    <button class="cs-btn" id="cs-as-search">搜索</button>
+                </div>
+            </label>
+            <div id="cs-as-results" class="cs-as-results"><div class="cs-dim">搜索中…</div></div>
+            <div id="cs-as-version-wrap" style="display:none">
+                <label>版本
+                    <select id="cs-as-version"></select>
+                </label>
+            </div>
+            <label>或直接粘贴页面链接 / 模型 ID
                 <input id="cs-as-ref" type="text" placeholder="https://civitai.com/models/12345 或 12345"/>
             </label>
-            <div class="cs-modal-msg">将写入 .civitai.json 并关联到该模型的最新发布版本(粘贴带 ?modelVersionId= 的链接可指定版本)。关联后可用:查更新 / 详情 / 页面 / 下载新版本。</div>
+            <div class="cs-modal-msg">点选搜索结果(或粘贴链接)后点"关联",将写入 .civitai.json。关联后可用:查更新 / 详情 / 页面 / 下载新版本。</div>
             <div class="cs-modal-actions">
                 <button class="cs-btn" data-act="cancel">取消</button>
-                <button class="cs-btn cs-btn-primary" data-act="ok">关联</button>
+                <button class="cs-btn cs-btn-primary" data-act="ok" disabled>关联</button>
             </div>
         </div>`);
-    $("[data-act=cancel]", md.box).onclick = md.close;
-    $("[data-act=ok]", md.box).onclick = async () => {
-        const btn = $("[data-act=ok]", md.box);
-        btn.disabled = true;
+    const resultsEl = $("#cs-as-results", md.box);
+    const versionWrap = $("#cs-as-version-wrap", md.box);
+    const versionSel = $("#cs-as-version", md.box);
+    const okBtn = $("[data-act=ok]", md.box);
+    const refInput = $("#cs-as-ref", md.box);
+
+    const doSearch = async () => {
+        const q = $("#cs-as-query", md.box).value.trim();
+        if (!q) return;
+        resultsEl.innerHTML = '<div class="cs-dim">搜索中…</div>';
         try {
-            const res = await apiPost("/civitai_studio/local/associate", { category: m.category, rel: m.rel, ref: $("#cs-as-ref", md.box).value.trim() });
+            const data = await apiGet(`/civitai_studio/search?query=${encodeURIComponent(q)}&limit=8&nsfw=true`);
+            searchItems = data.items || [];
+            if (!searchItems.length) {
+                resultsEl.innerHTML = '<div class="cs-dim">没有找到,试试更短的关键词</div>';
+                return;
+            }
+            resultsEl.innerHTML = searchItems.map((it, i) => `
+                <div class="cs-as-item" data-i="${i}">
+                    <div class="cs-as-item-main">
+                        <div class="cs-as-item-name" title="${esc(it.name)}">${esc(it.name)}</div>
+                        <div class="cs-dim">${esc(TYPE_LABELS[it.type] || it.type)} · ${esc((it.modelVersions?.[0] || {}).baseModel || "?")} · ⬇ ${fmtNum(it.stats?.downloadCount)}</div>
+                    </div>
+                </div>`).join("");
+        } catch (e) {
+            resultsEl.innerHTML = `<div class="cs-dim">搜索失败: ${esc(e.message)}</div>`;
+        }
+    };
+    resultsEl.addEventListener("click", async (e) => {
+        const item = e.target.closest(".cs-as-item");
+        if (!item) return;
+        $$(".cs-as-item", resultsEl).forEach((n) => n.classList.remove("selected"));
+        item.classList.add("selected");
+        const it = searchItems[parseInt(item.dataset.i, 10)];
+        if (!it) return;
+        selected = { model_id: it.id };
+        refInput.value = "";
+        okBtn.disabled = false;
+        versionSel.innerHTML = "";
+        versionWrap.style.display = "";
+        versionSel.innerHTML = '<option>版本加载中…</option>';
+        try {
+            const detail = await apiGet(`/civitai_studio/model/${encodeURIComponent(String(it.id))}`);
+            const versions = (detail.modelVersions || []).filter((v) => v.id);
+            versionSel.innerHTML = versions.map((v, i) =>
+                `<option value="${esc(String(v.id))}" ${i === 0 ? "selected" : ""}>${esc(v.name)} (${esc(v.baseModel || "?")})</option>`).join("");
+        } catch (e2) {
+            versionWrap.style.display = "none";
+        }
+    });
+    $("[data-act=cancel]", md.box).onclick = md.close;
+    $("#cs-as-search", md.box).onclick = doSearch;
+    $("#cs-as-query", md.box).addEventListener("keydown", (e) => { if (e.key === "Enter") doSearch(); });
+    okBtn.onclick = async () => {
+        okBtn.disabled = true;
+        try {
+            let body;
+            if (selected) {
+                body = { category: m.category, rel: m.rel, model_id: selected.model_id,
+                         version_id: versionWrap.style.display !== "none" && versionSel.value ? versionSel.value : undefined };
+            } else if (refInput.value.trim()) {
+                body = { category: m.category, rel: m.rel, ref: refInput.value.trim() };
+            } else {
+                toast("error", "请先从搜索结果选择,或粘贴链接", "");
+                okBtn.disabled = false;
+                return;
+            }
+            const res = await apiPost("/civitai_studio/local/associate", body);
             md.close();
             toast("success", "已关联", `${res.associated?.model_name || m.name} — ${res.associated?.version_name || ""}`);
             loadLocal(true);
         } catch (e) {
             toast("error", "关联失败", e.message);
-            btn.disabled = false;
+            okBtn.disabled = false;
         }
     };
+    doSearch(); // 默认按文件名智能搜索
 }
 
 async function runUpdateCheck(items) {
@@ -1371,6 +1456,14 @@ function injectStyles() {
 .cs-expand-loading { padding:10px; color:var(--desc-text-color,#999); font-size:12px; text-align:center; }
 .cs-copyable { cursor:pointer; }
 .cs-copyable:hover { color:var(--accent-color,#4a90e2); }
+.cs-search-row { display:flex; gap:6px; }
+.cs-search-row input { flex:1; min-width:0; }
+.cs-as-results { max-height:220px; overflow-y:auto; display:flex; flex-direction:column; gap:4px; }
+.cs-as-item { display:flex; padding:6px 8px; border:1px solid var(--border-color,#444); border-radius:6px; cursor:pointer; }
+.cs-as-item:hover { border-color:var(--accent-color,#4a90e2); }
+.cs-as-item.selected { border-color:var(--accent-color,#4a90e2); background:rgba(74,144,226,.15); }
+.cs-as-item-main { flex:1; min-width:0; }
+.cs-as-item-name { font-size:12px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .cs-local-update { font-size:11px; margin-top:4px; color:#e2a23f; display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
 .cs-local-update.cs-ok { color:#4caf50; }
 .cs-dim { color:var(--desc-text-color,#999); font-size:11px; }
