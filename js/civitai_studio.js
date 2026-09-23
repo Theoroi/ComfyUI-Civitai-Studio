@@ -195,6 +195,8 @@ function confirmModal(title, message, onOk) {
 
 // ---------- 在线浏览:数据加载 ----------
 // 翻页用 cursor(镜像站/官方站统一支持;page 参数在部分镜像上会触发忽略筛选的热榜路径)
+// nsfw:Civitai 新 API 是布尔开关(zod 校验只认 true/false 等布尔词,数字字符串 "2" 会 400),
+//      UI 三档映射为 false/true 下发
 function browseParams(cursor) {
     const p = new URLSearchParams();
     if (S.browse.query) p.set("query", S.browse.query);
@@ -202,7 +204,7 @@ function browseParams(cursor) {
     if (S.browse.base) p.set("baseModels", S.browse.base);
     p.set("sort", S.browse.sort);
     p.set("period", S.browse.period);
-    p.set("nsfw", String(S.browse.nsfw));
+    p.set("nsfw", S.browse.nsfw > 0 ? "true" : "false");
     p.set("limit", "24");
     if (cursor) p.set("cursor", cursor);
     return p.toString();

@@ -146,7 +146,8 @@ async def search_models(request):
     try:
         params = {
             "limit": min(60, max(1, int(q.get("limit", "24")))),
-            "nsfw": str(q.get("nsfw", "1")),
+            # Civitai 新 API 的 nsfw 是布尔开关(zod 校验):数字字符串会被 400,映射为 true/false
+            "nsfw": "true" if str(q.get("nsfw", "1")) not in ("0", "false") else "false",
         }
     except ValueError:
         return _json_error("limit 必须是数字", 400)
@@ -192,7 +193,8 @@ async def version_images(request):
     if q.get("cursor"):
         params["cursor"] = q["cursor"]
     if q.get("nsfw"):
-        params["nsfw"] = q["nsfw"]
+        # 与搜索同档位;新 API 是布尔开关,映射后再透传
+        params["nsfw"] = "false" if q["nsfw"] in ("0", "false") else "true"
     try:
         data = await civitai_client.get_json("/images", params=params)
     except civitai_client.CivitaiError as e:
