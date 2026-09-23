@@ -69,14 +69,18 @@ class CivitaiImageSearch:
 
     @classmethod
     def INPUT_TYPES(cls):
+        # 分组顺序与 UI 两列排版意图一致:底模/NSFW → 关键词/Tag → 时间/排序 → 数量/序号
         return {"required": {
-            "keyword": ("STRING", {"default": ""}),
             "base_model": (["(any)"] + _BASE_MODEL_OPTIONS,),
-            "tag": ("STRING", {"default": ""}),
-            "sort": (["Newest", "Most Reactions", "Most Comments"],),
-            "period": (["AllTime", "Month", "Week", "Day"],),
             "nsfw": (["true", "false"],),
-            "index": ("INT", {"default": 0, "min": 0, "max": 49}),
+            "keyword": ("STRING", {"default": ""}),
+            "tag": ("STRING", {"default": ""}),
+            "period": (["AllTime", "Month", "Week", "Day"],),
+            "sort": (["Newest", "Most Reactions", "Most Comments"],),
+            "limit": ("INT", {"default": 50, "min": 10, "max": 100, "step": 10}),
+            "index": ("INT", {"default": 0, "min": 0, "max": 199}),
+            # 点选缩略图后由前端写入;非空时执行直接按 URL 取图与参数
+            "image_url": ("STRING", {"default": "", "multiline": False}),
         }}
 
     RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING", "STRING", "IMAGE")
@@ -84,8 +88,11 @@ class CivitaiImageSearch:
     FUNCTION = "run"
     CATEGORY = "Civitai Studio"
 
-    def run(self, keyword, base_model, tag, sort, period, nsfw, index):
-        params = {"limit": "50", "nsfw": str(nsfw), "sort": sort, "period": period, "withMeta": "true"}
+    def run(self, base_model, nsfw, keyword, tag, period, sort, limit, index, image_url):
+        params = {
+            "limit": str(min(100, max(10, int(limit)))),
+            "nsfw": str(nsfw), "sort": sort, "period": period, "withMeta": "true",
+        }
         if keyword:
             params["query"] = keyword
         if base_model and base_model != "(any)":
@@ -96,14 +103,20 @@ class CivitaiImageSearch:
         items = data.get("items") or []
         if not items:
             raise RuntimeError("没有搜索结果,请调整筛选条件")
-        idx = min(max(int(index), 0), len(items) - 1)
-        item = items[idx]
-        vids = item.get("modelVersionIds") or []
+        # 优先按前端点选的 URL 取图(翻页/追加后 index 不再可靠);否则退回 index
+        chosen = None
+        wanted = (image_url or "").strip()
+        if wanted:
+            chosen = next((it for it in items if (it.get("url") or "") == wanted), None)
+        if chosen is None:
+            idx = min(max(int(index), 0), len(items) - 1)
+            chosen = items[idx]
+        vids = chosen.get("modelVersionIds") or []
         if not vids:
-            raise RuntimeError("该图片未关联模型版本,请换一张(index 调整)")
+            raise RuntimeError("该图片未关联模型版本,请换一张(调整 index 或重新点选)")
         vdata = _sync_get_json(f"/model-versions/{vids[0]}")
         # withMeta=true 已在 feed 条目带回生成参数;个别图未公开则留空
-        meta = item.get("meta") or {}
+        meta = chosen.get("meta") or {}
         pos = meta.get("prompt") or ""
         neg = meta.get("negativePrompt") or ""
         lora_parts = [
@@ -114,7 +127,7 @@ class CivitaiImageSearch:
         # 触发词:资源里的 LoRA 若在本地库中已关联,取其触发词
         trigger = ", ".join(vdata.get("trainedWords") or [])
         base = vdata.get("baseModel") or base_model
-        img_bytes = _sync_download(item.get("url"))
+        img_bytes = _sync_download(chosen.get("url"))
         return (pos, neg, lora_parts and (", ".join(lora_parts)) or "", trigger, base, _bytes_to_tensor(img_bytes))
 
 

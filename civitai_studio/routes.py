@@ -233,7 +233,7 @@ async def version_images(request):
     if q.get("modelVersionId"):
         params["modelVersionId"] = q["modelVersionId"]
     try:
-        params["limit"] = min(50, max(1, int(q.get("limit", "20"))))
+        params["limit"] = min(100, max(1, int(q.get("limit", "20"))))
     except ValueError:
         return _json_error("limit 必须是数字", 400)
     if q.get("cursor"):

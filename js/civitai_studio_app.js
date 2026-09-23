@@ -30,7 +30,7 @@ const SORTS = ["Most Downloaded", "Highest Rated", "Newest"];
 const PERIODS = ["AllTime", "Month", "Week", "Day"];
 const NSFW_LEVELS = [0, 1, 2];
 
-const JS_VERSION = "0.5.6";
+const JS_VERSION = "0.5.8";
 
 // ---------- i18n ----------
 const STR = {
@@ -132,6 +132,7 @@ const STR = {
         applyDone: "已应用:提示词 ✓{lora}", applyLoraPart: ",LoRA ×{n}", loraMissing: "本地未找到: {names}",
         noTextNode: "未找到 CLIPTextEncode 文本节点",
         galleryTab: "🖼 画廊", gallerySortNewest: "最新发布", gallerySortReactions: "最多互动", gallerySortComments: "最多评论",
+        galQuery: "关键词", galTag: "Tag", galBase: "底模", loadMore: "加载更多", useAsOutput: "选为输出", selectedAsOutput: "已选为输出",
         galleryEmpty: "没有图片。", galleryAuthor: "作者",
     },
     en: {
@@ -232,6 +233,7 @@ const STR = {
         applyDone: "Applied: prompts ✓{lora}", applyLoraPart: ", {n} LoRA(s)", loraMissing: "Local LoRAs not found: {names}",
         noTextNode: "No CLIPTextEncode text node found",
         galleryTab: "🖼 Gallery", gallerySortNewest: "Newest", gallerySortReactions: "Most reactions", gallerySortComments: "Most comments",
+        galQuery: "Keyword", galTag: "Tag", galBase: "Base model", loadMore: "Load more", useAsOutput: "Use as output", selectedAsOutput: "Selected as output",
         galleryEmpty: "No images.", galleryAuthor: "Author",
     },
 };
@@ -245,7 +247,7 @@ let S = {
     },
     local: { models: [], search: "", type: "", loading: false, updates: {}, truncated: false, openId: null, detailCache: {} },
     dl: { jobs: [], lastSig: "", failStreak: 0 },
-    gal: { items: [], next: [], sort: "Newest", period: "AllTime", loading: false, error: "" },
+    gal: { items: [], next: [], sort: "Newest", period: "AllTime", query: "", base: "", tag: "", loading: false, error: "" },
     ui: { tab: "browse", root: null, scrollTop: 0, detailId: null, backendStale: false },
 };
 
@@ -866,10 +868,10 @@ async function showImageMeta(image) {
     // feed 已带 withMeta=true,有则直接展示;两跳找回已证实不可行(镜像版本列表不含 feed 图)
     const meta = image.meta;
     if (!meta) {
-        // 仍无参数:降级展示作者/数据 + 存图入口
+        // 仍无参数:降级展示大图/播放器 + 作者/数据 + 存图入口
         const m0 = showModal(`
             <h3 class="cs-modal-title">${esc(t("genParams"))}</h3>
-            <img src="${esc(imgSrc(image.url))}" style="width:100%;border-radius:8px;display:block;margin-bottom:10px" onerror="this.style.display='none'"/>
+            <div class="cs-media-view" style="margin-bottom:10px">${mediaViewerHtml(image)}</div>
             <div class="cs-kv-grid">
                 <div><b>${esc(t("galleryAuthor"))}</b><span>${esc(image.username || "-")}</span></div>
                 <div><b>❤</b><span>${fmtNum(image.stats?.heartCount ?? image.stats?.likeCount)}</span></div>
@@ -889,6 +891,7 @@ async function showImageMeta(image) {
         `<code class="cs-trigger">${esc(r.name || r.modelName || "?")}${r.weight != null ? " × " + esc(r.weight) : ""}</code>`).join("");
     const m = showModal(`
         <h3 class="cs-modal-title">${esc(t("genParams"))}</h3>
+        ${isVideoItem(image) ? `<div class="cs-media-view" style="margin-bottom:10px">${mediaViewerHtml(image)}</div>` : ""}
         <div class="cs-meta-block">
             <div class="cs-section-title">${esc(t("positivePrompt"))} <button class="cs-btn cs-btn-mini" data-copy="prompt">${esc(t("copy"))}</button></div>
             <textarea readonly rows="5">${esc(meta.prompt || "")}</textarea>
@@ -1501,6 +1504,9 @@ async function fetchGallery(reset) {
     try {
         const p = new URLSearchParams({ limit: "24", sort: st.sort, period: st.period });
         p.set("nsfw", S.browse.nsfw > 0 ? "true" : "false");
+        if (st.query.trim()) p.set("query", st.query.trim());
+        if (st.base) p.set("baseModels", st.base);
+        if (st.tag.trim()) p.set("tag", st.tag.trim());
         if (!reset && st.next) for (const [k, v] of st.next) p.append(k, v);
         const data = await apiGet("/civitai_studio/images?" + p.toString());
         const items = data.items || [];
@@ -1535,9 +1541,18 @@ function renderGallery(reset) {
         img.__rendered = true;
         const item = document.createElement("div");
         item.className = "cs-gal-item";
-        item.innerHTML = `<img loading="lazy" src="${esc(imgSrc(img.url))}" data-direct="${esc(img.url)}"/>
-            <button class="cs-save-btn" title="${esc(t("saveBtnTitle"))}" data-save-url="${esc(img.url)}">⬇</button>`;
-        item.querySelector("img").onclick = () => showImageMeta(img);
+        const save = `<button class="cs-save-btn" title="${esc(t("saveBtnTitle"))}" data-save-url="${esc(img.url)}">⬇</button>`;
+        if (isVideoItem(img)) {
+            // 视频条目:静音取首帧作封面,点击悬浮层播放
+            item.innerHTML = `${save}<video muted loop playsinline preload="metadata"
+                    src="${esc(imgSrc(img.url))}#t=0.001" data-direct="${esc(img.url)}"
+                    onerror="this.style.display='none'"></video>`;
+        } else {
+            item.innerHTML = `${save}<img loading="lazy" src="${esc(imgSrc(img.url))}" data-direct="${esc(img.url)}"
+                    onerror="this.style.display='none'"/>`;
+        }
+        const mediaEl = item.querySelector("img,video");
+        if (mediaEl) mediaEl.onclick = () => showImageMeta(img);
         item.querySelector(".cs-save-btn").onclick = (ev) => {
             ev.stopPropagation();
             saveImageToOutput(img.url, ev.target);
@@ -1561,6 +1576,11 @@ function buildGalleryView(root) {
     view.dataset.view = "gallery";
     view.innerHTML = `
         <div class="cs-toolbar">
+            <input id="cs-gal-query" type="text" placeholder="${esc(t("galQuery"))}" value="${esc(st.query)}" style="flex:1 1 90px;min-width:80px"/>
+            <input id="cs-gal-tag" type="text" placeholder="${esc(t("galTag"))}" value="${esc(st.tag)}" style="flex:1 1 70px;min-width:64px"/>
+            <select id="cs-gal-base" style="flex:1 1 100px;min-width:90px"><option value="">${esc(t("galBase"))}: ${esc(t("unknown"))}</option></select>
+        </div>
+        <div class="cs-toolbar">
             <select id="cs-gal-sort">
                 <option value="Newest">${esc(t("gallerySortNewest"))}</option>
                 <option value="Most Reactions">${esc(t("gallerySortReactions"))}</option>
@@ -1575,6 +1595,22 @@ function buildGalleryView(root) {
     $("#cs-gal-sort", view).value = st.sort;
     $("#cs-gal-sort", view).addEventListener("change", (e) => { st.sort = e.target.value; fetchGallery(true); });
     $("#cs-gal-period", view).addEventListener("change", (e) => { st.period = e.target.value; fetchGallery(true); });
+    const debouncedFetch = () => {
+        clearTimeout(buildGalleryView._deb);
+        buildGalleryView._deb = setTimeout(() => fetchGallery(true), 600);
+    };
+    $("#cs-gal-query", view).addEventListener("input", (e) => { st.query = e.target.value; debouncedFetch(); });
+    $("#cs-gal-tag", view).addEventListener("input", (e) => { st.tag = e.target.value; debouncedFetch(); });
+    $("#cs-gal-base", view).addEventListener("change", (e) => { st.base = e.target.value; fetchGallery(true); });
+    // 底模下拉:从站方枚举填充
+    apiGet("/civitai_studio/enums").then((d) => {
+        const list = sortEnumNames(d.ActiveBaseModel || d.BaseModel || []);
+        const sel = $("#cs-gal-base", view);
+        if (sel && list.length) {
+            sel.innerHTML = [`<option value="">${esc(t("galBase"))}: ${esc(t("allTypes"))}</option>`]
+                .concat(list.map((b) => `<option value="${esc(String(b))}" ${String(b) === st.base ? "selected" : ""}>${esc(String(b))}</option>`)).join("");
+        }
+    }).catch(() => {});
     $("#cs-gal-content", view).addEventListener("scroll", (e) => {
         const el = e.target;
         if (el.scrollTop + el.clientHeight >= el.scrollHeight - 400 && !st.loading && st.next.length) fetchGallery(false);
@@ -2045,6 +2081,10 @@ function injectStyles() {
 .cs-float .cs-detail-row select { width:100%; }
 .cs-float-modal { width:480px; }
 .cs-float-modal .cs-float-body { max-height:calc(100vh - 120px); }
+@keyframes cs-rotate { to { transform: rotate(360deg); } }
+.cs-spin { width:14px; height:14px; border:2px solid #555; border-top-color:var(--accent-color,#4a90e2); border-radius:50%; animation:cs-rotate .8s linear infinite; display:inline-block; flex:0 0 auto; }
+.cs-media-view img, .cs-media-view video { max-width:100%; max-height:64vh; border-radius:8px; display:block; margin:0 auto; background:rgba(0,0,0,.35); }
+.cs-thumb video { pointer-events:none; }
 `;
     document.head.appendChild(style);
 }
@@ -2056,32 +2096,70 @@ function nodeThumbsResize(node) {
     try { node.setSize([node.size[0], node.computeSize()[1]]); } catch (e) { /* 旧版接口缺失时忽略 */ }
 }
 
+function isVideoItem(item) {
+    return (item.type || "") === "video" || /\.mp4($|\?)/.test(item.url || "");
+}
+
+// 悬浮层大图/播放器(图片与视频通用)
+function mediaViewerHtml(item) {
+    const src = esc(item.url || "");
+    if (isVideoItem(item)) {
+        return `<video src="${src}" controls autoplay loop muted playsinline`
+            + ` style="max-width:100%;max-height:64vh;border-radius:8px;display:block;margin:0 auto;background:#000"></video>`;
+    }
+    return `<img src="${esc(imgSrc(item.url || ""))}" data-direct="${src}"`
+        + ` style="max-width:100%;max-height:64vh;border-radius:8px;display:block;margin:0 auto"`
+        + ` onerror="this.style.display='none'"/>`;
+}
+
 function renderNodeThumbs(node) {
     const strip = node.csStrip;
     if (!strip) return;
-    strip.querySelectorAll(".cs-thumb,.cs-thumb-msg").forEach((el) => el.remove());
-    const items = (node.csResults || []).slice(0, 8);
-    const idxW = (node.widgets || []).find((w) => w.name === "index");
-    if (!items.length) {
+    strip.querySelectorAll(".cs-thumb,.cs-thumb-msg,.cs-thumb-bar,.cs-thumb-more")
+        .forEach((el) => el.remove());
+    const st = node.csFetch || {};
+    const total = (node.csResults || []).length;
+
+    // 状态条:计数 + spinner + 提示
+    const bar = document.createElement("div");
+    bar.className = "cs-thumb-bar";
+    bar.style.cssText = "width:100%;display:flex;align-items:center;gap:8px;font-size:11px;color:#999;";
+    bar.innerHTML = `<span>${esc(S.lang === "zh" ? "点击缩略图放大/选择" : "Click to enlarge / select")} · ${total}</span>`;
+    if (st.loading) {
+        const sp = document.createElement("span");
+        sp.className = "cs-spin";
+        const lt = document.createElement("span");
+        lt.textContent = t("statusLoading");
+        bar.appendChild(sp);
+        bar.appendChild(lt);
+    }
+    strip.appendChild(bar);
+
+    const items = (node.csResults || []).slice(0, 100);
+    if (!items.length && !st.loading) {
         const msg = document.createElement("div");
         msg.className = "cs-thumb-msg";
         msg.style.cssText = "width:100%;font-size:11px;color:#999;";
         msg.textContent = node.csMsg || (S.lang === "zh" ? "没有结果" : "No results");
         strip.appendChild(msg);
-        nodeThumbsResize(node);
-        return;
     }
+    const uw = (node.widgets || []).find((w) => w.name === "image_url");
     items.forEach((it, i) => {
         const cell = document.createElement("div");
         cell.className = "cs-thumb";
         cell.title = "index " + i;
-        cell.style.cssText = "position:relative;width:100px;height:133px;flex:0 0 auto;background:#2e2e33;"
+        // flex 收缩保证窄节点下至少 3 张一行,宽节点自动更多列
+        cell.style.cssText = "position:relative;flex:1 1 110px;min-width:0;aspect-ratio:3/4;background:#2e2e33;"
             + "border:2px solid #555;border-radius:4px;overflow:hidden;cursor:pointer;";
-        if ((it.type || "image") === "video") {
-            // 视频缩略图画占位,保持与执行侧相同的 index 对齐
-            const v = document.createElement("div");
-            v.style.cssText = "width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:#eee;font-size:20px;";
-            v.textContent = "▶";
+        if (isVideoItem(it)) {
+            // 静音取首帧作缩略图
+            const v = document.createElement("video");
+            v.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;";
+            v.muted = true;
+            v.loop = true;
+            v.playsInline = true;
+            v.preload = "metadata";
+            v.src = it.url || "";
             cell.appendChild(v);
         } else {
             const im = document.createElement("img");
@@ -2091,28 +2169,68 @@ function renderNodeThumbs(node) {
             im.src = imgSrc(orig);
             cell.appendChild(im);
         }
-        if (Number(idxW?.value) === i) cell.style.borderColor = "#4a90e2";
-        cell.onclick = () => {
-            const w = (node.widgets || []).find((x) => x.name === "index");
-            if (w) { w.value = i; w.callback?.(i); }
-            renderNodeThumbs(node);
-        };
+        if (uw?.value && uw.value === it.url) cell.style.borderColor = "#4a90e2";
+        cell.onclick = () => showNodeImageFloat(node, it);
         strip.appendChild(cell);
     });
+    if (!st.loading && st.next && st.next.length) {
+        const more = document.createElement("button");
+        more.className = "cs-thumb-more cs-btn cs-btn-mini";
+        more.style.cssText = "width:100%;margin-top:2px;";
+        more.textContent = S.lang === "zh" ? "加载更多" : "Load more";
+        more.onclick = () => node.csLoadMore?.();
+        strip.appendChild(more);
+    }
     nodeThumbsResize(node);
 }
 
-function fetchNodeThumbs(node, params) {
-    // 必须用与节点执行相同的 /images 数据源(模型搜索接口条目没有封面 url),index 才对得上
-    api.fetchApi(`/civitai_studio/images?${params}`, { cache: "no-store" })
+// 点缩略图 → 悬浮层放大(视频可播放) + 元信息 + 选为输出
+function showNodeImageFloat(node, item) {
+    const meta = item.meta || {};
+    const kvs = [["Seed", meta.seed], ["CFG", meta.cfgScale], ["Steps", meta.steps], ["Sampler", meta.sampler]]
+        .filter(([, v]) => v !== undefined && v !== null && v !== "");
+    const m = showModal(`
+        <div class="cs-media-view">${mediaViewerHtml(item)}</div>
+        ${kvs.length ? `<div class="cs-kv-grid" style="margin-top:10px">${kvs.map(([k, v]) => `<div><b>${esc(k)}</b><span>${esc(String(v))}</span></div>`).join("")}</div>` : ""}
+        ${meta.prompt ? `<div class="cs-form-hint" style="margin-top:8px;max-height:120px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;">${esc(String(meta.prompt))}</div>` : ""}
+        <div class="cs-modal-actions"><button class="cs-btn cs-btn-primary" data-use>${esc(S.lang === "zh" ? "选为输出" : "Use as output")}</button></div>`);
+    $("[data-use]", m.box).onclick = () => {
+        const iw = (node.widgets || []).find((w) => w.name === "index");
+        const uw = (node.widgets || []).find((w) => w.name === "image_url");
+        const i = (node.csResults || []).indexOf(item);
+        if (iw && i >= 0) iw.value = i;
+        if (uw) uw.value = item.url || "";
+        m.close();
+        renderNodeThumbs(node);
+        toast("success", S.lang === "zh" ? "已选为输出" : "Selected as output", "index " + Math.max(0, i));
+    };
+}
+
+function fetchNodeThumbs(node, params, reset) {
+    const st = node.csFetch || (node.csFetch = { next: [], loading: false });
+    if (st.loading) return;
+    if (!reset && !(st.next && st.next.length)) return;
+    st.loading = true;
+    const p = new URLSearchParams(params);
+    if (!reset && st.next) for (const [k, v] of st.next) p.append(k, v);
+    renderNodeThumbs(node);
+    api.fetchApi(`/civitai_studio/images?${p.toString()}`, { cache: "no-store" })
         .then((r) => r.json())
         .then((d) => {
-            node.csResults = d.items || [];
+            const items = d.items || [];
+            if (reset) node.csResults = items;
+            else {
+                const seen = new Set(node.csResults.map((x) => x.id));
+                node.csResults = node.csResults.concat(items.filter((x) => !seen.has(x.id)));
+            }
+            st.next = d.next_query || [];
+            st.loading = false;
             renderNodeThumbs(node);
         })
         .catch(() => {
-            node.csResults = [];
-            node.csMsg = "缩略图拉取失败";
+            st.loading = false;
+            node.csResults = node.csResults || [];
+            node.csMsg = S.lang === "zh" ? "缩略图拉取失败" : "Failed to load thumbnails";
             renderNodeThumbs(node);
         });
 }
@@ -2122,7 +2240,7 @@ app.registerExtension({
     beforeRegisterNodeDef(nodeType, nodeData) {
         const type = nodeData.name;
 
-        // 图片搜索节点:DOM widget 缩略图条,点击选择 index
+        // 图片搜索节点:DOM widget 缩略图条,点击放大/选择
         if (type === "CivitaiImageSearch") {
             const origCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
@@ -2133,20 +2251,19 @@ app.registerExtension({
                 const widget = (name) => (node.widgets || []).find((x) => x.name === name);
 
                 const strip = document.createElement("div");
-                strip.style.cssText = "display:flex;flex-wrap:wrap;gap:6px;padding:4px;width:100%;align-content:flex-start;";
-                const hint = document.createElement("div");
-                hint.style.cssText = "width:100%;font-size:11px;color:#999;";
-                hint.textContent = S.lang === "zh" ? "点击缩略图选择 index" : "Click a thumbnail to set index";
-                strip.appendChild(hint);
+                strip.style.cssText = "display:flex;flex-wrap:wrap;gap:6px;padding:4px;width:100%;"
+                    + "align-content:flex-start;max-height:520px;overflow-y:auto;";
                 node.csStrip = strip;
                 this.addDOMWidget("cs_thumbs", "cs_thumbs", strip);
+                if (this.size[0] < 460) this.size[0] = 460; // 保证默认 3 列以上
 
-                const sig = () => ["keyword", "base_model", "tag", "sort", "period"].map((n) => widget(n)?.value ?? "").join("|");
+                const sig = () => ["keyword", "base_model", "tag", "sort", "period", "nsfw", "limit"]
+                    .map((n) => widget(n)?.value ?? "").join("|");
                 node.csSchedule = () => {
                     const s2 = sig();
                     if (s2 === node.csSig) return;
                     node.csSig = s2;
-                    const p = new URLSearchParams({ limit: "10", nsfw: widget("nsfw")?.value || "false" });
+                    const p = new URLSearchParams({ limit: String(widget("limit")?.value || 50), nsfw: widget("nsfw")?.value || "false" });
                     const q = widget("keyword")?.value?.trim();
                     const bm = widget("base_model")?.value;
                     const tag = widget("tag")?.value?.trim();
@@ -2155,20 +2272,29 @@ app.registerExtension({
                     if (tag) p.set("tag", tag);
                     p.set("sort", widget("sort")?.value || "Newest");
                     p.set("period", widget("period")?.value || "AllTime");
-                    fetchNodeThumbs(node, p.toString());
+                    node.csLastParams = p.toString();
+                    fetchNodeThumbs(node, p.toString(), true);
                 };
+                node.csLoadMore = () => { if (node.csLastParams) fetchNodeThumbs(node, node.csLastParams, false); };
                 // 筛选变化 → 节流拉缩略图;index 变化 → 刷新选中框
                 node.csDeb = null;
+                const debounced = () => {
+                    clearTimeout(node.csDeb);
+                    node.csDeb = setTimeout(() => node.csSchedule?.(), 600);
+                };
                 (node.widgets || []).forEach((wd) => {
-                    if (!["keyword", "base_model", "tag", "sort", "period", "nsfw", "index"].includes(wd.name)) return;
+                    if (!["keyword", "base_model", "tag", "sort", "period", "nsfw", "limit", "index"].includes(wd.name)) return;
                     const oc = wd.callback;
                     wd.callback = function () {
                         const r2 = oc?.apply(this, arguments);
                         if (wd.name === "index") { renderNodeThumbs(node); return r2; }
-                        clearTimeout(node.csDeb);
-                        node.csDeb = setTimeout(() => node.csSchedule?.(), 600);
+                        debounced();
                         return r2;
                     };
+                    // 新前端对文本输入框可能不触发 widget.callback:直接监听 DOM 输入
+                    if ((wd.name === "keyword" || wd.name === "tag") && wd.inputEl) {
+                        wd.inputEl.addEventListener("input", debounced);
+                    }
                 });
                 setTimeout(() => node.csSchedule?.(), 200); // 首次拉取
                 return r;
