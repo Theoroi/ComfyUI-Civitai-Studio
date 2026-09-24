@@ -2713,6 +2713,30 @@ function fetchNodeThumbs(node, params, reset) {
 
 app.registerExtension({
     name: "Civitai.Studio.Nodes",
+    setup() {
+        // 保存/草稿序列化清洗:新前端 serialize 按 widgets 数组索引写值,serialize=false
+        // 的 DOM 面板(cs_info 占 widgets[0])会留一个 null 占位 → 加载端按可序列化顺序
+        // 消费导致全体值后移一位。写出前剔除占位,工作流文件/草稿保持干净的 10 值。
+        // graph 实例可能在 loadGraphData 时被替换,故每次建节点时补挂(实例标记防重复)
+        app.csPatchSerialize = () => {
+            const g = app.graph;
+            if (!g || g.__csSerPatched || typeof g.serialize !== "function") return;
+            g.__csSerPatched = true;
+            const orig = g.serialize.bind(g);
+            g.serialize = function () {
+                const data = orig();
+                for (const nd of data.nodes || []) {
+                    if (nd.type !== "CivitaiImageSearch" || !Array.isArray(nd.widgets_values)) continue;
+                    if (nd.widgets_values.length >= 11 && nd.widgets_values[0] == null) {
+                        nd.widgets_values = nd.widgets_values.slice(1);
+                    }
+                }
+                return data;
+            };
+        };
+        app.csPatchSerialize();
+        setTimeout(() => app.csPatchSerialize?.(), 3000);
+    },
     beforeRegisterNodeDef(nodeType, nodeData) {
         const type = nodeData.name;
 
@@ -2721,6 +2745,7 @@ app.registerExtension({
             const origCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
                 const r = origCreated?.apply(this, arguments);
+                app.csPatchSerialize?.(); // graph 实例可能已被 loadGraphData 替换,补挂序列化清洗
                 this.csSig = "";
                 this.csResults = [];
                 const node = this;
@@ -2821,6 +2846,17 @@ app.registerExtension({
                             rowEl.dataset.csBold = "1";
                         }
                     }
+                    // 存量损坏数据自愈:旧版写出的草稿/文件首位带 null 占位(cs_info),
+                    // 加载端消费后值整体后移一位 → 检测到即按剔除占位的顺序一次性修正
+                    // (configure 修正成功时已设 __csValFixed,不会二次触发)
+                    if (!node.__csValFixed && Array.isArray(node.widgets_values)
+                        && node.widgets_values.length === 11 && node.widgets_values[0] == null) {
+                        node.__csValFixed = true;
+                        const v = node.widgets_values.slice(1);
+                        (node.widgets || []).filter((w) => w.serialize !== false)
+                            .forEach((w, i) => { if (i < v.length) w.value = v[i]; });
+                        renderSelInfo(node);
+                    }
                     // 面板布局参数或节点宽度变化 → 只重排版不重新拉取
                     const ss = node.size[0] + "|" + String(widget("thumbs_size")?.value || "medium") + "|" + String(widget("panel_h")?.value || "");
                     if (ss !== node.csLastSizeSig) { node.csLastSizeSig = ss; renderNodeThumbs(node); }
@@ -2840,23 +2876,30 @@ app.registerExtension({
             // 旧版工作流兼容:widgets_values 还是旧顺序([base_model,…,image_id,(lora_name),thumbs,panel])
             // 时重排为新顺序([image_id,base_model,…,index,thumbs,panel]),防止值错位。
             // 挂在 prototype 上只包一次(不能放 onNodeCreated,否则每建一个实例嵌套一层)
-            const origConfigure = nodeType.prototype.onConfigure;
-            nodeType.prototype.onConfigure = function () {
+            // 新前端在填充 widget 时按"可序列化 widget 顺序"消费 widgets_values,而
+            // serialize 按 widgets 数组索引写值且跳过 serialize=false 的 DOM 面板(cs_info
+            // 占 widgets[0]) → 保存的值首位多一个 null 占位,加载后全体后移一位。
+            // 唯一修正点:configure 返回后剔除占位/旧序重排,按序直接给 widget 赋值
+            // (设 __csValFixed 防止 poll 自愈二次修正)
+            const origNodeConfigure = nodeType.prototype.configure;
+            nodeType.prototype.configure = function (info) {
+                const r = origNodeConfigure?.apply(this, arguments);
                 try {
-                    const v = this.widgets_values;
-                    // 仅当本节点已是新形状(10 个可序列化 widget)才重排旧值;
-                    // 服务端未重启时节点还是旧 11 widget,旧序值恰好对齐,不能动
                     const wl = (this.widgets || []).filter((w) => w.serialize !== false).length;
-                    const isNumOrIdx = (x) => /^\d+$/.test(String(x)) || String(x) === "(index)";
-                    if (Array.isArray(v) && wl === 10 && v.length === 11) {
-                        // 11 值:含已移除的 lora_name(v[8]),丢弃
-                        this.widgets_values = [v[7], v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[9], v[10]];
-                    } else if (Array.isArray(v) && wl === 10 && v.length === 10 && !isNumOrIdx(v[0])) {
-                        // 10 值且首位不是 image_id:更老的旧序
-                        this.widgets_values = [v[7], v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[8], v[9]];
-                    }
+                    const v0 = info?.widgets_values;
+                    if (wl !== 10 || !Array.isArray(v0)) return r;
+                    let v = v0;
+                    if (v.length === 11 && v[0] == null) v = v.slice(1);
+                    if (v.length === 11) {
+                        v = [v[7], v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[9], v[10]];
+                    } else if (v.length === 10 && !(/^\d+$/.test(String(v[0])) || String(v[0]) === "(index)")) {
+                        v = [v[7], v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[8], v[9]];
+                    } else return r;
+                    (this.widgets || []).filter((w) => w.serialize !== false)
+                        .forEach((w, i) => { if (i < v.length) w.value = v[i]; });
+                    this.__csValFixed = true;
                 } catch (e) { /* 非常规工作流不动 */ }
-                return origConfigure?.apply(this, arguments);
+                return r;
             };
         }
 
