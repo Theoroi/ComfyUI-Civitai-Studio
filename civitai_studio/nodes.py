@@ -96,8 +96,11 @@ class CivitaiImageSearch:
 
     @classmethod
     def INPUT_TYPES(cls):
-        # 分组顺序与 UI 两列排版意图一致:底模/NSFW → Tag → 时间/排序 → 数量/序号
+        # image_id 放首位:前端把它渲染在信息面板正下方(其余参数随后)
         return {"required": {
+            # COMBO:首项 (index) = 按 index 取图;其余为最近点选/查询过的图片 ID(选之即精确取图)
+            "image_id": (["(index)"] + _recent_image_ids(),
+                         {"tooltip": "选最近浏览的图片 ID 则精确取该图与参数;选 (index) 按序号取图"}),
             "base_model": (["(any)"] + sorted(_BASE_MODEL_OPTIONS, key=str.lower),),
             "nsfw": (["false", "true"],),
             "tag": ("STRING", {"default": "", "multiline": False,
@@ -106,12 +109,6 @@ class CivitaiImageSearch:
             "sort": (["Newest", "Most Reactions", "Most Comments"],),
             "limit": ("INT", {"default": 50, "min": 10, "max": 100, "step": 10}),
             "index": ("INT", {"default": 0, "min": 0, "max": 199}),
-            # COMBO:首项 (index) = 按 index 取图;其余为最近点选/查询过的图片 ID(选之即精确取图)
-            "image_id": (["(index)"] + _recent_image_ids(),
-                         {"tooltip": "选最近浏览的图片 ID 则精确取该图与参数;选 (index) 按下方序号取图"}),
-            # COMBO:(auto) = 输出图片自带 LoRA 配方;选本地 lora 文件则 lora_name 输出该文件(可直连 LoraLoader)
-            "lora_name": (["(auto)"] + sorted(folder_paths.get_filename_list("loras")),
-                          {"tooltip": "(auto) = 使用图片自带的 LoRA 配方;选定本地 lora 文件时,lora_name 输出该文件供直连 LoraLoader"}),
         },
         # 面板布局参数:仅前端渲染使用,optional 保证旧 API 调用不因缺参被拒
         "optional": {
@@ -119,10 +116,10 @@ class CivitaiImageSearch:
             "panel_h": ("INT", {"default": 420, "min": 160, "max": 1600, "step": 20}),
         }}
 
-    # base_model/lora_name 用 COMBO:加载器(LoRA/UNET/Checkpoint)的模型字段 widget
-    # 转成输入口后类型是 COMBO,前端实测拒绝 STRING→COMBO 连线、放行 COMBO→COMBO
-    RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING", "COMBO", "IMAGE", "COMBO")
-    RETURN_NAMES = ("positive", "negative", "lora_string", "trigger_words", "base_model", "image", "lora_name")
+    # base_model 用 COMBO:加载器(UNET/Checkpoint)的模型字段 widget 转成输入口后
+    # 类型是 COMBO,前端实测拒绝 STRING→COMBO 连线、放行 COMBO→COMBO
+    RETURN_TYPES = ("STRING", "STRING", "STRING", "COMBO", "IMAGE")
+    RETURN_NAMES = ("positive", "negative", "trigger_words", "base_model", "image")
     FUNCTION = "run"
     CATEGORY = "Civitai Studio"
 
@@ -132,13 +129,13 @@ class CivitaiImageSearch:
         # 跳过 ComfyUI 对 COMBO 的静态"值不在列表"校验
         return True
 
-    async def run(self, base_model, nsfw, tag, period, sort, limit, index, image_id,
-                  thumbs_size, panel_h, lora_name):
+    async def run(self, image_id, base_model, nsfw, tag, period, sort, limit, index,
+                  thumbs_size, panel_h):
         # 网络与下载均为阻塞调用,丢进线程池避免冻结 ComfyUI 主事件循环
         return await asyncio.to_thread(
-            self._run_sync, base_model, nsfw, tag, period, sort, limit, index, image_id, lora_name)
+            self._run_sync, image_id, base_model, nsfw, tag, period, sort, limit, index)
 
-    def _run_sync(self, base_model, nsfw, tag, period, sort, limit, index, image_id, lora_name):
+    def _run_sync(self, image_id, base_model, nsfw, tag, period, sort, limit, index):
         params = {
             "limit": str(min(100, max(10, int(limit)))),
             "nsfw": str(nsfw), "sort": sort, "period": period, "withMeta": "true",
@@ -191,20 +188,12 @@ class CivitaiImageSearch:
             meta = meta["meta"] or {}
         pos = meta.get("prompt") or ""
         neg = meta.get("negativePrompt") or ""
-        lora_parts = [
-            f"{r.get('name', '?')} × {r.get('weight', 1)}"
-            for r in (meta.get("resources") or [])
-            if (r.get("type") or "lora").lower() == "lora"
-        ]
         # 触发词:资源里的 LoRA 若在本地库中已关联,取其触发词
         trigger = ", ".join(vdata.get("trainedWords") or [])
         # base_model 输出:选了具体底模时以输入为准,(any) 时用图片实际底模
         base = base_model if base_model != "(any)" else (vdata.get("baseModel") or base_model)
-        # lora_name 输出:选定本地 lora 文件时原样输出(供直连 LoraLoader),否则空
-        lora_name_out = lora_name if (lora_name and not lora_name.startswith("(auto)")) else ""
         img_bytes = _sync_download(chosen.get("url"))
-        return (pos, neg, lora_parts and (", ".join(lora_parts)) or "", trigger, base,
-                _bytes_to_tensor(img_bytes), lora_name_out)
+        return (pos, neg, trigger, base, _bytes_to_tensor(img_bytes))
 
 
 class CivitaiLoraRecipe:

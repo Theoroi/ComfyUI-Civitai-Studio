@@ -948,50 +948,42 @@ async function renderVersion(version, model, box) {
     });
 }
 
-async function showImageMeta(image) {
-    // feed 已带 withMeta=true,有则直接展示;两跳找回已证实不可行(镜像版本列表不含 feed 图)
-    const meta = image.meta;
-    if (!meta) {
-        // 仍无参数:降级展示大图/播放器 + 作者/数据 + 存图入口
-        const m0 = showModal(`
-            <h3 class="cs-modal-title">${esc(t("genParams"))}</h3>
-            <div class="cs-media-view" style="margin-bottom:10px">${mediaViewerHtml(image)}</div>
-            <div class="cs-kv-grid">
-                <div><b>${esc(t("galleryAuthor"))}</b><span>${esc(image.username || "-")}</span></div>
-                <div><b>❤</b><span>${fmtNum(image.stats?.heartCount ?? image.stats?.likeCount)}</span></div>
-            </div>
-            <div class="cs-modal-actions">
-                <button class="cs-btn cs-btn-primary" data-save-img>${esc(t("saveBtn"))}</button>
-            </div>`);
-        const sb = $("[data-save-img]", m0.box);
-        if (sb) sb.onclick = () => saveImageToOutput(image.url, sb);
-        attachIdAndTags(m0.box, image);
-        return;
-    }
-    const kv = [
-        [t("kvModel"), meta.model], [t("kvSampler"), meta.sampler], [t("kvSteps"), meta.steps],
-        ["CFG", meta.cfgScale], ["Seed", meta.seed], [t("kvSize"), meta.size],
-    ].filter(([, v]) => v !== undefined && v !== null && v !== "");
+// 统一大图详情浮层:画廊与图像搜索节点共用同一模板。
+// 按钮组:[保存图片](下载到 output)+ [选为输出](把 ID 写进图像搜索的 image_id)
+//        + [应用到工作流](仅当图片带生成参数时有)
+function openImageDetail(item, opts = {}) {
+    let meta = item.meta || {};
+    if (meta && !meta.prompt && meta.meta) meta = meta.meta; // 剥掉 imageId 精确查询的包裹层
+    const hasMeta = !!(meta && (meta.prompt || meta.seed != null));
+    const kv = hasMeta
+        ? [[t("kvModel"), meta.model], [t("kvSampler"), meta.sampler], [t("kvSteps"), meta.steps],
+           ["CFG", meta.cfgScale], ["Seed", meta.seed], [t("kvSize"), meta.size]]
+        : [[t("galleryAuthor"), item.username], ["❤", fmtNum(item.stats?.heartCount ?? item.stats?.likeCount)]];
+    const kvHtml = kv.filter(([, v]) => v !== undefined && v !== null && v !== "")
+        .map(([k, v]) => `<div><b>${esc(k)}</b><span>${esc(String(v))}</span></div>`).join("");
     const resources = (meta.resources || []).map((r) =>
         `<code class="cs-trigger">${esc(r.name || r.modelName || "?")}${r.weight != null ? " × " + esc(r.weight) : ""}</code>`).join("");
     const m = showModal(`
         <h3 class="cs-modal-title">${esc(t("genParams"))}</h3>
-        <div class="cs-media-view" style="margin-bottom:10px">${mediaViewerHtml(image)}</div>
+        <div class="cs-media-view" style="margin-bottom:10px">${mediaViewerHtml(item)}</div>
+        ${hasMeta && meta.prompt ? `
         <div class="cs-meta-block">
             <div class="cs-section-title">${esc(t("positivePrompt"))} <button class="cs-btn cs-btn-mini" data-copy="prompt">${esc(t("copy"))}</button></div>
             <textarea readonly rows="5">${esc(meta.prompt || "")}</textarea>
-        </div>
-        ${meta.negativePrompt ? `
+        </div>` : ""}
+        ${hasMeta && meta.negativePrompt ? `
         <div class="cs-meta-block">
             <div class="cs-section-title">${esc(t("negativePrompt"))} <button class="cs-btn cs-btn-mini" data-copy="negative">${esc(t("copy"))}</button></div>
             <textarea readonly rows="3">${esc(meta.negativePrompt || "")}</textarea>
         </div>` : ""}
-        <div class="cs-kv-grid">${kv.map(([k, v]) => `<div><b>${esc(k)}</b><span>${esc(v)}</span></div>`).join("")}</div>
+        <div class="cs-kv-grid" style="margin-top:10px">${kvHtml}</div>
         ${resources ? `<div class="cs-meta-block"><div class="cs-section-title">${esc(t("resources"))}</div><div class="cs-tags">${resources}</div></div>` : ""}
         <div class="cs-modal-actions">
             <button class="cs-btn" data-save-img>${esc(t("saveBtn"))}</button>
-            <button class="cs-btn cs-btn-primary" data-apply-workflow>${esc(t("applyBtn"))}</button>
+            <button class="cs-btn cs-btn-primary" data-use-as-output>${esc(t("useAsOutput"))}</button>
+            ${hasMeta ? `<button class="cs-btn" data-apply-workflow>${esc(t("applyBtn"))}</button>` : ""}
         </div>`);
+    attachIdAndTags(m.box, item); // ID 行 + 标签行(插在 kv 网格之前)
     $$("[data-copy]", m.box).forEach((btn) => {
         btn.onclick = () => {
             const ta = $("textarea", btn.closest(".cs-meta-block"));
@@ -999,8 +991,11 @@ async function showImageMeta(image) {
         };
     });
     const saveBtn = $("[data-save-img]", m.box);
-    if (saveBtn) saveBtn.onclick = () => saveImageToOutput(image.url, saveBtn);
-    attachIdAndTags(m.box, image);
+    if (saveBtn) saveBtn.onclick = () => saveImageToOutput(item.url, saveBtn);
+    $("[data-use-as-output]", m.box).onclick = () => {
+        selectAsOutput(item, opts.node);
+        m.close();
+    };
     const applyBtn = $("[data-apply-workflow]", m.box);
     if (applyBtn) applyBtn.onclick = () => {
         applyBtn.disabled = true;
@@ -1022,6 +1017,39 @@ async function showImageMeta(image) {
             applyBtn.disabled = false;
         }
     };
+}
+
+// 画廊等无节点上下文的入口:详情浮层不指定目标节点
+async function showImageMeta(image) {
+    openImageDetail(image);
+}
+
+// 把图片 ID 写进图像搜索节点的 image_id(优先显式指定,其次画布选中,最后第一个)
+function selectAsOutput(item, preferred) {
+    const all = (app.graph?._nodes || []).filter((n) => n.type === "CivitaiImageSearch");
+    let node = preferred && all.includes(preferred) ? preferred : null;
+    if (!node) {
+        node = all.find((n) => { try { return app.canvas?.selectedItems?.has?.(n) || n.selected; } catch (e) { return false; } })
+            || all[0] || null;
+    }
+    if (!node) {
+        toast("warn", S.lang === "zh" ? "画布上没有图像搜索节点" : "No Image Search node on canvas");
+        return;
+    }
+    const iw = (node.widgets || []).find((w) => w.name === "index");
+    const idw = (node.widgets || []).find((w) => w.name === "image_id");
+    const i = (node.csResults || []).indexOf(item);
+    if (iw && i >= 0) iw.value = i;
+    if (idw) {
+        idw.value = String(item.id ?? "");
+        // 下拉选项即时补入该 ID;并回传后端持久化(校验与下次下拉都用)
+        const opts = idw.options?.values;
+        if (Array.isArray(opts) && !opts.includes(idw.value)) opts.unshift(idw.value);
+        apiPost(`/civitai_studio/remember_image/${encodeURIComponent(idw.value)}`).catch(() => {});
+    }
+    renderNodeThumbs(node);
+    try { app.canvas.setDirty(true, true); } catch (e) {}
+    toast("success", t("selectedAsOutput"), "image_id " + (item.id ?? ""));
 }
 
 // ---------- 配方应用:把生成参数写入当前工作流 ----------
@@ -1636,8 +1664,28 @@ function renderGallery(reset) {
         grid.innerHTML = `<div class="cs-empty">${esc(st.error)}</div>`;
         return;
     }
-    if (reset) grid.innerHTML = "";
-    const frag = document.createDocumentFragment();
+    if (reset) {
+        grid.innerHTML = "";
+        st.jrow = []; st.jrowAr = 0; // 两端对齐行排版的在途行(跨"加载更多"批次续行)
+    }
+    // 两端对齐行排版:按宽高比贪心成行,行内等高铺满整行宽(与节点缩略图同款)
+    const gap = 6, targetH = 200;
+    const W = Math.max(160, grid.clientWidth - 8);
+    const flushRow = () => {
+        const r = st.jrow;
+        if (!r || !r.length) return;
+        const arSum = r.reduce((s, c) => s + c.ar, 0);
+        const avail = W - (r.length - 1) * gap;
+        let h = Math.min(avail / arSum, targetH * 1.3); // 窄栏末行/独行不超目标太多
+        if (arSum * h > avail) h *= avail / (arSum * h); // 舍入超宽回调
+        for (const c of r) {
+            c.el.style.flex = `0 0 ${(c.ar * h).toFixed(1)}px`;
+            c.el.style.width = (c.ar * h).toFixed(1) + "px";
+            c.el.style.height = h.toFixed(1) + "px";
+            grid.appendChild(c.el);
+        }
+        st.jrow = []; st.jrowAr = 0;
+    };
     for (const img of st.items) {
         if (img.__rendered) continue;
         img.__rendered = true;
@@ -1661,9 +1709,11 @@ function renderGallery(reset) {
             ev.stopPropagation();
             saveImageToOutput(img.url, ev.target);
         };
-        frag.appendChild(item);
+        const ar = img.width && img.height ? img.width / img.height : 0.75;
+        st.jrow.push({ el: item, ar }); st.jrowAr = (st.jrowAr || 0) + ar;
+        if (st.jrowAr * targetH + (st.jrow.length - 1) * gap >= W) flushRow();
     }
-    grid.appendChild(frag);
+    flushRow();
     if (!st.items.length && !st.loading) {
         grid.innerHTML = `<div class="cs-empty">${esc(t("galleryEmpty"))}</div>`;
     }
@@ -2198,9 +2248,9 @@ function injectStyles() {
 .cs-local-row-active { border-color:var(--accent-color,#4a90e2) !important; }
 .cs-local-update { font-size:11px; margin-top:4px; color:#e2a23f; display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
 .cs-local-update.cs-ok { color:#4caf50; }
-.cs-gal-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(170px,1fr)); gap:6px; padding-bottom:20px; }
-.cs-gal-item { position:relative; border-radius:6px; overflow:hidden; background:#222; }
-.cs-gal-item img, .cs-gal-item video { width:100%; display:block; cursor:pointer; }
+.cs-gal-grid { display:flex; flex-wrap:wrap; gap:6px; padding-bottom:20px; align-content:flex-start; }
+.cs-gal-item { position:relative; border-radius:6px; overflow:hidden; background:#222; box-sizing:border-box; }
+.cs-gal-item img, .cs-gal-item video { width:100%; height:100%; object-fit:cover; display:block; cursor:pointer; }
 .cs-gal-item img:hover, .cs-gal-item video:hover { outline:2px solid var(--accent-color,#4a90e2); }
 .cs-dim { color:var(--desc-text-color,#999); font-size:11px; }
 .cs-dl-row { background:var(--comfy-box-bg, var(--comfy-input-bg,#333)); border-radius:6px; padding:8px; margin-bottom:6px; display:flex; gap:8px; align-items:center; }
@@ -2299,7 +2349,8 @@ function appendPlayBadge(cell) {
     cell.appendChild(p);
 }
 
-// 顶部信息面板:已选缩略图 + pos/neg/lora/base 摘要(写进 cs_info widget)
+// 顶部信息面板:左侧已选缩略图(点击放大)+ 右侧五行(ID/Pos/Neg/Lora/Model);
+// image_id widget 紧跟本面板下方(INPUT_TYPES 首位),此处只负责展示
 function renderSelInfo(node) {
     const el = node?.csInfo;
     if (!el) return;
@@ -2318,38 +2369,37 @@ function renderSelInfo(node) {
     const loras = (meta.resources || [])
         .filter((r) => (r.type || "lora").toLowerCase() === "lora")
         .map((r) => `${r.name || "?"}×${r.weight ?? 1}`).join(", ");
-    const row = (label, text, color) => {
+    const row = (label, text, color, bold) => {
         const t = text ? String(text) : "-";
         const d = document.createElement("div");
-        d.style.cssText = "display:flex;gap:4px;min-width:0;";
+        d.style.cssText = "display:flex;gap:4px;min-width:0;" + (bold ? "font-weight:700;" : "");
         d.title = t;
-        d.innerHTML = `<span style="color:${color};flex:0 0 auto;">${esc(label)}:</span>`
+        d.innerHTML = `<span style="color:${color};flex:0 0 auto;">${esc(label)}</span>`
             + `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(t.length > 120 ? t.slice(0, 120) + "…" : t)}</span>`;
         return d;
     };
     el.innerHTML = "";
+    // 左:缩略图,点击进统一大图详情(可保存/选为输出)
     const pic = document.createElement("div");
-    pic.style.cssText = "flex:0 0 56px;height:74px;background:#2e2e33;border-radius:4px;overflow:hidden;";
+    pic.style.cssText = "flex:0 0 64px;height:86px;background:#2e2e33;border-radius:4px;overflow:hidden;cursor:pointer;";
+    pic.title = S.lang === "zh" ? "点击放大" : "Click to enlarge";
     const im = document.createElement("img");
     im.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;";
     im.src = imgSrc(cdnThumb(sel.url));
     im.onerror = () => { pic.textContent = "!"; };
     pic.appendChild(im);
+    pic.onclick = () => openImageDetail(sel, { node });
     el.appendChild(pic);
+    // 右:五行信息表(ID 加粗置顶)
     const lines = document.createElement("div");
-    lines.style.cssText = "flex:1;min-width:0;font-size:11px;line-height:1.5;overflow:hidden;color:#ccc;";
-    lines.appendChild(row("pos", meta.prompt, "#e2836b"));
-    lines.appendChild(row("neg", meta.negativePrompt, "#6ba1e2"));
-    lines.appendChild(row("lora", loras, "#e2b96b"));
-    lines.appendChild(row("base", sel.baseModel, "#8fd4a0"));
+    lines.style.cssText = "flex:1;min-width:0;font-size:11px;line-height:1.45;overflow:hidden;color:#ccc;"
+        + "display:flex;flex-direction:column;justify-content:space-between;height:86px;";
+    lines.appendChild(row("Image ID", sel.id, "#fff", true));
+    lines.appendChild(row("Pos", meta.prompt, "#e2836b"));
+    lines.appendChild(row("Neg", meta.negativePrompt, "#6ba1e2"));
+    lines.appendChild(row("Lora", loras, "#e2b96b"));
+    lines.appendChild(row("Model", sel.baseModel, "#8fd4a0"));
     el.appendChild(lines);
-    // 分隔线 + 加粗 ID 行
-    const hr = document.createElement("hr");
-    hr.style.cssText = "border:none;border-top:1px solid #3a3a40;margin:6px 0;width:100%;";
-    const idRow = row("ID", sel.id, "#fff");
-    idRow.style.fontWeight = "700";
-    el.appendChild(hr);
-    el.appendChild(idRow);
     nodeThumbsResize(node); // 面板高度变了,同步节点尺寸防下方 widget 被裁
 }
 
@@ -2513,35 +2563,9 @@ function renderNodeThumbs(node) {
     nodeThumbsResize(node);
 }
 
-// 点缩略图 → 悬浮层放大(视频可播放) + 元信息 + 选为输出
+// 节点缩略图点击 → 统一大图详情浮层(与画廊共用;选为输出默认写入本节点)
 function showNodeImageFloat(node, item) {
-    let meta = item.meta || {};
-    if (meta && !meta.prompt && meta.meta) meta = meta.meta; // 剥掉精确查询的包裹层
-    const kvs = [["Seed", meta.seed], ["CFG", meta.cfgScale], ["Steps", meta.steps], ["Sampler", meta.sampler]]
-        .filter(([, v]) => v !== undefined && v !== null && v !== "");
-    const m = showModal(`
-        <div class="cs-media-view">${mediaViewerHtml(item)}</div>
-        ${kvs.length ? `<div class="cs-kv-grid" style="margin-top:10px">${kvs.map(([k, v]) => `<div><b>${esc(k)}</b><span>${esc(String(v))}</span></div>`).join("")}</div>` : ""}
-        ${meta.prompt ? `<div class="cs-form-hint" style="margin-top:8px;max-height:120px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;">${esc(String(meta.prompt))}</div>` : ""}
-        <div class="cs-modal-actions"><button class="cs-btn cs-btn-primary" data-use>${esc(t("useAsOutput"))}</button></div>`);
-    // ID 行 + 标签行(与画廊共用;ID 行独立、标签 flex-wrap,不再挤在一行)
-    attachIdAndTags(m.box, item);
-    $("[data-use]", m.box).onclick = () => {
-        const iw = (node.widgets || []).find((w) => w.name === "index");
-        const idw = (node.widgets || []).find((w) => w.name === "image_id");
-        const i = (node.csResults || []).indexOf(item);
-        if (iw && i >= 0) iw.value = i;
-        if (idw) {
-            idw.value = String(item.id ?? "");
-            // 下拉选项即时补入该 ID;并回传后端持久化(校验与下次下拉都用)
-            const opts = idw.options?.values;
-            if (Array.isArray(opts) && !opts.includes(idw.value)) opts.unshift(idw.value);
-            apiPost(`/civitai_studio/remember_image/${encodeURIComponent(idw.value)}`).catch(() => {});
-        }
-        m.close();
-        renderNodeThumbs(node);
-        toast("success", t("selectedAsOutput"), "index " + Math.max(0, i));
-    };
+    openImageDetail(item, { node });
 }
 
 function fetchNodeThumbs(node, params, reset) {
@@ -2671,6 +2695,12 @@ app.registerExtension({
                     // image_id 手动粘贴/修改也要刷新信息面板(文本输入不触发事件)
                     const cur = widget("image_id")?.value || "";
                     if (cur !== node.csLastId) { node.csLastId = cur; renderSelInfo(node); }
+                    // image_id widget 行加粗(前端 DOM 行渲染后才找得到,找到一次即止)
+                    if (!node.csIdBold) {
+                        const rowEl = [...document.querySelectorAll(".lg-node-widget")]
+                            .find((el) => (el.textContent || "").trim().startsWith("image_id"));
+                        if (rowEl) { rowEl.style.fontWeight = "700"; node.csIdBold = true; }
+                    }
                     // 面板布局参数或节点宽度变化 → 只重排版不重新拉取
                     const ss = node.size[0] + "|" + String(widget("thumbs_size")?.value || "medium") + "|" + String(widget("panel_h")?.value || "");
                     if (ss !== node.csLastSizeSig) { node.csLastSizeSig = ss; renderNodeThumbs(node); }
@@ -2686,6 +2716,27 @@ app.registerExtension({
                     origOnRemoved?.apply(this, arguments);
                 };
                 return r;
+            };
+            // 旧版工作流兼容:widgets_values 还是旧顺序([base_model,…,image_id,(lora_name),thumbs,panel])
+            // 时重排为新顺序([image_id,base_model,…,index,thumbs,panel]),防止值错位。
+            // 挂在 prototype 上只包一次(不能放 onNodeCreated,否则每建一个实例嵌套一层)
+            const origConfigure = nodeType.prototype.onConfigure;
+            nodeType.prototype.onConfigure = function () {
+                try {
+                    const v = this.widgets_values;
+                    // 仅当本节点已是新形状(10 个可序列化 widget)才重排旧值;
+                    // 服务端未重启时节点还是旧 11 widget,旧序值恰好对齐,不能动
+                    const wl = (this.widgets || []).filter((w) => w.serialize !== false).length;
+                    const isNumOrIdx = (x) => /^\d+$/.test(String(x)) || String(x) === "(index)";
+                    if (Array.isArray(v) && wl === 10 && v.length === 11) {
+                        // 11 值:含已移除的 lora_name(v[8]),丢弃
+                        this.widgets_values = [v[7], v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[9], v[10]];
+                    } else if (Array.isArray(v) && wl === 10 && v.length === 10 && !isNumOrIdx(v[0])) {
+                        // 10 值且首位不是 image_id:更老的旧序
+                        this.widgets_values = [v[7], v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[8], v[9]];
+                    }
+                } catch (e) { /* 非常规工作流不动 */ }
+                return origConfigure?.apply(this, arguments);
             };
         }
 

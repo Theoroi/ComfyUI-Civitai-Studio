@@ -35,11 +35,6 @@
           ]
         },
         {
-          "name": "lora_string",
-          "type": "STRING",
-          "links": []
-        },
-        {
           "name": "trigger_words",
           "type": "STRING",
           "links": []
@@ -55,15 +50,11 @@
           "links": [
             4
           ]
-        },
-        {
-          "name": "lora_name",
-          "type": "COMBO",
-          "links": []
         }
       ],
       "properties": {},
       "widgets_values": [
+        "12097475",
         "(any)",
         "false",
         "",
@@ -71,8 +62,6 @@
         "Newest",
         50,
         0,
-        "12097475",
-        "(auto)",
         "medium",
         420
       ]
@@ -184,7 +173,7 @@
     [
       4,
       1,
-      5,
+      4,
       4,
       0,
       "IMAGE"
