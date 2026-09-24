@@ -396,8 +396,8 @@ async def image_proxy(request):
                 if resp.status != 200:
                     return _json_error(f"图片中转失败: HTTP {resp.status}", 502)
                 ctype = (resp.content_type or "").split(";")[0]
-                if not ctype.startswith("image/"):
-                    return _json_error("图片中转失败: 上游返回的不是图片(可能被 WAF 拦截),可尝试更换代理节点", 502)
+                if not (ctype.startswith("image/") or ctype.startswith("video/")):
+                    return _json_error("图片中转失败: 上游返回的不是图片/视频(可能被 WAF 拦截),可尝试更换代理节点", 502)
                 body = await resp.content.read(20 * 1024 * 1024 + 1)
                 if len(body) > 20 * 1024 * 1024:
                     return _json_error("图片超过 20MB 上限", 502)

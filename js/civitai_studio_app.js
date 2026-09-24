@@ -2492,6 +2492,7 @@ function fetchNodeThumbs(node, params, reset) {
         })
         .catch(() => {
             st.loading = false;
+            st.refetch = false; // 失败不残留补发标记
             node.csResults = node.csResults || [];
             node.csMsg = S.lang === "zh" ? "缩略图拉取失败" : "Failed to load thumbnails";
             renderNodeThumbs(node);
