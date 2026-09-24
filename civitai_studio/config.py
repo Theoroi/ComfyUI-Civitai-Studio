@@ -22,6 +22,7 @@ DEFAULTS = {
     "max_concurrent": 1,    # 并发下载数 1-4
     "persist_description": False,  # 说明/标签/封面落盘到 .civitai.json(默认关)
     "tag_scrape": True,     # 是否读取非公开 API 抓取图片分类标签
+    "tag_and_mode": False,  # 实验选项:多标签筛选改漏斗式 AND(默认 OR,API 原生语义)
 }
 
 

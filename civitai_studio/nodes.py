@@ -70,7 +70,7 @@ class CivitaiImageSearch:
             "nsfw": (["false", "true"],),
             # COMBO:选项 = 本地已入库的分类标签(先在大图悬浮层点抓一次入库),(none) = 不筛选
             "tag": (["(none)"] + sorted(_load_tag_mapping(), key=str.lower),
-                    {"tooltip": "从已入库标签中选择;在大图详情浮层点抓标签即可扩充选项"}),
+                    {"tooltip": "从已入库标签中选择,可多选;多个标签为任一命中(OR 语义,Civitai API 限制);在大图详情浮层点抓标签即可扩充选项"}),
             "period": (["AllTime", "Month", "Week", "Day"],),
             "sort": (["Newest", "Most Reactions", "Most Comments"],),
             "limit": ("INT", {"default": 50, "min": 10, "max": 100, "step": 10}),

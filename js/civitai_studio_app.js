@@ -138,6 +138,8 @@ const STR = {
         sfwLabel: "全年龄", nsfwLabel: "包含 NSFW", galTagId: "Tag ID 或名称(逗号分隔)",
         noTags: "无标签", tagsPaused: "标签抓取已暂停({sec} 秒后恢复)", noSelectionHint: "未选择(点击缩略图选择)",
         tagScrapeLabel: "读取非公开 API 获取图片分类标签，需要Civitai API Key", tagsLoading: "标签加载中…",
+        tagAndLabel: "实验:多标签 AND 语义(逐标签查询求交集,请求量更大)", clearTags: "清空",
+        noTagsSel: "未选标签(从上方 tag 下拉添加,可多选;多标签为任一命中)",
         tagsOff: "标签抓取已在设置中关闭", capHint: "已达显示上限(100)",
         galleryEmpty: "没有图片。", galleryAuthor: "作者",
     },
@@ -245,6 +247,8 @@ const STR = {
         sfwLabel: "SFW only", nsfwLabel: "Include NSFW", galTagId: "Tag ID or name, comma-separated",
         noTags: "No tags", tagsPaused: "Tag fetch paused ({sec}s), retrying later", noSelectionHint: "Nothing selected (click a thumbnail)",
         tagScrapeLabel: "Fetch image category tags (unofficial API), requires Civitai API Key", tagsLoading: "Loading tags…", tagsOff: "Tag scraping disabled in settings", capHint: "Display cap reached (100)",
+        tagAndLabel: "Experimental: multi-tag AND (per-tag queries + intersection, more requests)", clearTags: "Clear",
+        noTagsSel: "No tags (add from tag dropdown, multi-select; any-match semantics)",
         galleryEmpty: "No images.", galleryAuthor: "Author",
     },
 };
@@ -1963,6 +1967,7 @@ async function openSettings() {
             <label class="cs-check"><input id="cs-set-hash" type="checkbox" ${cfg.verify_hash ? "checked" : ""}/> ${esc(t("hashLabel"))}</label>
             <label class="cs-check"><input id="cs-set-pdesc" type="checkbox" ${cfg.persist_description ? "checked" : ""}/> ${esc(t("pdescLabel"))}</label>
             <label class="cs-check"><input id="cs-set-tscrape" type="checkbox" ${cfg.tag_scrape !== false ? "checked" : ""}/> ${esc(t("tagScrapeLabel"))}</label>
+            <label class="cs-check"><input id="cs-set-andmode" type="checkbox" ${cfg.tag_and_mode ? "checked" : ""}/> ${esc(t("tagAndLabel"))}</label>
             <div class="cs-modal-msg">${esc(t("settingsMsg"))}</div>
             <div class="cs-modal-actions">
                 <button class="cs-btn" data-act="cancel">${esc(t("cancel"))}</button>
@@ -1993,6 +1998,7 @@ async function openSettings() {
             verify_hash: $("#cs-set-hash", m.box).checked,
             persist_description: $("#cs-set-pdesc", m.box).checked,
             tag_scrape: $("#cs-set-tscrape", m.box).checked,
+            tag_and_mode: $("#cs-set-andmode", m.box).checked,
         };
         const key = $("#cs-set-key", m.box).value.trim();
         if (key) body.api_key = key;
@@ -2421,6 +2427,52 @@ function appendPlayBadge(cell) {
     cell.appendChild(p);
 }
 
+// tag 多选 chips 面板:tag widget 的 value(逗号分隔名称串)是唯一真源,面板仅是交互层。
+// combo 当"添加器"(选中即追加并复位),chip 上的 ✕ 逐个移除
+function renderTagChips(node) {
+    const el = node.csTags;
+    if (!el) return;
+    el.innerHTML = "";
+    const names = String((node.widgets || []).find((w) => w.name === "tag")?.value || "")
+        .split(",").map((s) => s.trim()).filter(Boolean);
+    if (!names.length) {
+        el.innerHTML = `<span style="color:#777;font-size:11px;">${esc(t("noTagsSel"))}</span>`;
+        nodeThumbsResize(node);
+        return;
+    }
+    for (const name of names) {
+        const chip = document.createElement("span");
+        chip.style.cssText = "display:inline-flex;align-items:center;gap:4px;background:rgba(74,144,226,.16);"
+            + "border:1px solid var(--accent-color,#4a90e2);border-radius:10px;padding:0 7px;"
+            + "font-size:11px;color:var(--fg-color,#eee);white-space:nowrap;";
+        chip.innerHTML = `<span>#${esc(name)}</span>`;
+        const x = document.createElement("span");
+        x.textContent = "✕";
+        x.style.cssText = "cursor:pointer;opacity:.6;";
+        x.title = S.lang === "zh" ? "移除" : "Remove";
+        x.onclick = () => setNodeTags(node, names.filter((n2) => n2 !== name));
+        chip.appendChild(x);
+        el.appendChild(chip);
+    }
+    if (names.length > 1) {
+        const clear = document.createElement("span");
+        clear.textContent = t("clearTags");
+        clear.style.cssText = "cursor:pointer;font-size:11px;color:var(--accent-color,#4a90e2);margin-left:2px;";
+        clear.onclick = () => setNodeTags(node, []);
+        el.appendChild(clear);
+    }
+    nodeThumbsResize(node);
+}
+
+function setNodeTags(node, names) {
+    const tagW = (node.widgets || []).find((w) => w.name === "tag");
+    if (!tagW) return;
+    node.csTagSel = names.slice();
+    tagW.value = names.join(",");
+    renderTagChips(node);
+    node.csSchedule?.();
+}
+
 // 顶部信息面板:左侧已选缩略图(点击放大)+ 右侧五行(ID/Pos/Neg/Lora/Model);
 // image_id widget 紧跟本面板下方(INPUT_TYPES 首位),此处只负责展示
 function renderSelInfo(node) {
@@ -2680,6 +2732,55 @@ function showNodeImageFloat(node, item) {
     openImageDetail(item, { node });
 }
 
+
+// AND 实验模式:多标签漏斗式求交——每个标签独立分页游标,各拉一页后取交集;
+// 交集以第一个标签的排序为基准;所有游标耗尽即无更多。"加载更多"推进全部游标
+async function fetchNodeThumbsAnd(node, tagIds, reset) {
+    const st = node.csFetch || (node.csFetch = { next: [], loading: false });
+    if (st.loading) return; // 在途:忽略(下一轮筛选会重置)
+    if (reset || !st.and || !st.and.length) {
+        const base = new URLSearchParams(node.csLastParams || "");
+        base.delete("tags");
+        st.and = tagIds.map((id) => {
+            const p = new URLSearchParams(base);
+            p.set("tags", id);
+            return { p: p.toString(), next: null, done: false, items: [] };
+        });
+        node.csResults = [];
+    }
+    st.loading = true;
+    renderNodeThumbs(node);
+    try {
+        await Promise.all(st.and.map(async (c) => {
+            if (c.done) return;
+            const p = new URLSearchParams(c.p);
+            if (c.next) for (const [k, v] of c.next) p.append(k, v);
+            const d = await api.fetchApi(`/civitai_studio/images?${p.toString()}`, { cache: "no-store" })
+                .then((r2) => r2.json());
+            c.items = c.items.concat(d.items || []);
+            c.next = d.next_query || [];
+            c.done = !(c.next || []).length;
+        }));
+    } catch (e) {
+        st.loading = false;
+        node.csMsg = S.lang === "zh" ? "标签查询失败" : "Tag query failed";
+        renderNodeThumbs(node);
+        return;
+    }
+    // 交集:以第一个标签的顺序为基准,要求同时存在于其余每个标签的结果中
+    const rest = st.and.slice(1).map((c) => new Set(c.items.map((x) => String(x.id))));
+    const seen = new Set();
+    node.csResults = st.and[0].items.filter((x) => {
+        const id = String(x.id);
+        if (seen.has(id)) return false;
+        seen.add(id);
+        return rest.every((s) => s.has(id));
+    });
+    st.loading = false;
+    st.next = st.and.every((c) => c.done) ? [] : [["__and__", "1"]];
+    renderNodeThumbs(node);
+}
+
 function fetchNodeThumbs(node, params, reset) {
     const st = node.csFetch || (node.csFetch = { next: [], loading: false });
     if (st.loading) { st.refetch = true; return; } // 在途:完成后按最新筛选补发
@@ -2715,27 +2816,23 @@ app.registerExtension({
     name: "Civitai.Studio.Nodes",
     setup() {
         // 保存/草稿序列化清洗:新前端 serialize 按 widgets 数组索引写值,serialize=false
-        // 的 DOM 面板(cs_info 占 widgets[0])会留一个 null 占位 → 加载端按可序列化顺序
-        // 消费导致全体值后移一位。写出前剔除占位,工作流文件/草稿保持干净的 10 值。
-        // graph 实例可能在 loadGraphData 时被替换,故每次建节点时补挂(实例标记防重复)
-        app.csPatchSerialize = () => {
-            const g = app.graph;
-            if (!g || g.__csSerPatched || typeof g.serialize !== "function") return;
-            g.__csSerPatched = true;
-            const orig = g.serialize.bind(g);
-            g.serialize = function () {
-                const data = orig();
+        // 的 DOM 面板(cs_info 占 widgets[0]、cs_tags 在中部)会留下 null 占位 → 加载端
+        // 按可序列化顺序消费导致值整体后移。挂在 LGraph 原型上(全实例生效,不怕
+        // loadGraphData 替换 graph 实例),写出前剔除全部 null 占位,保持干净的 10 值
+        const LG = LiteGraph.LGraph || (LiteGraph.classes && LiteGraph.classes.LGraph);
+        if (LG && !LG.prototype.__csSerClean) {
+            LG.prototype.__csSerClean = true;
+            const origSer = LG.prototype.serialize;
+            LG.prototype.serialize = function () {
+                const data = origSer.apply(this, arguments);
                 for (const nd of data.nodes || []) {
-                    if (nd.type !== "CivitaiImageSearch" || !Array.isArray(nd.widgets_values)) continue;
-                    if (nd.widgets_values.length >= 11 && nd.widgets_values[0] == null) {
-                        nd.widgets_values = nd.widgets_values.slice(1);
+                    if (nd.type === "CivitaiImageSearch" && Array.isArray(nd.widgets_values)) {
+                        nd.widgets_values = nd.widgets_values.filter((v) => v !== null);
                     }
                 }
                 return data;
             };
-        };
-        app.csPatchSerialize();
-        setTimeout(() => app.csPatchSerialize?.(), 3000);
+        }
     },
     beforeRegisterNodeDef(nodeType, nodeData) {
         const type = nodeData.name;
@@ -2782,6 +2879,33 @@ app.registerExtension({
                     node.widgets.splice(node.widgets.indexOf(infoW), 1);
                     node.widgets.unshift(infoW);
                 }
+                // tag 多选 chips 面板:DOM widget 插在 tag combo 之后,仅交互层(值存 tag widget 串)
+                const tagW = widget("tag");
+                node.csTagSel = [];
+                if (tagW) {
+                    const chipsEl = document.createElement("div");
+                    chipsEl.style.cssText = "display:flex;flex-wrap:wrap;gap:4px;align-items:center;width:100%;min-height:18px;";
+                    const tagsW = this.addDOMWidget("cs_tags", "cs_tags", chipsEl);
+                    tagsW.serialize = false;
+                    node.csTags = chipsEl;
+                    const ci = node.widgets.indexOf(tagsW);
+                    if (ci >= 0) node.widgets.splice(ci, 1);
+                    node.widgets.splice(node.widgets.indexOf(tagW) + 1, 0, tagsW);
+                    // combo = 添加器:选中即追加进已选(去重)并复位,值存逗号串
+                    const tagCb = tagW.callback;
+                    tagW.callback = function () {
+                        const r2 = tagCb?.apply(this, arguments);
+                        const val = String(tagW.value || "").trim();
+                        if (val && val !== "(none)") {
+                            if (!node.csTagSel.includes(val)) node.csTagSel.push(val);
+                            tagW.value = node.csTagSel.join(",");
+                            renderTagChips(node);
+                            node.csSig = "";
+                            debounced();
+                        }
+                        return r2;
+                    };
+                }
 
                 const sig = () => ["base_model", "tag", "sort", "period", "nsfw", "limit"]
                     .map((n) => widget(n)?.value ?? "").join("|");
@@ -2791,22 +2915,24 @@ app.registerExtension({
                     node.csSig = s2;
                     const p = new URLSearchParams({ limit: String(widget("limit")?.value || 50), nsfw: widget("nsfw")?.value || "false" });
                     const bm = widget("base_model")?.value;
-                    const tag = widget("tag")?.value?.trim();
                     if (bm && bm !== "(any)") p.set("baseModels", bm);
-                    if (tag && tag !== "(none)") {
-                        // 官方 /images 的 tags 只认数字 ID:combo 选中的名称经本地映射换 ID,
-                        // 数字 ID(或逗号分隔 ID 串)直接使用
-                        const ids = tag.replace("，", ",").split(",").map((s) => s.trim())
-                            .map((s) => (/^\d+$/.test(s) ? s : (S.tagMap && S.tagMap[s]) || null))
-                            .filter(Boolean).join(",");
-                        if (ids) p.set("tags", ids);
-                    }
+                    // 多选标签(node.csTagSel,逗号串存于 tag widget):名称经本地映射换 ID。
+                    // 默认 OR(单请求任一命中);设置开 AND 实验后 ≥2 个标签走漏斗式逐标签求交
+                    const sel = (node.csTagSel || []).map((s) => String(s).trim()).filter(Boolean);
+                    const ids = sel.map((s) => (/^\d+$/.test(s) ? s : (S.tagMap && S.tagMap[s]) || null)).filter(Boolean);
+                    const andOn = !!S.cfg.tag_and_mode && ids.length > 1;
+                    if (ids.length && !andOn) p.set("tags", ids.join(","));
                     p.set("sort", widget("sort")?.value || "Newest");
                     p.set("period", widget("period")?.value || "AllTime");
                     node.csLastParams = p.toString();
-                    fetchNodeThumbs(node, p.toString(), true);
+                    node.csAnd = andOn ? ids : null;
+                    if (andOn) fetchNodeThumbsAnd(node, ids, true);
+                    else fetchNodeThumbs(node, p.toString(), true);
                 };
-                node.csLoadMore = () => { if (node.csLastParams) fetchNodeThumbs(node, node.csLastParams, false); };
+                node.csLoadMore = () => {
+                    if (node.csAnd) { fetchNodeThumbsAnd(node, node.csAnd, false); return; }
+                    if (node.csLastParams) fetchNodeThumbs(node, node.csLastParams, false);
+                };
                 // 筛选变化 → 节流拉缩略图;index 变化 → 刷新选中框
                 node.csDeb = null;
                 const debounced = () => {
@@ -2833,6 +2959,17 @@ app.registerExtension({
                 // 轮询 sig 变化保证 tag 等改动最终一定触发刷新(csSchedule 内部去重)
                 node.csPoll = setInterval(() => {
                     node.csSchedule?.();
+                    // tag 多选状态恢复:工作流保存的是逗号串,load 后首个轮询重建 chips
+                    if (!node.__csTagInit) {
+                        node.__csTagInit = true;
+                        const tv = String(widget("tag")?.value || "").trim();
+                        if (tv && tv !== "(none)") {
+                            node.csTagSel = tv.split(",").map((s) => s.trim()).filter(Boolean);
+                            renderTagChips(node);
+                            node.csSig = "";
+                            node.csSchedule?.();
+                        }
+                    }
                     // image_id 手动粘贴/修改也要刷新信息面板(文本输入不触发事件)
                     const cur = widget("image_id")?.value || "";
                     if (cur !== node.csLastId) { node.csLastId = cur; renderSelInfo(node); }
@@ -2845,17 +2982,6 @@ app.registerExtension({
                             rowEl.style.color = "var(--accent-color,#4a90e2)";
                             rowEl.dataset.csBold = "1";
                         }
-                    }
-                    // 存量损坏数据自愈:旧版写出的草稿/文件首位带 null 占位(cs_info),
-                    // 加载端消费后值整体后移一位 → 检测到即按剔除占位的顺序一次性修正
-                    // (configure 修正成功时已设 __csValFixed,不会二次触发)
-                    if (!node.__csValFixed && Array.isArray(node.widgets_values)
-                        && node.widgets_values.length === 11 && node.widgets_values[0] == null) {
-                        node.__csValFixed = true;
-                        const v = node.widgets_values.slice(1);
-                        (node.widgets || []).filter((w) => w.serialize !== false)
-                            .forEach((w, i) => { if (i < v.length) w.value = v[i]; });
-                        renderSelInfo(node);
                     }
                     // 面板布局参数或节点宽度变化 → 只重排版不重新拉取
                     const ss = node.size[0] + "|" + String(widget("thumbs_size")?.value || "medium") + "|" + String(widget("panel_h")?.value || "");
@@ -2885,18 +3011,27 @@ app.registerExtension({
             nodeType.prototype.configure = function (info) {
                 const r = origNodeConfigure?.apply(this, arguments);
                 try {
-                    const wl = (this.widgets || []).filter((w) => w.serialize !== false).length;
                     const v0 = info?.widgets_values;
-                    if (wl !== 10 || !Array.isArray(v0)) return r;
-                    let v = v0;
-                    if (v.length === 11 && v[0] == null) v = v.slice(1);
+                    if (!Array.isArray(v0)) return r;
+                    // 名字驱动赋值:不依赖 widgets 数组顺序/serialize 属性
+                    // (configure 可能重建 widget 对象,丢失 DOM 面板的 serialize=false 标记)
+                    let v = v0.filter((x) => x !== null); // 剔除 DOM 面板的 null 占位
+                    const isNumOrIdx = (x) => /^\d+$/.test(String(x)) || String(x) === "(index)";
                     if (v.length === 11) {
+                        // 11 值:旧序含已移除的 lora_name(v[8]),丢弃
                         v = [v[7], v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[9], v[10]];
-                    } else if (v.length === 10 && !(/^\d+$/.test(String(v[0])) || String(v[0]) === "(index)")) {
+                    } else if (v.length === 10 && !isNumOrIdx(v[0])) {
+                        // 10 值且首位不是 image_id:更老的旧序
                         v = [v[7], v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[8], v[9]];
-                    } else return r;
-                    (this.widgets || []).filter((w) => w.serialize !== false)
-                        .forEach((w, i) => { if (i < v.length) w.value = v[i]; });
+                    } else if (v.length !== 10) {
+                        return r; // 未知结构不动
+                    }
+                    // 无论是否重排,前端都已完成一次错位填充 → 必须按序重新赋值
+                    const order = ["image_id", "base_model", "nsfw", "tag", "period", "sort", "limit", "index", "thumbs_size", "panel_h"];
+                    for (let i = 0; i < order.length && i < v.length; i++) {
+                        const w = (this.widgets || []).find((x) => x.name === order[i]);
+                        if (w) w.value = v[i];
+                    }
                     this.__csValFixed = true;
                 } catch (e) { /* 非常规工作流不动 */ }
                 return r;

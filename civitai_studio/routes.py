@@ -282,6 +282,7 @@ async def get_config(request):
         "max_concurrent": cfg.get("max_concurrent", 1),
         "persist_description": cfg.get("persist_description", False),
         "tag_scrape": cfg.get("tag_scrape", True),
+        "tag_and_mode": cfg.get("tag_and_mode", False),
     })
 
 
@@ -303,7 +304,7 @@ async def set_config(request):
             except (TypeError, ValueError):
                 return _json_error(f"{key} 必须是整数", 400)
             partial[key] = max(lo, min(hi, value))
-    for key in ("proxy_images", "verify_hash", "persist_description", "tag_scrape"):
+    for key in ("proxy_images", "verify_hash", "persist_description", "tag_scrape", "tag_and_mode"):
         if key in body:
             partial[key] = bool(body.get(key))
     cfg = config.update(partial)
