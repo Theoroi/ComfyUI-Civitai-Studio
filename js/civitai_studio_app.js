@@ -1728,8 +1728,7 @@ function buildGalleryView(root) {
         <div class="cs-filters">
             <input id="cs-gal-base" class="cs-span-full" list="cs-gal-base-list" type="text" placeholder="${esc(t("basePlaceholder"))}" value="${esc(st.base)}"/>
             <datalist id="cs-gal-base-list">${BASE_MODELS.map((b) => `<option value="${esc(b)}"></option>`).join("")}</datalist>
-            <input id="cs-gal-tag" class="cs-span-full" type="text" placeholder="${esc(t("galTagId"))}" value="${esc(st.tag)}" list="cs-gal-tag-list"/>
-            <datalist id="cs-gal-tag-list"></datalist>
+            <input id="cs-gal-tag" class="cs-span-full" type="text" placeholder="${esc(t("galTagId"))}" value="${esc(st.tag)}" autocomplete="off"/>
             <select id="cs-gal-period">${PERIODS.map((p) => `<option value="${p}" ${st.period === p ? "selected" : ""}>${esc(periodLabel(p))}</option>`).join("")}</select>
             <select id="cs-gal-sort">
                 <option value="Newest">${esc(t("gallerySortNewest"))}</option>
@@ -1750,23 +1749,56 @@ function buildGalleryView(root) {
         clearTimeout(buildGalleryView._deb);
         buildGalleryView._deb = setTimeout(() => fetchGallery(true), 600);
     };
-    $("#cs-gal-tag", view).addEventListener("input", (e) => { st.tag = e.target.value; debouncedFetch(); });
+    // tag 补全:自绘下拉弹层(样式与侧边栏一致;原生 datalist 样式不受控、与其它下拉不一致)。
+    // 列出本地已入库标签名称,点击填入;无匹配时仍可自由输入数字 ID
+    {
+        const tagInput = $("#cs-gal-tag", view);
+        let pop = null;
+        const closePop = () => { if (pop) { pop.remove(); pop = null; } };
+        const showPop = () => {
+            closePop();
+            const names = Object.keys(S.tagMap || {});
+            const q = tagInput.value.trim().toLowerCase();
+            const hits = (q ? names.filter((n) => n.toLowerCase().includes(q)) : names).slice(0, 60);
+            if (!hits.length) return;
+            pop = document.createElement("div");
+            pop.style.cssText = "position:fixed;z-index:65000;background:var(--comfy-menu-bg,#2a2a2a);"
+                + "border:1px solid var(--border-color,#444);border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,.5);"
+                + "max-height:220px;overflow-y:auto;min-width:" + tagInput.getBoundingClientRect().width + "px;";
+            for (const name of hits) {
+                const opt = document.createElement("div");
+                opt.textContent = "#" + name;
+                opt.style.cssText = "padding:5px 10px;font-size:12px;color:var(--fg-color,#eee);cursor:pointer;";
+                opt.onmouseenter = () => { opt.style.background = "var(--accent-color,#4a90e2)"; };
+                opt.onmouseleave = () => { opt.style.background = "transparent"; };
+                opt.onclick = () => {
+                    tagInput.value = name;
+                    st.tag = name;
+                    closePop();
+                    fetchGallery(true);
+                };
+                pop.appendChild(opt);
+            }
+            document.body.appendChild(pop);
+            const r = tagInput.getBoundingClientRect();
+            pop.style.left = r.left + "px";
+            pop.style.top = Math.min(r.bottom + 2, window.innerHeight - (pop.offsetHeight || 100) - 8) + "px";
+        };
+        tagInput.addEventListener("focus", showPop);
+        tagInput.addEventListener("input", () => { st.tag = tagInput.value; showPop(); debouncedFetch(); });
+        tagInput.addEventListener("blur", () => setTimeout(closePop, 150)); // 延迟让选项点击先于关闭
+        document.addEventListener("click", (ev) => { if (pop && !pop.contains(ev.target) && ev.target !== tagInput) closePop(); });
+    }
     let debBase;
     $("#cs-gal-base", view).addEventListener("input", (e) => {
         clearTimeout(debBase);
         debBase = setTimeout(() => { st.base = e.target.value.trim(); fetchGallery(true); }, 400);
     });
-    // tag 自动补全:拉本地映射填 datalist(随映射文件增长)
-    if (true) {
-        apiGet("/civitai_studio/tag_mapping").then((d) => {
-            const tags = d.tags || [];
-            if (!tags.length) return;
-            S.tagMap = {};
-            tags.forEach((t2) => { S.tagMap[t2.name] = t2.id; });
-            const dl = $("#cs-gal-tag-list", view);
-            if (dl) dl.innerHTML = tags.map((t2) => `<option value="${esc(t2.name)}"></option>`).join("");
-        }).catch(() => {});
-    }
+    // tag 名称映射(详情浮层抓取后由 refreshTagCombos 一并维护 S.tagMap)
+    apiGet("/civitai_studio/tag_mapping").then((d) => {
+        S.tagMap = S.tagMap || {};
+        (d.tags || []).forEach((t2) => { S.tagMap[t2.name] = t2.id; });
+    }).catch(() => {});
     // 底模联想列表:内置种子 + 站方枚举补全(与浏览页一致)
     apiGet("/civitai_studio/enums").then((d) => {
         const list = sortEnumNames(d.ActiveBaseModel || d.BaseModel || []);
@@ -1929,14 +1961,12 @@ async function openSettings() {
         try {
             await apiPost("/civitai_studio/config", body);
             S.cfg = { ...S.cfg, ...body };
-            // 自动补全刚开启:立即预热映射与 datalist(否则要重开面板才生效)
+            // 标签映射刚可用:预热 S.tagMap 并刷新节点的 tag 下拉选项
             if (!S.tagMap) {
                 apiGet("/civitai_studio/tag_mapping").then((d) => {
-                    const tags = d.tags || [];
                     S.tagMap = {};
-                    tags.forEach((t2) => { S.tagMap[t2.name] = t2.id; });
-                    const dl = $("#cs-gal-tag-list");
-                    if (dl) dl.innerHTML = tags.map((t2) => `<option value="${esc(t2.name)}"></option>`).join("");
+                    (d.tags || []).forEach((t2) => { S.tagMap[t2.name] = t2.id; });
+                    refreshTagCombos();
                 }).catch(() => {});
             }
             m.close();
@@ -2372,8 +2402,9 @@ function renderSelInfo(node) {
     const row = (label, text, color, bold) => {
         const t = text ? String(text) : "-";
         const d = document.createElement("div");
-        d.style.cssText = "display:flex;gap:4px;min-width:0;" + (bold ? "font-weight:700;" : "");
-        d.title = t;
+        d.style.cssText = "display:flex;gap:4px;min-width:0;cursor:pointer;" + (bold ? "font-weight:700;" : "");
+        d.title = S.lang === "zh" ? "点击复制全文" : "Click to copy";
+        d.onclick = () => copyText(t, d);
         d.innerHTML = `<span style="color:${color};flex:0 0 auto;">${esc(label)}</span>`
             + `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(t.length > 120 ? t.slice(0, 120) + "…" : t)}</span>`;
         return d;
@@ -2435,7 +2466,25 @@ function attachIdAndTags(box, image) {
         tagRow.innerHTML = `<span style="flex:0 0 auto;color:#999">${esc(S.lang === "zh" ? "标签(点击复制 ID):" : "Tags (click to copy ID):")}</span>`
             + tags.map((tg) => `<span class="cs-trigger" style="cursor:pointer;white-space:nowrap" data-tagid="${esc(String(tg.id))}" title="ID ${esc(String(tg.id))}">#${esc(tg.name)}</span>`).join("");
         $$("[data-tagid]", tagRow).forEach((el) => { el.onclick = (ev) => copyText(el.dataset.tagid, ev.target); });
+        refreshTagCombos(); // 新标签入库,刷新图像搜索节点的 tag 下拉选项
     }).catch(() => { if (tagRow.isConnected) tagRow.style.display = "none"; });
+}
+
+// 把本地标签映射刷进所有图像搜索节点的 tag combo 选项((none) 首项 + 名称排序)
+function refreshTagCombos() {
+    apiGet("/civitai_studio/tag_mapping").then((d) => {
+        const names = (d.tags || []).map((t) => t.name).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+        S.tagMap = {};
+        (d.tags || []).forEach((t) => { S.tagMap[t.name] = t.id; });
+        (app.graph?._nodes || []).forEach((n) => {
+            if (n.type !== "CivitaiImageSearch") return;
+            const tw = (n.widgets || []).find((w) => w.name === "tag");
+            if (!tw || !tw.options) return;
+            const cur = tw.value;
+            tw.options.values = ["(none)"].concat(names);
+            if (cur && !tw.options.values.includes(cur)) tw.options.values.unshift(cur);
+        });
+    }).catch(() => {});
 }
 
 // 悬浮层大图/播放器(图片与视频通用)
@@ -2656,9 +2705,12 @@ app.registerExtension({
                     const bm = widget("base_model")?.value;
                     const tag = widget("tag")?.value?.trim();
                     if (bm && bm !== "(any)") p.set("baseModels", bm);
-                    if (tag) {
-                        // 官方 /images 的 tags 只认数字 ID,过滤掉非数字项
-                        const ids = tag.replace("，", ",").split(",").map((s) => s.trim()).filter((s) => /^\d+$/.test(s)).join(",");
+                    if (tag && tag !== "(none)") {
+                        // 官方 /images 的 tags 只认数字 ID:combo 选中的名称经本地映射换 ID,
+                        // 数字 ID(或逗号分隔 ID 串)直接使用
+                        const ids = tag.replace("，", ",").split(",").map((s) => s.trim())
+                            .map((s) => (/^\d+$/.test(s) ? s : (S.tagMap && S.tagMap[s]) || null))
+                            .filter(Boolean).join(",");
                         if (ids) p.set("tags", ids);
                     }
                     p.set("sort", widget("sort")?.value || "Newest");
@@ -2688,6 +2740,7 @@ app.registerExtension({
                     }
                 });
                 setTimeout(() => node.csSchedule?.(), 200); // 首次拉取
+                setTimeout(() => refreshTagCombos(), 600); // 首次拉取本地标签填充 tag 下拉
                 // 兜底轮询:部分文本输入在新前端不触发 widget.callback/inputEl 事件,
                 // 轮询 sig 变化保证 tag 等改动最终一定触发刷新(csSchedule 内部去重)
                 node.csPoll = setInterval(() => {
@@ -2695,11 +2748,14 @@ app.registerExtension({
                     // image_id 手动粘贴/修改也要刷新信息面板(文本输入不触发事件)
                     const cur = widget("image_id")?.value || "";
                     if (cur !== node.csLastId) { node.csLastId = cur; renderSelInfo(node); }
-                    // image_id widget 行加粗(前端 DOM 行渲染后才找得到,找到一次即止)
-                    if (!node.csIdBold) {
-                        const rowEl = [...document.querySelectorAll(".lg-node-widget")]
-                            .find((el) => (el.textContent || "").trim().startsWith("image_id"));
-                        if (rowEl) { rowEl.style.fontWeight = "700"; node.csIdBold = true; }
+                    // image_id widget 行加粗:画布与右侧参数面板都扫(行元素渲染后才存在,
+                    // dataset 标记防重复设置;命中一次即止的单次标记会漏掉后渲染的面板)
+                    for (const rowEl of document.querySelectorAll(".lg-node-widget")) {
+                        if (rowEl.dataset.csBold) continue;
+                        if ((rowEl.textContent || "").trim().startsWith("image_id")) {
+                            rowEl.style.fontWeight = "700";
+                            rowEl.dataset.csBold = "1";
+                        }
                     }
                     // 面板布局参数或节点宽度变化 → 只重排版不重新拉取
                     const ss = node.size[0] + "|" + String(widget("thumbs_size")?.value || "medium") + "|" + String(widget("panel_h")?.value || "");
@@ -2767,8 +2823,8 @@ app.registerExtension({
             };
         }
 
-        // LoRA 两个节点:DOM widget 显示选中 LoRA 的封面
-        if (type === "CivitaiTriggerWords" || type === "CivitaiLoraRecipe") {
+        // LoRA 配方节点:DOM widget 显示选中 LoRA 的封面
+        if (type === "CivitaiLoraRecipe") {
             const origCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
                 const r = origCreated?.apply(this, arguments);

@@ -56,41 +56,6 @@ _BASE_MODEL_OPTIONS = [
 ]
 
 
-class CivitaiTriggerWords:
-    """选择本地已关联的 LoRA,输出其 Civitai 触发词(+ 手动补充词)."""
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        idx = local_index.scan()
-        options = []
-        for m in idx["models"]:
-            if m["category"] != "loras":
-                continue
-            civ = m.get("civitai") or {}
-            if civ.get("trained_words"):
-                options.append(m["id"])
-        if not options:
-            options = ["(no loras with trigger words - associate one first)"]
-        return {"required": {
-            "lora": (options,),
-            "extra_words": ("STRING", {"default": "", "multiline": False}),
-        }}
-
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("trigger_words",)
-    FUNCTION = "run"
-    CATEGORY = "Civitai Studio"
-
-    def run(self, lora, extra_words):
-        words = []
-        item = local_index.scan().get("by_id", {}).get(str(lora))
-        if item:
-            meta = item.get("civitai") or {}
-            words = meta.get("trained_words") or []
-        extra = [w.strip() for w in re.split(r"[,，]", extra_words or "") if w.strip()]
-        return (", ".join(words + extra),)
-
-
 class CivitaiImageSearch:
     """搜索社区图片(关键字/底模/tag/排序/时间),输出选中图片的生成配方与图像."""
 
@@ -103,8 +68,9 @@ class CivitaiImageSearch:
                          {"tooltip": "选最近浏览的图片 ID 则精确取该图与参数;选 (index) 按序号取图"}),
             "base_model": (["(any)"] + sorted(_BASE_MODEL_OPTIONS, key=str.lower),),
             "nsfw": (["false", "true"],),
-            "tag": ("STRING", {"default": "", "multiline": False,
-                               "tooltip": "仅数字 Tag ID,多个用逗号分隔 / numeric tag IDs only, comma-separated"}),
+            # COMBO:选项 = 本地已入库的分类标签(先在大图悬浮层点抓一次入库),(none) = 不筛选
+            "tag": (["(none)"] + sorted(_load_tag_mapping(), key=str.lower),
+                    {"tooltip": "从已入库标签中选择;在大图详情浮层点抓标签即可扩充选项"}),
             "period": (["AllTime", "Month", "Week", "Day"],),
             "sort": (["Newest", "Most Reactions", "Most Comments"],),
             "limit": ("INT", {"default": 50, "min": 10, "max": 100, "step": 10}),
@@ -124,8 +90,8 @@ class CivitaiImageSearch:
     CATEGORY = "Civitai Studio"
 
     @staticmethod
-    def VALIDATE_INPUTS(image_id):
-        # image_id 是动态组合(最近浏览记录,随前端点选增长),
+    def VALIDATE_INPUTS(image_id, tag):
+        # image_id/tag 都是动态组合(最近浏览记录/本地标签映射,随前端操作增长),
         # 跳过 ComfyUI 对 COMBO 的静态"值不在列表"校验
         return True
 
@@ -142,8 +108,9 @@ class CivitaiImageSearch:
         }
         if base_model and base_model != "(any)":
             params["baseModels"] = base_model
-        if tag:
-            # 官方 /images 的 tags 只认逗号分隔的数字 Tag ID;名称经本地映射换 ID
+        if tag and tag != "(none)":
+            # 官方 /images 的 tags 只认逗号分隔的数字 Tag ID;名称经本地映射换 ID。
+            # combo 下拉选的是单个名称;也兼容粘贴的逗号分隔数字 ID 串
             tokens = [t.strip() for t in tag.replace("，", ",").split(",") if t.strip()]
             ids = [t for t in tokens if t.isdigit()]
             names = [t for t in tokens if not t.isdigit()]
@@ -286,14 +253,12 @@ class CivitaiShowText:
 
 
 NODE_CLASS_MAPPINGS = {
-    "CivitaiTriggerWords": CivitaiTriggerWords,
     "CivitaiImageSearch": CivitaiImageSearch,
     "CivitaiLoraRecipe": CivitaiLoraRecipe,
     "CivitaiShowText": CivitaiShowText,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "CivitaiTriggerWords": "Civitai 触发词 (Trigger Words)",
     "CivitaiImageSearch": "Civitai 图片搜索 (Image Search)",
     "CivitaiLoraRecipe": "Civitai LoRA 配方 (LoRA Recipe)",
     "CivitaiShowText": "Civitai 显示文本 (Show Text)",
