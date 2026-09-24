@@ -110,8 +110,10 @@ const STR = {
         stDone: "完成 ✔", stCancelled: "已取消", stError: "失败: ",
         cancelBtn: "取消" + "", cancelFailed: "取消失败", clearFailed: "清除失败",
         settingsTitle: "⚙ Civitai Studio 设置",
-        keyLabel: "Civitai API Key(可选,下载受限模型/提高限额)",
+        keyLabel: "Civitai API Key(可选,下载受限模型/提高限额/提取tag)",
         keySetPh: "已设置(尾号 {tail}),留空保持不变", keyPh: "粘贴 API Key",
+        keyHowTo: "获取方式:登录 Civitai → 右上角头像 Account Settings → Security & Apps → Add API Key → 勾选 READ ONLY → Save,把生成的 Key 粘贴到上面。",
+        keyLink: "打开 Civitai 安全设置页 ↗",
         proxyLabel: "网络代理(HTTP / SOCKS 均可,裸地址自动按 HTTP 处理)",
         proxyPh: "http://127.0.0.1:10808 或 socks5://127.0.0.1:10808,留空 = 直连",
         proxyHint: "填 127.0.0.1 而非 localhost。v2rayN 混合端口 10808:优先填 socks5://127.0.0.1:10808(实测最稳),http://127.0.0.1:10808 亦可;API、下载、图片全部走此代理。",
@@ -135,7 +137,7 @@ const STR = {
         galTag: "Tag", galBase: "底模", loadMore: "加载更多", useAsOutput: "选为输出", selectedAsOutput: "已选为输出",
         sfwLabel: "全年龄", nsfwLabel: "包含 NSFW", galTagId: "Tag ID 或名称(逗号分隔)",
         noTags: "无标签", tagsPaused: "标签抓取已暂停({sec} 秒后恢复)", noSelectionHint: "未选择(点击缩略图选择)",
-        tagScrapeLabel: "读取非公开 API 获取图片分类标签", tagsLoading: "标签加载中…",
+        tagScrapeLabel: "读取非公开 API 获取图片分类标签，需要Civitai API Key", tagsLoading: "标签加载中…",
         tagsOff: "标签抓取已在设置中关闭", capHint: "已达显示上限(100)",
         galleryEmpty: "没有图片。", galleryAuthor: "作者",
     },
@@ -215,8 +217,10 @@ const STR = {
         stDone: "Done ✔", stCancelled: "Cancelled", stError: "Failed: ",
         cancelBtn: "Cancel", cancelFailed: "Cancel failed", clearFailed: "Clear failed",
         settingsTitle: "⚙ Civitai Studio settings",
-        keyLabel: "Civitai API key (optional, for gated models / higher rate limits)",
+        keyLabel: "Civitai API key (optional, for gated models / higher rate limits / tag scraping)",
         keySetPh: "Set (ends with {tail}) — leave empty to keep", keyPh: "Paste API key",
+        keyHowTo: "How to get one: log in to Civitai → Account Settings (avatar menu) → Security & Apps → Add API Key → check READ ONLY → Save, then paste the generated key above.",
+        keyLink: "Open Civitai security settings ↗",
         proxyLabel: "Network proxy (HTTP / SOCKS; bare addresses are treated as HTTP)",
         proxyPh: "http://127.0.0.1:10808 or socks5://127.0.0.1:10808, empty = direct",
         proxyHint: "Use 127.0.0.1 instead of localhost. API, downloads and previews all go through this proxy.",
@@ -240,7 +244,7 @@ const STR = {
         galTag: "Tag", galBase: "Base model", loadMore: "Load more", useAsOutput: "Use as output", selectedAsOutput: "Selected as output",
         sfwLabel: "SFW only", nsfwLabel: "Include NSFW", galTagId: "Tag ID or name, comma-separated",
         noTags: "No tags", tagsPaused: "Tag fetch paused ({sec}s), retrying later", noSelectionHint: "Nothing selected (click a thumbnail)",
-        tagScrapeLabel: "Fetch image category tags (unofficial API)", tagsLoading: "Loading tags…", tagsOff: "Tag scraping disabled in settings", capHint: "Display cap reached (100)",
+        tagScrapeLabel: "Fetch image category tags (unofficial API), requires Civitai API Key", tagsLoading: "Loading tags…", tagsOff: "Tag scraping disabled in settings", capHint: "Display cap reached (100)",
         galleryEmpty: "No images.", galleryAuthor: "Author",
     },
 };
@@ -1936,6 +1940,9 @@ async function openSettings() {
         <div class="cs-form">
             <label>${esc(t("keyLabel"))}
                 <input id="cs-set-key" type="password" placeholder="${cfg.api_key_set ? esc(t("keySetPh", { tail: cfg.api_key_tail || "" })) : esc(t("keyPh"))}"/>
+                <span class="cs-form-hint">${esc(t("keyHowTo"))}
+                    <a href="https://civitai.com/user/account/security" target="_blank" rel="noopener noreferrer"
+                       style="color:var(--accent-color,#4a90e2);">${esc(t("keyLink"))}</a></span>
             </label>
             <label>${esc(t("proxyLabel"))}
                 <input id="cs-set-proxy" type="text" value="${esc(cfg.proxy || "")}" placeholder="${esc(t("proxyPh"))}"/>
@@ -1944,7 +1951,6 @@ async function openSettings() {
             <label>${esc(t("mirrorLabel"))}
                 <select id="cs-set-site">
                     <option value="https://civitai.com">civitai.com</option>
-                    <option value="https://civitai.green">civitai.green [SFW]</option>
                     <option value="https://civitai.red">civitai.red [NSFW]</option>
                     <option value="__custom__">${esc(t("siteCustom"))}</option>
                 </select>
