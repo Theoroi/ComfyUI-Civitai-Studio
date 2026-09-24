@@ -133,7 +133,8 @@ const STR = {
         noTextNode: "未找到 CLIPTextEncode 文本节点",
         galleryTab: "🖼 画廊", gallerySortNewest: "最新发布", gallerySortReactions: "最多互动", gallerySortComments: "最多评论",
         galTag: "Tag", galBase: "底模", loadMore: "加载更多", useAsOutput: "选为输出", selectedAsOutput: "已选为输出",
-        sfwLabel: "全年龄", nsfwLabel: "包含 NSFW", galTagId: "仅数字 Tag ID,多个用逗号分隔",
+        sfwLabel: "全年龄", nsfwLabel: "包含 NSFW", galTagId: "Tag ID 或名称(逗号分隔)",
+        tagAutoLabel: "Tag 输入自动补全(使用本地 tag 映射)", tagsLoading: "标签加载中…",
         galleryEmpty: "没有图片。", galleryAuthor: "作者",
     },
     en: {
@@ -235,7 +236,8 @@ const STR = {
         noTextNode: "No CLIPTextEncode text node found",
         galleryTab: "🖼 Gallery", gallerySortNewest: "Newest", gallerySortReactions: "Most reactions", gallerySortComments: "Most comments",
         galTag: "Tag", galBase: "Base model", loadMore: "Load more", useAsOutput: "Use as output", selectedAsOutput: "Selected as output",
-        sfwLabel: "SFW only", nsfwLabel: "Include NSFW", galTagId: "Numeric tag IDs only, comma-separated",
+        sfwLabel: "SFW only", nsfwLabel: "Include NSFW", galTagId: "Tag ID or name, comma-separated",
+        tagAutoLabel: "Autocomplete tag input (local mapping)", tagsLoading: "Loading tags…",
         galleryEmpty: "No images.", galleryAuthor: "Author",
     },
 };
@@ -952,6 +954,7 @@ async function showImageMeta(image) {
             </div>`);
         const sb = $("[data-save-img]", m0.box);
         if (sb) sb.onclick = () => saveImageToOutput(image.url, sb);
+        attachIdAndTags(m0.box, image);
         return;
     }
     const kv = [
@@ -986,6 +989,7 @@ async function showImageMeta(image) {
     });
     const saveBtn = $("[data-save-img]", m.box);
     if (saveBtn) saveBtn.onclick = () => saveImageToOutput(image.url, saveBtn);
+    attachIdAndTags(m.box, image);
     const applyBtn = $("[data-apply-workflow]", m.box);
     if (applyBtn) applyBtn.onclick = () => {
         applyBtn.disabled = true;
@@ -1579,7 +1583,20 @@ async function fetchGallery(reset) {
         const p = new URLSearchParams({ limit: "24", sort: st.sort, period: st.period });
         p.set("nsfw", st.nsfwLevel > 0 ? "true" : "false");
         if (st.base) p.set("baseModels", st.base);
-        if (st.tag.trim()) p.set("tags", st.tag.trim());
+        if (st.tag.trim()) {
+            // 纯数字直接用;名称经本地映射(名称→ID)转换,查不到的跳过
+            const ids = st.tag.replace("，", ",").split(",").map((x) => x.trim()).filter(Boolean)
+                .map((x) => (/^\d+$/.test(x) ? x : (S.tagMap && S.tagMap[x]) || null))
+                .filter(Boolean);
+            if (!ids.length) {
+                // 填了 tag 但一个有效 ID 都解析不出来:直接显示空结果
+                st.items = []; st.next = []; st.error = "";
+                st.loading = false;
+                renderGallery(true);
+                return;
+            }
+            p.set("tags", ids.join(","));
+        }
         if (!reset && st.next) for (const [k, v] of st.next) p.append(k, v);
         const data = await apiGet("/civitai_studio/images?" + p.toString());
         const items = data.items || [];
@@ -1651,7 +1668,8 @@ function buildGalleryView(root) {
         <div class="cs-filters">
             <input id="cs-gal-base" class="cs-span-full" list="cs-gal-base-list" type="text" placeholder="${esc(t("basePlaceholder"))}" value="${esc(st.base)}"/>
             <datalist id="cs-gal-base-list">${BASE_MODELS.map((b) => `<option value="${esc(b)}"></option>`).join("")}</datalist>
-            <input id="cs-gal-tag" class="cs-span-full" type="text" placeholder="${esc(t("galTagId"))}" value="${esc(st.tag)}"/>
+            <input id="cs-gal-tag" class="cs-span-full" type="text" placeholder="${esc(t("galTagId"))}" value="${esc(st.tag)}" list="cs-gal-tag-list"/>
+            <datalist id="cs-gal-tag-list"></datalist>
             <select id="cs-gal-period">${PERIODS.map((p) => `<option value="${p}" ${st.period === p ? "selected" : ""}>${esc(periodLabel(p))}</option>`).join("")}</select>
             <select id="cs-gal-sort">
                 <option value="Newest">${esc(t("gallerySortNewest"))}</option>
@@ -1678,6 +1696,17 @@ function buildGalleryView(root) {
         clearTimeout(debBase);
         debBase = setTimeout(() => { st.base = e.target.value.trim(); fetchGallery(true); }, 400);
     });
+    // tag 自动补全(设置开启时):拉本地映射填 datalist
+    if (S.cfg.tag_autocomplete) {
+        apiGet("/civitai_studio/tag_mapping").then((d) => {
+            const tags = d.tags || [];
+            if (!tags.length) return;
+            S.tagMap = {};
+            tags.forEach((t2) => { S.tagMap[t2.name] = t2.id; });
+            const dl = $("#cs-gal-tag-list", view);
+            if (dl) dl.innerHTML = tags.map((t2) => `<option value="${esc(t2.name)}"></option>`).join("");
+        }).catch(() => {});
+    }
     // 底模联想列表:内置种子 + 站方枚举补全(与浏览页一致)
     apiGet("/civitai_studio/enums").then((d) => {
         const list = sortEnumNames(d.ActiveBaseModel || d.BaseModel || []);
@@ -1803,6 +1832,7 @@ async function openSettings() {
             <label class="cs-check"><input id="cs-set-pimg" type="checkbox" ${cfg.proxy_images ? "checked" : ""}/> ${esc(t("pimgLabel"))}</label>
             <label class="cs-check"><input id="cs-set-hash" type="checkbox" ${cfg.verify_hash ? "checked" : ""}/> ${esc(t("hashLabel"))}</label>
             <label class="cs-check"><input id="cs-set-pdesc" type="checkbox" ${cfg.persist_description ? "checked" : ""}/> ${esc(t("pdescLabel"))}</label>
+            <label class="cs-check"><input id="cs-set-tauto" type="checkbox" ${cfg.tag_autocomplete ? "checked" : ""}/> ${esc(t("tagAutoLabel"))}</label>
             <div class="cs-modal-msg">${esc(t("settingsMsg"))}</div>
             <div class="cs-modal-actions">
                 <button class="cs-btn" data-act="cancel">${esc(t("cancel"))}</button>
@@ -1832,6 +1862,7 @@ async function openSettings() {
             proxy_images: $("#cs-set-pimg", m.box).checked,
             verify_hash: $("#cs-set-hash", m.box).checked,
             persist_description: $("#cs-set-pdesc", m.box).checked,
+            tag_autocomplete: $("#cs-set-tauto", m.box).checked,
         };
         const key = $("#cs-set-key", m.box).value.trim();
         if (key) body.api_key = key;
@@ -2245,6 +2276,37 @@ function renderSelInfo(node) {
     lines.appendChild(row("lora", loras, "#e2b96b"));
     lines.appendChild(row("base", sel.baseModel, "#8fd4a0"));
     el.appendChild(lines);
+    // 分隔线 + 加粗 ID 行
+    const hr = document.createElement("hr");
+    hr.style.cssText = "border:none;border-top:1px solid #3a3a40;margin:6px 0;width:100%;";
+    const idRow = row("ID", sel.id, "#fff");
+    idRow.style.fontWeight = "700";
+    el.appendChild(hr);
+    el.appendChild(idRow);
+}
+
+// 大图悬浮层附加:ID 点击复制 + 分类标签(异步抓取网页端数据,点击标签复制 ID)
+function attachIdAndTags(box, image) {
+    const id = String(image.id ?? "");
+    if (!id) return;
+    const hint = document.createElement("div");
+    hint.className = "cs-form-hint";
+    hint.style.cssText = "margin:8px 0;";
+    hint.innerHTML = `${esc(S.lang === "zh" ? "ID(点击复制):" : "ID (click to copy):")} `
+        + `<span class="cs-trigger" style="cursor:pointer" data-copy-id="${esc(id)}">${esc(id)}</span>`
+        + ` · <span data-tags-box>${esc(t("tagsLoading"))}</span>`;
+    box.insertBefore(hint, box.querySelector(".cs-kv-grid"));
+    $("[data-copy-id]", hint).onclick = (ev) => copyText(id, ev.target);
+    apiGet(`/civitai_studio/image_tags/${encodeURIComponent(id)}`).then((d) => {
+        const tb = $("[data-tags-box]", hint);
+        if (!tb) return;
+        if (d.paused) { tb.textContent = S.lang === "zh" ? `标签抓取已暂停(${d.retryAfterSec}s 后恢复)` : `Tag fetch paused (${d.retryAfterSec}s)`; return; }
+        const tags = d.tags || [];
+        if (!tags.length) { tb.textContent = S.lang === "zh" ? "无标签" : "No tags"; return; }
+        tb.innerHTML = `<span style="color:#999">${esc(S.lang === "zh" ? "标签(点击复制 ID):" : "Tags (click to copy ID):")}</span> `
+            + tags.map((t) => `<span class="cs-trigger" style="cursor:pointer" data-tagid="${esc(String(t.id))}" title="ID ${esc(String(t.id))}">#${esc(t.name)}</span>`).join(" ");
+        $$("[data-tagid]", tb).forEach((el) => { el.onclick = (ev) => copyText(el.dataset.tagid, ev.target); });
+    }).catch(() => { const tb = $("[data-tags-box]", hint); if (tb) tb.textContent = ""; });
 }
 
 // 悬浮层大图/播放器(图片与视频通用)
@@ -2326,6 +2388,20 @@ function renderNodeThumbs(node) {
             cell.appendChild(im);
         }
         if (idw?.value && String(idw.value) === String(it.id)) cell.style.borderColor = "#4a90e2";
+        // 缺少生成参数的图:右上角小角标提示(缺什么列在 title 里)
+        const meta = it.meta || {};
+        const miss = [];
+        if (!meta.prompt) miss.push(S.lang === "zh" ? "提示词" : "prompt");
+        if (!(meta.resources || []).some((r) => (r.type || "lora").toLowerCase() === "lora")) miss.push(S.lang === "zh" ? "lora" : "lora");
+        if (!(meta["Model hash"] || meta["Model"])) miss.push(S.lang === "zh" ? "底模" : "model");
+        if (miss.length) {
+            const b = document.createElement("div");
+            b.style.cssText = "position:absolute;top:3px;right:3px;width:15px;height:15px;border-radius:50%;"
+                + "background:rgba(0,0,0,.55);color:#ffb74d;font-size:10px;display:flex;align-items:center;justify-content:center;";
+            b.textContent = "!";
+            b.title = (S.lang === "zh" ? "缺少: " : "missing: ") + miss.join(", ");
+            cell.appendChild(b);
+        }
         cell.onclick = () => showNodeImageFloat(node, it);
         strip.appendChild(cell);
     });
@@ -2350,7 +2426,22 @@ function showNodeImageFloat(node, item) {
         <div class="cs-media-view">${mediaViewerHtml(item)}</div>
         ${kvs.length ? `<div class="cs-kv-grid" style="margin-top:10px">${kvs.map(([k, v]) => `<div><b>${esc(k)}</b><span>${esc(String(v))}</span></div>`).join("")}</div>` : ""}
         ${meta.prompt ? `<div class="cs-form-hint" style="margin-top:8px;max-height:120px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;">${esc(String(meta.prompt))}</div>` : ""}
+        <div class="cs-form-hint" style="margin-top:8px">${esc(S.lang === "zh" ? "ID(点击复制):" : "ID (click to copy):")} <span class="cs-trigger" style="cursor:pointer" data-copy-id="${esc(String(item.id ?? ""))}">${esc(String(item.id ?? ""))}</span> · <span data-tags-box>${esc(t("tagsLoading"))}</span></div>
         <div class="cs-modal-actions"><button class="cs-btn cs-btn-primary" data-use>${esc(S.lang === "zh" ? "选为输出" : "Use as output")}</button></div>`);
+    $("[data-copy-id]", m.box).onclick = (ev) => copyText(String(item.id ?? ""), ev.target);
+    // 拉取分类标签(网页端 trpc),点击标签复制其 ID
+    apiGet(`/civitai_studio/image_tags/${encodeURIComponent(String(item.id))}`).then((d) => {
+        const box = $("[data-tags-box]", m.box);
+        if (!box) return;
+        if (d.paused) { box.textContent = S.lang === "zh" ? `标签抓取已暂停(${d.retryAfterSec}s 后恢复)` : `Tag fetch paused (${d.retryAfterSec}s)`; return; }
+        const tags = d.tags || [];
+        if (!tags.length) { box.textContent = S.lang === "zh" ? "无标签" : "No tags"; return; }
+        box.innerHTML = `<span style="color:#999">${esc(S.lang === "zh" ? "标签(点击复制 ID):" : "Tags (click to copy ID):")}</span> `
+            + tags.map((t) => `<span class="cs-trigger" style="cursor:pointer" data-tagid="${esc(String(t.id))}" title="ID ${esc(String(t.id))}">#${esc(t.name)}</span>`).join(" ");
+        $$("[data-tagid]", box).forEach((el) => {
+            el.onclick = (ev) => copyText(el.dataset.tagid, ev.target);
+        });
+    }).catch(() => {});
     $("[data-use]", m.box).onclick = () => {
         const iw = (node.widgets || []).find((w) => w.name === "index");
         const idw = (node.widgets || []).find((w) => w.name === "image_id");

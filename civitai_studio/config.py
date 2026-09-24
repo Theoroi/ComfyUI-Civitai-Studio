@@ -15,12 +15,13 @@ _CONFIG_FILE = os.path.join(_CONFIG_DIR, "config.json")
 DEFAULTS = {
     "api_key": "",          # Civitai API Key(下载受限模型/提高限额;只发给官方域)
     "proxy": "",            # 例如 http://127.0.0.1:10808(SOCKS 写 socks5://)
-    "mirror": "",           # API 站点覆盖,留空 = https://civitai.red
+    "mirror": "",           # API 站点覆盖,留空 = https://civitai.com
     "nsfw": 1,              # 默认搜索 NSFW 级别 0/1/2
     "proxy_images": False,  # 预览图是否经服务端中转
     "verify_hash": True,    # 下载完成后校验 SHA256
     "max_concurrent": 1,    # 并发下载数 1-4
     "persist_description": False,  # 说明/标签/封面落盘到 .civitai.json(默认关)
+    "tag_autocomplete": False,  # tag 输入按本地映射自动补全(默认关)
 }
 
 

@@ -4,6 +4,7 @@
 """
 
 import asyncio
+import json
 import os
 import re
 import subprocess
@@ -99,6 +100,102 @@ async def _scan_async(force=False):
 async def version_route(request):
     """前端用它对照自身版本,检测"服务端还是重启前的旧代码"."""
     return web.json_response({"version": VERSION, "build": build()})
+
+
+# ---------- 图片分类 tag:网页端 trpc 抓取 + 本地映射 ----------
+
+_TAG_MAPPING_FILE = os.path.join(config._CONFIG_DIR, "tag_mapping.json")
+
+# tag 抓取熔断:连续失败 N 次暂停一段时间,避免上游故障时反复打请求
+_TAG_FETCH_STATE = {"fails": 0, "paused_until": 0.0}
+_TAG_FAIL_LIMIT = 3
+_TAG_PAUSE_SEC = 600
+
+
+def _tag_fetch_fail():
+    st = _TAG_FETCH_STATE
+    st["fails"] += 1
+    if st["fails"] >= _TAG_FAIL_LIMIT:
+        st["paused_until"] = time.time() + _TAG_PAUSE_SEC
+        st["fails"] = 0
+
+
+def _tag_fetch_paused():
+    now = time.time()
+    if _TAG_FETCH_STATE["paused_until"] > now:
+        return int(_TAG_FETCH_STATE["paused_until"] - now)
+    return 0
+
+
+def _load_tag_mapping():
+    try:
+        with open(_TAG_MAPPING_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_tag_mapping(mapping):
+    try:
+        os.makedirs(os.path.dirname(_TAG_MAPPING_FILE), exist_ok=True)
+        tmp = _TAG_MAPPING_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(mapping, f, ensure_ascii=False, indent=0, sort_keys=True)
+        os.replace(tmp, _TAG_MAPPING_FILE)
+    except Exception as e:
+        print(f"[Civitai-Studio] tag 映射文件写入失败: {e}")
+
+
+@_get("/civitai_studio/image_tags/{image_id}")
+async def image_tags(request):
+    """抓取图片的分类 tag(id+名称)并累积到本地映射.
+
+    分类 tags 不在 /api/v1/images 返回里,网页端图片页用
+    trpc tag.getVotableTags 取,这里复刻同一条链路.
+    """
+    image_id = request.match_info["image_id"]
+    if not image_id.isdigit():
+        return _json_error("image id 必须是数字", 400)
+    remain = _tag_fetch_paused()
+    if remain > 0:
+        return web.json_response({"paused": True, "retryAfterSec": remain, "tags": []})
+    inp = urllib.parse.quote(json.dumps({"json": {"id": int(image_id), "type": "image"}}))
+    url = f"https://civitai.com/api/trpc/tag.getVotableTags?input={inp}"
+    try:
+        timeout = aiohttp.ClientTimeout(total=30, connect=15)
+        async with await civitai_client.open_stream(url, timeout=timeout, allow_redirects=True) as resp:
+            if resp.status != 200:
+                _tag_fetch_fail()
+                return _json_error(f"上游 HTTP {resp.status}", 502)
+            data = await resp.json(content_type=None)
+    except civitai_client.CivitaiError as e:
+        _tag_fetch_fail()
+        return _json_error(e, 502)
+    except Exception as e:
+        _tag_fetch_fail()
+        return _json_error(civitai_client.net_error_message(e), 502)
+    _TAG_FETCH_STATE["fails"] = 0
+    _TAG_FETCH_STATE["paused_until"] = 0.0
+    payload = (data.get("result") or {}).get("data") or {}
+    raw = payload.get("json")
+    if not isinstance(raw, list):
+        raw = (raw or {}).get("items") or []
+    tags = [{"id": t.get("id"), "name": t.get("name")} for t in raw if t.get("id") and t.get("name")]
+    mapping = _load_tag_mapping()
+    for t in tags:
+        mapping[t["name"]] = t["id"]
+    if tags:
+        _save_tag_mapping(mapping)
+    return web.json_response({"imageId": int(image_id), "tags": tags, "mappingCount": len(mapping)})
+
+
+@_get("/civitai_studio/tag_mapping")
+async def tag_mapping_list(request):
+    """本地 tag 名称→ID 映射(供输入自动补全)."""
+    mapping = _load_tag_mapping()
+    items = [{"name": k, "id": v} for k, v in sorted(mapping.items(), key=lambda kv: str(kv[0]).lower())]
+    return web.json_response({"tags": items})
 
 
 def _annotate_version(version, index):
