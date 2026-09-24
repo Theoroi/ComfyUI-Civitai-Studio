@@ -2263,7 +2263,8 @@ function renderSelInfo(node) {
         el.innerHTML = `<span style="color:#888;font-size:11px;">${esc(t("noSelectionHint"))}</span>`;
         return;
     }
-    const meta = sel.meta || {};
+    let meta = sel.meta || {};
+    if (meta && !meta.prompt && meta.meta) meta = meta.meta; // imageId 精确查询的包裹层
     const loras = (meta.resources || [])
         .filter((r) => (r.type || "lora").toLowerCase() === "lora")
         .map((r) => `${r.name || "?"}×${r.weight ?? 1}`).join(", ");
@@ -2455,7 +2456,8 @@ function renderNodeThumbs(node) {
 
 // 点缩略图 → 悬浮层放大(视频可播放) + 元信息 + 选为输出
 function showNodeImageFloat(node, item) {
-    const meta = item.meta || {};
+    let meta = item.meta || {};
+    if (meta && !meta.prompt && meta.meta) meta = meta.meta; // 剥掉精确查询的包裹层
     const kvs = [["ID", item.id], ["Seed", meta.seed], ["CFG", meta.cfgScale], ["Steps", meta.steps], ["Sampler", meta.sampler]]
         .filter(([, v]) => v !== undefined && v !== null && v !== "");
     const m = showModal(`
@@ -2490,9 +2492,10 @@ function showNodeImageFloat(node, item) {
         if (iw && i >= 0) iw.value = i;
         if (idw) {
             idw.value = String(item.id ?? "");
-            // 下拉选项即时补入该 ID(后端 remember_image 已持久化)
+            // 下拉选项即时补入该 ID;并回传后端持久化(校验与下次下拉都用)
             const opts = idw.options?.values;
             if (Array.isArray(opts) && !opts.includes(idw.value)) opts.unshift(idw.value);
+            apiPost(`/civitai_studio/remember_image/${encodeURIComponent(idw.value)}`).catch(() => {});
         }
         m.close();
         renderNodeThumbs(node);
