@@ -969,7 +969,7 @@ async function showImageMeta(image) {
         return;
     }
     const kv = [
-        ["ID", image.id], [t("kvModel"), meta.model], [t("kvSampler"), meta.sampler], [t("kvSteps"), meta.steps],
+        [t("kvModel"), meta.model], [t("kvSampler"), meta.sampler], [t("kvSteps"), meta.steps],
         ["CFG", meta.cfgScale], ["Seed", meta.seed], [t("kvSize"), meta.size],
     ].filter(([, v]) => v !== undefined && v !== null && v !== "");
     const resources = (meta.resources || []).map((r) =>
@@ -1655,6 +1655,8 @@ function renderGallery(reset) {
         }
         const mediaEl = item.querySelector("img,video");
         if (mediaEl) mediaEl.onclick = () => showImageMeta(img);
+        if (isVideoItem(img)) appendPlayBadge(item); // 半透明播放三角标
+        appendMissingMarks(item, img.meta); // 缺失生成参数的三色感叹号(与节点条共用)
         item.querySelector(".cs-save-btn").onclick = (ev) => {
             ev.stopPropagation();
             saveImageToOutput(img.url, ev.target);
@@ -2108,6 +2110,11 @@ function injectStyles() {
 .cs-badge { background:rgba(0,0,0,.65); color:#fff; font-size:10px; padding:1px 6px; border-radius:8px; }
 .cs-badge-ok { background:rgba(76,175,80,.9); }
 .cs-badge-dim { opacity:.7; }
+.cs-play { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:26px; height:26px;
+  border-radius:50%; background:rgba(0,0,0,.45); display:flex; align-items:center; justify-content:center;
+  pointer-events:none; }
+.cs-play::after { content:""; margin-left:2px; border-left:9px solid rgba(255,255,255,.85);
+  border-top:6px solid transparent; border-bottom:6px solid transparent; }
 .cs-card-info { padding:6px; }
 .cs-card-name { font-weight:600; font-size:12px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; min-height:2.4em; }
 .cs-card-sub { display:flex; justify-content:space-between; font-size:10px; color:var(--desc-text-color,#999); margin-top:3px; gap:4px; }
@@ -2236,8 +2243,20 @@ function injectStyles() {
 // ---------- 节点内缩略图(画布上的三个 Civitai 节点) ----------
 // 新版 ComfyUI 前端不再调用 onDrawBackground,节点内图全部走 DOM widget
 function nodeThumbsResize(node) {
-    // 让节点按 DOM widget 的实际高度重新计算尺寸
-    try { node.setSize([node.size[0], node.computeSize()[1]]); } catch (e) { /* 旧版接口缺失时忽略 */ }
+    // 新前端 computeSize 对 DOM widget 一律按默认 20 高累计,节点高度必算错
+    // (下方 widget 被裁在节点矩形外、无法点选)。用节点容器布局像素的同单位
+    // 溢出量(scrollHeight-clientHeight)换算增量贴合内容,带迟滞防震荡
+    try {
+        const root = node.csStrip?.closest(".lg-node");
+        if (!root) return;
+        const client = root.clientHeight; // 布局像素,不受画布缩放影响
+        if (client < 40 || node.size[1] < 40) return;
+        const m = client / node.size[1]; // 画布单位 → CSS 像素 的线性映射
+        if (m <= 0.2) return;
+        const overflow = root.scrollHeight - client; // >0:内容被裁;=0:贴合
+        if (overflow > 4) node.setSize([node.size[0], node.size[1] + overflow / m]);
+        else if (overflow < -30) node.setSize([node.size[0], Math.max(180, node.size[1] + overflow / m)]);
+    } catch (e) { /* 旧版接口缺失时忽略 */ }
 }
 
 function isVideoItem(item) {
@@ -2248,6 +2267,36 @@ function isVideoItem(item) {
 function cdnThumb(url, w = 256) {
     if (!url) return "";
     return url.replace("/original=true/", `/width=${w}/`);
+}
+
+// 缺失生成参数的三色感叹号(prompt红/lora黄/model绿),纵列在缩略图右上角;节点条与画廊共用
+function appendMissingMarks(cell, rawMeta) {
+    let meta = rawMeta || {};
+    if (meta && !meta.prompt && meta.meta) meta = meta.meta; // 剥掉 imageId 精确查询的包裹层
+    const miss = [];
+    if (!meta.prompt) miss.push("#e2836b");
+    if (!(meta.resources || []).some((r) => (r.type || "lora").toLowerCase() === "lora")) miss.push("#e2b96b");
+    if (!(meta["Model hash"] || meta["Model"])) miss.push("#8fd4a0");
+    if (!miss.length) return;
+    const b = document.createElement("div");
+    b.style.cssText = "position:absolute;top:3px;right:3px;display:flex;flex-direction:column;gap:2px;z-index:2;";
+    for (const color of miss) {
+        const dot = document.createElement("div");
+        dot.style.cssText = `width:12px;height:12px;border-radius:50%;background:rgba(0,0,0,.55);`
+            + `color:${color};font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center;`
+            + `border:1px solid ${color}66;`;
+        dot.textContent = "!";
+        b.appendChild(dot);
+    }
+    b.title = S.lang === "zh" ? "缺少生成参数(红:提示词 黄:Lora 绿:底模)" : "Missing (red: prompt, yellow: lora, green: model)";
+    cell.appendChild(b);
+}
+
+// 视频条目中央的半透明播放三角标;节点条与画廊共用
+function appendPlayBadge(cell) {
+    const p = document.createElement("div");
+    p.className = "cs-play";
+    cell.appendChild(p);
 }
 
 // 顶部信息面板:已选缩略图 + pos/neg/lora/base 摘要(写进 cs_info widget)
@@ -2261,6 +2310,7 @@ function renderSelInfo(node) {
         : null;
     if (!sel) {
         el.innerHTML = `<span style="color:#888;font-size:11px;">${esc(t("noSelectionHint"))}</span>`;
+        nodeThumbsResize(node); // 面板高度变了,同步节点尺寸防下方 widget 被裁
         return;
     }
     let meta = sel.meta || {};
@@ -2300,35 +2350,42 @@ function renderSelInfo(node) {
     idRow.style.fontWeight = "700";
     el.appendChild(hr);
     el.appendChild(idRow);
+    nodeThumbsResize(node); // 面板高度变了,同步节点尺寸防下方 widget 被裁
 }
 
-// 大图悬浮层附加:ID 点击复制 + 分类标签(异步抓取网页端数据,点击标签复制 ID)
+// 大图悬浮层附加:ID 独立一行 + 分类标签独立一行(flex-wrap,防挤压重叠);
+// 异步抓取网页端分类 tag,点击标签复制其 ID。画廊与节点大图悬浮层共用
 function attachIdAndTags(box, image) {
     const id = String(image.id ?? "");
     if (!id) return;
-    const hint = document.createElement("div");
-    hint.className = "cs-form-hint";
-    hint.style.cssText = "margin:8px 0;";
-    hint.innerHTML = `${esc(S.lang === "zh" ? "ID(点击复制):" : "ID (click to copy):")} `
-        + `<span class="cs-trigger" style="cursor:pointer" data-copy-id="${esc(id)}">${esc(id)}</span>`
-        + ` · <span data-tags-box>${esc(t("tagsLoading"))}</span>`;
-    box.insertBefore(hint, box.querySelector(".cs-kv-grid"));
-    $("[data-copy-id]", hint).onclick = (ev) => copyText(id, ev.target);
+    const wrap = document.createElement("div");
+    wrap.style.cssText = "margin:8px 0;";
+    const idRow = document.createElement("div");
+    idRow.className = "cs-form-hint";
+    idRow.innerHTML = `${esc(S.lang === "zh" ? "ID(点击复制):" : "ID (click to copy):")} `
+        + `<span class="cs-trigger" style="cursor:pointer" data-copy-id="${esc(id)}">${esc(id)}</span>`;
+    const tagRow = document.createElement("div");
+    tagRow.style.cssText = "display:flex;flex-wrap:wrap;gap:4px 6px;align-items:center;"
+        + "margin-top:6px;font-size:11px;color:var(--desc-text-color,#999);opacity:.8;";
+    tagRow.innerHTML = `<span style="flex:0 0 auto">${esc(t("tagsLoading"))}</span>`;
+    wrap.appendChild(idRow);
+    wrap.appendChild(tagRow);
+    const anchor = box.querySelector(".cs-kv-grid") || box.querySelector(".cs-modal-actions");
+    box.insertBefore(wrap, anchor);
+    $("[data-copy-id]", idRow).onclick = (ev) => copyText(id, ev.target);
     if (S.cfg.tag_scrape === false) {
-        const tb = $("[data-tags-box]", hint);
-        if (tb) tb.textContent = t("tagsOff");
+        tagRow.firstElementChild.textContent = t("tagsOff");
         return;
     }
     apiGet(`/civitai_studio/image_tags/${encodeURIComponent(id)}`).then((d) => {
-        const tb = $("[data-tags-box]", hint);
-        if (!tb) return;
-        if (d.paused) { tb.textContent = t("tagsPaused", { sec: d.retryAfterSec }); return; }
+        if (!tagRow.isConnected) return;
+        if (d.paused) { tagRow.firstElementChild.textContent = t("tagsPaused", { sec: d.retryAfterSec }); return; }
         const tags = d.tags || [];
-        if (!tags.length) { tb.textContent = t("noTags"); return; }
-        tb.innerHTML = `<span style="color:#999">${esc(S.lang === "zh" ? "标签(点击复制 ID):" : "Tags (click to copy ID):")}</span> `
-            + tags.map((t) => `<span class="cs-trigger" style="cursor:pointer" data-tagid="${esc(String(t.id))}" title="ID ${esc(String(t.id))}">#${esc(t.name)}</span>`).join(" ");
-        $$("[data-tagid]", tb).forEach((el) => { el.onclick = (ev) => copyText(el.dataset.tagid, ev.target); });
-    }).catch(() => { const tb = $("[data-tags-box]", hint); if (tb) tb.textContent = ""; });
+        if (!tags.length) { tagRow.firstElementChild.textContent = t("noTags"); return; }
+        tagRow.innerHTML = `<span style="flex:0 0 auto;color:#999">${esc(S.lang === "zh" ? "标签(点击复制 ID):" : "Tags (click to copy ID):")}</span>`
+            + tags.map((tg) => `<span class="cs-trigger" style="cursor:pointer;white-space:nowrap" data-tagid="${esc(String(tg.id))}" title="ID ${esc(String(tg.id))}">#${esc(tg.name)}</span>`).join("");
+        $$("[data-tagid]", tagRow).forEach((el) => { el.onclick = (ev) => copyText(el.dataset.tagid, ev.target); });
+    }).catch(() => { if (tagRow.isConnected) tagRow.style.display = "none"; });
 }
 
 // 悬浮层大图/播放器(图片与视频通用)
@@ -2348,7 +2405,8 @@ function renderNodeThumbs(node) {
     if (!strip) return;
     const keepScroll = strip.scrollTop; // 重建后保持滚动位置(加载更多不跳顶)
     const wv = (name) => { const w = (node.widgets || []).find((x) => x.name === name); return w ? w.value : undefined; };
-    const cols = { small: 6, medium: 4, large: 3 }[String(wv("thumbs_size") || "medium")] || 4;
+    // thumbs_size 映射为"目标行高":两端对齐行排版按宽高比成行,行内等高铺满整行宽
+    const rowH = { small: 100, medium: 140, large: 190 }[String(wv("thumbs_size") || "medium")] || 140;
     const panelH = Math.max(160, parseInt(wv("panel_h"), 10) || 420);
     strip.style.maxHeight = panelH + "px";
     strip.querySelectorAll(".cs-thumb,.cs-thumb-msg,.cs-thumb-bar,.cs-thumb-more,.cs-selinfo")
@@ -2383,55 +2441,56 @@ function renderNodeThumbs(node) {
         msg.textContent = node.csMsg || (S.lang === "zh" ? "没有结果" : "No results");
         strip.appendChild(msg);
     }
-    items.forEach((it, i) => {
-        const cell = document.createElement("div");
-        cell.className = "cs-thumb";
-        // 固定 4 列等宽:末行不足时尺寸不变(flex-grow 会让末行撑大)
-        cell.style.cssText = `position:relative;flex:0 0 calc((100% - ${(cols - 1) * 6}px)/${cols});`
-            + `max-width:calc((100% - ${(cols - 1) * 6}px)/${cols});`
-            + "aspect-ratio:3/4;background:#2e2e33;border:2px solid #555;border-radius:4px;overflow:hidden;cursor:pointer;";
-        if (isVideoItem(it)) {
-            // 静音取首帧作缩略图
-            const v = document.createElement("video");
-            v.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;";
-            v.muted = true;
-            v.loop = true;
-            v.playsInline = true;
-            v.preload = "metadata";
-            v.src = imgSrc(it.url || "") + "#t=0.001";
-            cell.appendChild(v);
-        } else {
-            const im = document.createElement("img");
-            im.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;";
-            const thumb = cdnThumb(it.url || "");
-            im.onerror = () => { if (!im.dataset.retried) { im.dataset.retried = "1"; im.src = altSrc(thumb); } };
-            im.src = imgSrc(thumb);
-            cell.appendChild(im);
-        }
-        if (idw?.value && String(idw.value) === String(it.id)) cell.style.borderColor = "#4a90e2";
-        // 缺少生成参数的图:右上角小角标提示(缺什么列在 title 里)
-        const meta = it.meta || {};
-        // 纵列三色感叹号:prompt(红) lora(黄) model(绿),缺哪个亮哪个
-        const missMarks = [];
-        if (!meta.prompt) missMarks.push("#e2836b");
-        if (!(meta.resources || []).some((r) => (r.type || "lora").toLowerCase() === "lora")) missMarks.push("#e2b96b");
-        if (!(meta["Model hash"] || meta["Model"])) missMarks.push("#8fd4a0");
-        if (missMarks.length) {
-            const b = document.createElement("div");
-            b.style.cssText = "position:absolute;top:3px;right:3px;display:flex;flex-direction:column;gap:2px;";
-            for (const color of missMarks) {
-                const dot = document.createElement("div");
-                dot.style.cssText = `width:12px;height:12px;border-radius:50%;background:rgba(0,0,0,.55);`
-                    + `color:${color};font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center;`
-                    + `border:1px solid ${color}66;`;
-                dot.textContent = "!";
-                b.appendChild(dot);
+    // 两端对齐行排版(相册式):按宽高比贪心成行,行内等高、铺满整行宽;
+    // 末行不拉伸保持目标行高。横竖图混排不再出现固定列裁切/大块留白
+    const gap = 6;
+    const W = Math.max(160, (strip.clientWidth || node.size[0] - 16) - 8); // 减去 strip 自身 padding
+    const rows = [];
+    let row = [], rowAr = 0;
+    for (const it of items) {
+        const ar = it.width && it.height ? it.width / it.height : 0.75; // 缺尺寸按 3:4 竖图处理
+        row.push({ it, ar });
+        rowAr += ar;
+        if (rowAr * rowH + (row.length - 1) * gap >= W) { rows.push(row); row = []; rowAr = 0; }
+    }
+    if (row.length) rows.push(row);
+    rows.forEach((r, ri) => {
+        const arSum = r.reduce((s, c) => s + c.ar, 0);
+        const avail = W - (r.length - 1) * gap;
+        let h = avail / arSum;
+        if (ri === rows.length - 1 && h > rowH * 1.15) h = rowH; // 末行不过度放大
+        h = Math.min(h, rowH * 1.6); // 独行超宽横图的行高上限
+        if (arSum * h > avail) h *= avail / (arSum * h); // 舍入超宽回调
+        for (const c of r) {
+            const cell = document.createElement("div");
+            cell.className = "cs-thumb";
+            cell.style.cssText = `position:relative;flex:0 0 ${(c.ar * h).toFixed(1)}px;width:${(c.ar * h).toFixed(1)}px;`
+                + `height:${h.toFixed(1)}px;box-sizing:border-box;background:#2e2e33;border:2px solid #555;`
+                + "border-radius:4px;overflow:hidden;cursor:pointer;";
+            if (isVideoItem(c.it)) {
+                // 静音取首帧作缩略图
+                const v = document.createElement("video");
+                v.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;";
+                v.muted = true;
+                v.loop = true;
+                v.playsInline = true;
+                v.preload = "metadata";
+                v.src = imgSrc(c.it.url || "") + "#t=0.001";
+                cell.appendChild(v);
+                appendPlayBadge(cell);
+            } else {
+                const im = document.createElement("img");
+                im.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;";
+                const thumb = cdnThumb(c.it.url || "");
+                im.onerror = () => { if (!im.dataset.retried) { im.dataset.retried = "1"; im.src = altSrc(thumb); } };
+                im.src = imgSrc(thumb);
+                cell.appendChild(im);
             }
-            b.title = S.lang === "zh" ? "缺少生成参数(红:提示词 黄:Lora 绿:底模)" : "Missing (red: prompt, yellow: lora, green: model)";
-            cell.appendChild(b);
+            if (idw?.value && String(idw.value) === String(c.it.id)) cell.style.borderColor = "#4a90e2";
+            appendMissingMarks(cell, c.it.meta);
+            cell.onclick = () => showNodeImageFloat(node, c.it);
+            strip.appendChild(cell);
         }
-        cell.onclick = () => showNodeImageFloat(node, it);
-        strip.appendChild(cell);
     });
     if (!st.loading && st.next && st.next.length) {
         if (items.length >= 100) {
@@ -2458,33 +2517,15 @@ function renderNodeThumbs(node) {
 function showNodeImageFloat(node, item) {
     let meta = item.meta || {};
     if (meta && !meta.prompt && meta.meta) meta = meta.meta; // 剥掉精确查询的包裹层
-    const kvs = [["ID", item.id], ["Seed", meta.seed], ["CFG", meta.cfgScale], ["Steps", meta.steps], ["Sampler", meta.sampler]]
+    const kvs = [["Seed", meta.seed], ["CFG", meta.cfgScale], ["Steps", meta.steps], ["Sampler", meta.sampler]]
         .filter(([, v]) => v !== undefined && v !== null && v !== "");
     const m = showModal(`
         <div class="cs-media-view">${mediaViewerHtml(item)}</div>
         ${kvs.length ? `<div class="cs-kv-grid" style="margin-top:10px">${kvs.map(([k, v]) => `<div><b>${esc(k)}</b><span>${esc(String(v))}</span></div>`).join("")}</div>` : ""}
         ${meta.prompt ? `<div class="cs-form-hint" style="margin-top:8px;max-height:120px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;">${esc(String(meta.prompt))}</div>` : ""}
-        <div class="cs-form-hint" style="margin-top:8px">${esc(S.lang === "zh" ? "ID(点击复制):" : "ID (click to copy):")} <span class="cs-trigger" style="cursor:pointer" data-copy-id="${esc(String(item.id ?? ""))}">${esc(String(item.id ?? ""))}</span> · <span data-tags-box>${esc(t("tagsLoading"))}</span></div>
         <div class="cs-modal-actions"><button class="cs-btn cs-btn-primary" data-use>${esc(t("useAsOutput"))}</button></div>`);
-    $("[data-copy-id]", m.box).onclick = (ev) => copyText(String(item.id ?? ""), ev.target);
-    // 拉取分类标签(网页端 trpc),点击标签复制其 ID
-    if (S.cfg.tag_scrape === false) {
-        const tb2 = $("[data-tags-box]", m.box);
-        if (tb2) tb2.textContent = t("tagsOff");
-        return;
-    }
-    apiGet(`/civitai_studio/image_tags/${encodeURIComponent(String(item.id))}`).then((d) => {
-        const box = $("[data-tags-box]", m.box);
-        if (!box) return;
-        if (d.paused) { box.textContent = t("tagsPaused", { sec: d.retryAfterSec }); return; }
-        const tags = d.tags || [];
-        if (!tags.length) { box.textContent = t("noTags"); return; }
-        box.innerHTML = `<span style="color:#999">${esc(S.lang === "zh" ? "标签(点击复制 ID):" : "Tags (click to copy ID):")}</span> `
-            + tags.map((t) => `<span class="cs-trigger" style="cursor:pointer" data-tagid="${esc(String(t.id))}" title="ID ${esc(String(t.id))}">#${esc(t.name)}</span>`).join(" ");
-        $$("[data-tagid]", box).forEach((el) => {
-            el.onclick = (ev) => copyText(el.dataset.tagid, ev.target);
-        });
-    }).catch(() => {});
+    // ID 行 + 标签行(与画廊共用;ID 行独立、标签 flex-wrap,不再挤在一行)
+    attachIdAndTags(m.box, item);
     $("[data-use]", m.box).onclick = () => {
         const iw = (node.widgets || []).find((w) => w.name === "index");
         const idw = (node.widgets || []).find((w) => w.name === "image_id");
@@ -2630,9 +2671,12 @@ app.registerExtension({
                     // image_id 手动粘贴/修改也要刷新信息面板(文本输入不触发事件)
                     const cur = widget("image_id")?.value || "";
                     if (cur !== node.csLastId) { node.csLastId = cur; renderSelInfo(node); }
-                    // 面板布局参数变化 → 只重排版不重新拉取
-                    const ss = String(widget("thumbs_size")?.value || "medium") + "|" + String(widget("panel_h")?.value || "");
+                    // 面板布局参数或节点宽度变化 → 只重排版不重新拉取
+                    const ss = node.size[0] + "|" + String(widget("thumbs_size")?.value || "medium") + "|" + String(widget("panel_h")?.value || "");
                     if (ss !== node.csLastSizeSig) { node.csLastSizeSig = ss; renderNodeThumbs(node); }
+                    // 轮询兜底:内容变化后节点高度没跟上时重新贴合(只精确贴合,
+                    // 修复矮节点里 image_id 等 widget 被裁在节点外无法点选)
+                    nodeThumbsResize(node);
                 }, 700);
                 // 节点删除时清理定时器与全局 wheel 监听,避免僵尸轮询/监听泄漏
                 const origOnRemoved = this.onRemoved;

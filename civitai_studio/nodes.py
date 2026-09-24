@@ -119,7 +119,9 @@ class CivitaiImageSearch:
             "panel_h": ("INT", {"default": 420, "min": 160, "max": 1600, "step": 20}),
         }}
 
-    RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING", "STRING", "IMAGE", "STRING")
+    # base_model/lora_name 用 COMBO:加载器(LoRA/UNET/Checkpoint)的模型字段 widget
+    # 转成输入口后类型是 COMBO,前端实测拒绝 STRING→COMBO 连线、放行 COMBO→COMBO
+    RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING", "COMBO", "IMAGE", "COMBO")
     RETURN_NAMES = ("positive", "negative", "lora_string", "trigger_words", "base_model", "image", "lora_name")
     FUNCTION = "run"
     CATEGORY = "Civitai Studio"

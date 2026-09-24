@@ -1,5 +1,5 @@
 {
-  "id": "civitai-studio-image-search-verify",
+  "id": "7f6c2f0e-3b1a-4c8d-9e2f-5a4b6c7d8e9f",
   "revision": 0,
   "last_node_id": 4,
   "last_link_id": 4,
@@ -46,7 +46,7 @@
         },
         {
           "name": "base_model",
-          "type": "STRING",
+          "type": "COMBO",
           "links": []
         },
         {
@@ -55,6 +55,11 @@
           "links": [
             4
           ]
+        },
+        {
+          "name": "lora_name",
+          "type": "COMBO",
+          "links": []
         }
       ],
       "properties": {},
