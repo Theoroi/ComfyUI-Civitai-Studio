@@ -867,7 +867,7 @@ function galleryItemHtml(img) {
                     src="${src}#t=0.001" data-direct="${direct}"
                     onerror="this.style.display='none'"></video></div>`;
     }
-    return `<div class="cs-gallery-item">${save}<img loading="lazy" src="${src}" data-direct="${direct}"
+    return `<div class="cs-gallery-item">${save}<img loading="lazy" src="${esc(imgSrc(cdnThumb(img.url)))}" data-direct="${esc(img.url)}"
                 onerror="this.style.display='none'"/></div>`;
 }
 
@@ -1585,7 +1585,7 @@ async function runUpdateCheck(items) {
 // ---------- 社区画廊(images API) ----------
 async function fetchGallery(reset) {
     const st = S.gal;
-    if (st.loading) return;
+    if (st.loading) { st.pending = true; return; }
     if (!reset && !(st.next && st.next.length)) return; // 没有下一页
     st.loading = true;
     renderGallery();
@@ -1623,6 +1623,7 @@ async function fetchGallery(reset) {
     } finally {
         st.loading = false;
         renderGallery(reset);
+        if (st.pending) { st.pending = false; fetchGallery(true); }
     }
 }
 
@@ -1875,6 +1876,16 @@ async function openSettings() {
         try {
             await apiPost("/civitai_studio/config", body);
             S.cfg = { ...S.cfg, ...body };
+            // 自动补全刚开启:立即预热映射与 datalist(否则要重开面板才生效)
+            if (S.cfg.tag_autocomplete && !S.tagMap) {
+                apiGet("/civitai_studio/tag_mapping").then((d) => {
+                    const tags = d.tags || [];
+                    S.tagMap = {};
+                    tags.forEach((t2) => { S.tagMap[t2.name] = t2.id; });
+                    const dl = $("#cs-gal-tag-list");
+                    if (dl) dl.innerHTML = tags.map((t2) => `<option value="${esc(t2.name)}"></option>`).join("");
+                }).catch(() => {});
+            }
             m.close();
             toast("success", t("settingsSaved"), "");
             if (body.proxy_images !== oldProxyImages) refreshAllImages();
@@ -2459,7 +2470,7 @@ function showNodeImageFloat(node, item) {
 
 function fetchNodeThumbs(node, params, reset) {
     const st = node.csFetch || (node.csFetch = { next: [], loading: false });
-    if (st.loading) return;
+    if (st.loading) { st.refetch = true; return; } // 在途:完成后按最新筛选补发
     if (!reset && !(st.next && st.next.length)) return;
     st.loading = true;
     const p = new URLSearchParams(params);
@@ -2477,6 +2488,7 @@ function fetchNodeThumbs(node, params, reset) {
             st.next = d.next_query || [];
             st.loading = false;
             renderNodeThumbs(node);
+            if (st.refetch) { st.refetch = false; fetchNodeThumbs(node, node.csLastParams, true); }
         })
         .catch(() => {
             st.loading = false;
@@ -2516,7 +2528,8 @@ app.registerExtension({
                 window.addEventListener("wheel", wheelGuard, { passive: false, capture: true });
                 node.csWheelGuard = wheelGuard;
                 node.csStrip = strip;
-                this.addDOMWidget("cs_thumbs", "cs_thumbs", strip);
+                const thumbsW = this.addDOMWidget("cs_thumbs", "cs_thumbs", strip);
+                thumbsW.serialize = false; // DOM 面板不写入工作流,避免 widgets_values 错位
                 if (this.size[0] < 460) this.size[0] = 460; // 保证默认 3 列以上
                 // 信息面板独立 widget,移到 widgets 首位:渲染在标题/输出端正下方
                 const infoEl = document.createElement("div");
@@ -2524,7 +2537,8 @@ app.registerExtension({
                     + "background:rgba(255,255,255,.04);border:1px solid #3a3a40;border-radius:6px;padding:6px;";
                 infoEl.textContent = t("noSelectionHint");
                 node.csInfo = infoEl;
-                this.addDOMWidget("cs_info", "cs_info", infoEl);
+                const infoW2 = this.addDOMWidget("cs_info", "cs_info", infoEl);
+                infoW2.serialize = false;
                 const infoW = node.widgets.find((w2) => w2.name === "cs_info");
                 if (infoW) {
                     node.widgets.splice(node.widgets.indexOf(infoW), 1);
@@ -2604,7 +2618,8 @@ app.registerExtension({
                 el.style.cssText = "white-space:pre-wrap;word-break:break-word;font-size:11px;line-height:1.4;"
                     + "max-height:220px;overflow-y:auto;padding:4px;color:#ddd;min-height:20px;";
                 el.textContent = "(未执行)";
-                this.addDOMWidget("cs_show", "cs_show", el);
+                const showW = this.addDOMWidget("cs_show", "cs_show", el);
+                showW.serialize = false;
                 const node = this;
                 const onExecuted = ({ detail }) => {
                     if (String(detail?.node) !== String(node.id)) return;
@@ -2635,7 +2650,8 @@ app.registerExtension({
                 imgEl.onload = () => nodeThumbsResize(node);
                 box.appendChild(imgEl);
                 node.csCoverEl = imgEl;
-                this.addDOMWidget("cs_cover", "cs_cover", box);
+                const coverW = this.addDOMWidget("cs_cover", "cs_cover", box);
+                coverW.serialize = false;
 
                 const drawCover = () => {
                     const loraW = (node.widgets || []).find((x) => x.name === "lora");

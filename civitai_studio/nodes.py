@@ -98,7 +98,9 @@ class CivitaiImageSearch:
             # 填入 Civitai 图片数字 ID 后,优先按 ID 精确取图与参数(忽略 index)
             "image_id": ("STRING", {"default": "", "multiline": False,
                                     "tooltip": "填入 Civitai 图片数字 ID:优先按此 ID 精确取图与生成参数(忽略 index)"}),
-            # 面板布局参数:仅前端渲染使用
+        },
+        # 面板布局参数:仅前端渲染使用,optional 保证旧 API 调用不因缺参被拒
+        "optional": {
             "thumbs_size": (["medium", "small", "large"],),
             "panel_h": ("INT", {"default": 420, "min": 160, "max": 1600, "step": 20}),
         }}
@@ -143,7 +145,7 @@ class CivitaiImageSearch:
         wanted_id = str(image_id or "").strip()
         if wanted_id.isdigit():
             page = _sync_get_json("/images", {
-                "imageId": wanted_id, "limit": "1", "withMeta": "true", "nsfw": "true",
+                "imageId": wanted_id, "limit": "1", "withMeta": "true",
             })
             items = page.get("items") or []
             chosen = items[0] if items else None
