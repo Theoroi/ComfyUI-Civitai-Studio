@@ -1,0 +1,40 @@
+name: Release
+
+# 发版流程:把 version.py 的 RELEASE 打成 tag(v<版本>)推送即自动发布
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 校验 tag 与 version.py 一致
+        run: |
+          TAG_VER="${GITHUB_REF_NAME#v}"
+          FILE_VER=$(python3 -c "import re;print(re.search(r'VERSION = \"([^\"]+)\"',open('civitai_studio/version.py',encoding='utf-8').read()).group(1))")
+          if [ "$TAG_VER" != "$FILE_VER" ]; then
+            echo "::error::tag v$TAG_VER 与 version.py 的 $FILE_VER 不一致,先更新 version.py 再打 tag"
+            exit 1
+          fi
+
+      - name: 打包安装包
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          mkdir -p "ComfyUI-Civitai-Studio"
+          cp -r civitai_studio js examples "ComfyUI-Civitai-Studio/"
+          cp __init__.py pyproject.toml requirements.txt README.md README_EN.md LICENSE "ComfyUI-Civitai-Studio/" 2>/dev/null || true
+          find "ComfyUI-Civitai-Studio" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+          find "ComfyUI-Civitai-Studio" -name "*.pyc" -delete 2>/dev/null || true
+          zip -r "ComfyUI-Civitai-Studio-${VER}.zip" "ComfyUI-Civitai-Studio"
+
+      - name: 发布 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ComfyUI-Civitai-Studio-*.zip
+          generate_release_notes: true
