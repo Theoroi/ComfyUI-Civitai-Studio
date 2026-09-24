@@ -254,7 +254,7 @@ let S = {
     },
     local: { models: [], search: "", type: "", loading: false, updates: {}, truncated: false, openId: null, detailCache: {} },
     dl: { jobs: [], lastSig: "", failStreak: 0 },
-    gal: { items: [], next: [], sort: "Newest", period: "AllTime", base: "", tag: "", nsfwLevel: 0, loading: false, error: "" },
+    gal: { items: [], next: [], sort: "Newest", period: "AllTime", base: "", tag: "", nsfwLevel: 0, thumbSize: 256, loading: false, error: "" },
     ui: { tab: "browse", root: null, scrollTop: 0, detailId: null, backendStale: false },
 };
 
@@ -1669,7 +1669,7 @@ function renderGallery(reset) {
         st.jrow = []; st.jrowAr = 0; // 两端对齐行排版的在途行(跨"加载更多"批次续行)
     }
     // 两端对齐行排版:按宽高比贪心成行,行内等高铺满整行宽(与节点缩略图同款)
-    const gap = 6, targetH = 200;
+    const gap = 6, targetH = Math.max(64, parseInt(st.thumbSize, 10) || 256);
     const W = Math.max(160, grid.clientWidth - 8);
     const flushRow = () => {
         const r = st.jrow;
@@ -1725,7 +1725,7 @@ function buildGalleryView(root) {
     view.className = "cs-view";
     view.dataset.view = "gallery";
     view.innerHTML = `
-        <div class="cs-filters">
+        <div class="cs-filters cs-filters-gal">
             <input id="cs-gal-base" class="cs-span-full" list="cs-gal-base-list" type="text" placeholder="${esc(t("basePlaceholder"))}" value="${esc(st.base)}"/>
             <datalist id="cs-gal-base-list">${BASE_MODELS.map((b) => `<option value="${esc(b)}"></option>`).join("")}</datalist>
             <input id="cs-gal-tag" class="cs-span-full" type="text" placeholder="${esc(t("galTagId"))}" value="${esc(st.tag)}" autocomplete="off"/>
@@ -1736,6 +1736,7 @@ function buildGalleryView(root) {
                 <option value="Most Comments">${esc(t("gallerySortComments"))}</option>
             </select>
             <select id="cs-gal-nsfw"><option value="0" ${!st.nsfwLevel ? "selected" : ""}>${esc(t("sfwLabel"))}</option><option value="1" ${st.nsfwLevel ? "selected" : ""}>${esc(t("nsfwLabel"))}</option></select>
+            <select id="cs-gal-size" title="${esc(S.lang === "zh" ? "缩略图大小" : "Thumbnail size")}">${[128, 256, 512].map((px) => `<option value="${px}" ${st.thumbSize === px ? "selected" : ""}>${px}px</option>`).join("")}</select>
         </div>
         <div id="cs-gal-content" class="cs-scroll">
             <div id="cs-gal-grid" class="cs-gal-grid"></div>
@@ -1745,6 +1746,12 @@ function buildGalleryView(root) {
     $("#cs-gal-sort", view).addEventListener("change", (e) => { st.sort = e.target.value; fetchGallery(true); });
     $("#cs-gal-period", view).addEventListener("change", (e) => { st.period = e.target.value; fetchGallery(true); });
     $("#cs-gal-nsfw", view).addEventListener("change", (e) => { st.nsfwLevel = parseInt(e.target.value, 10); fetchGallery(true); });
+    // 缩略图大小:不重新拉取,清渲染标记后整版重排
+    $("#cs-gal-size", view).addEventListener("change", (e) => {
+        st.thumbSize = parseInt(e.target.value, 10);
+        st.items.forEach((i) => { delete i.__rendered; });
+        renderGallery(true);
+    });
     const debouncedFetch = () => {
         clearTimeout(buildGalleryView._deb);
         buildGalleryView._deb = setTimeout(() => fetchGallery(true), 600);
@@ -2174,6 +2181,10 @@ function injectStyles() {
 .cs-toolbar input[type=search] { flex:1; min-width:0; }
 .cs-filters { display:grid; grid-template-columns:repeat(6,1fr); gap:4px; padding:0 6px 6px; flex-shrink:0; }
 .cs-filters > * { width:100%; min-width:0; grid-column:span 2; }
+/* 画廊筛选:12 列网格,时间/排序/年龄/缩略图大小四项同行等宽
+   (span-full 规则必须写在通配规则之后:同特异性时后者胜) */
+.cs-filters.cs-filters-gal { grid-template-columns:repeat(12,1fr); }
+.cs-filters.cs-filters-gal > * { grid-column:span 3; }
 .cs-filters > .cs-span-full { grid-column:1/-1; }
 .cs-presets { display:flex; gap:4px; padding:0 6px 6px; flex-shrink:0; flex-wrap:wrap; }
 .cs-filters select, .cs-filters input[type=text] { width:100%; padding:3px; font-size:12px; box-sizing:border-box; }
@@ -2404,7 +2415,17 @@ function renderSelInfo(node) {
         const d = document.createElement("div");
         d.style.cssText = "display:flex;gap:4px;min-width:0;cursor:pointer;" + (bold ? "font-weight:700;" : "");
         d.title = S.lang === "zh" ? "点击复制全文" : "Click to copy";
-        d.onclick = () => copyText(t, d);
+        // 不走 copyText(btn):它会用 textContent 覆盖整行,毁掉 label 颜色/间距与 title;
+        // 这里自管反馈:临时换成"已复制",到点原样恢复 innerHTML 与 title
+        d.onclick = () => {
+            navigator.clipboard.writeText(t).then(() => {
+                const html = d.innerHTML, tip = d.title;
+                d.innerHTML = `<span style="color:#4caf50;flex:0 0 auto;">✓</span>`
+                    + `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(t("copied"))}</span>`;
+                d.title = S.lang === "zh" ? "已复制" : "Copied";
+                setTimeout(() => { d.innerHTML = html; d.title = tip; }, 1200);
+            }).catch(() => {});
+        };
         d.innerHTML = `<span style="color:${color};flex:0 0 auto;">${esc(label)}</span>`
             + `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(t.length > 120 ? t.slice(0, 120) + "…" : t)}</span>`;
         return d;
@@ -2505,7 +2526,7 @@ function renderNodeThumbs(node) {
     const keepScroll = strip.scrollTop; // 重建后保持滚动位置(加载更多不跳顶)
     const wv = (name) => { const w = (node.widgets || []).find((x) => x.name === name); return w ? w.value : undefined; };
     // thumbs_size 映射为"目标行高":两端对齐行排版按宽高比成行,行内等高铺满整行宽
-    const rowH = { small: 100, medium: 140, large: 190 }[String(wv("thumbs_size") || "medium")] || 140;
+    const rowH = { small: 128, medium: 256, large: 512 }[String(wv("thumbs_size") || "medium")] || 256;
     const panelH = Math.max(160, parseInt(wv("panel_h"), 10) || 420);
     strip.style.maxHeight = panelH + "px";
     strip.querySelectorAll(".cs-thumb,.cs-thumb-msg,.cs-thumb-bar,.cs-thumb-more,.cs-selinfo")
@@ -2748,12 +2769,13 @@ app.registerExtension({
                     // image_id 手动粘贴/修改也要刷新信息面板(文本输入不触发事件)
                     const cur = widget("image_id")?.value || "";
                     if (cur !== node.csLastId) { node.csLastId = cur; renderSelInfo(node); }
-                    // image_id widget 行加粗:画布与右侧参数面板都扫(行元素渲染后才存在,
+                    // image_id widget 行加粗+强调色:画布与右侧参数面板都扫(行元素渲染后才存在,
                     // dataset 标记防重复设置;命中一次即止的单次标记会漏掉后渲染的面板)
                     for (const rowEl of document.querySelectorAll(".lg-node-widget")) {
                         if (rowEl.dataset.csBold) continue;
                         if ((rowEl.textContent || "").trim().startsWith("image_id")) {
                             rowEl.style.fontWeight = "700";
+                            rowEl.style.color = "var(--accent-color,#4a90e2)";
                             rowEl.dataset.csBold = "1";
                         }
                     }
