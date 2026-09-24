@@ -167,7 +167,14 @@ async def image_tags(request):
         async with await civitai_client.open_stream(url, timeout=timeout, allow_redirects=True) as resp:
             if resp.status != 200:
                 _tag_fetch_fail()
-                return _json_error(f"上游 HTTP {resp.status}", 502)
+                # Civitai 2026-09 起对该 trpc 端点关闭匿名访问(HTTP 401),必须带 API Key;
+                # 代理/网络类失败由 net_error_message 给出配置指引,这里只解读上游状态码
+                reason = {
+                    401: "Civitai 已关闭此接口的匿名访问(HTTP 401)— 请在 ⚙ 设置里配置 Civitai API Key 后重试",
+                    403: "Civitai 拒绝访问(HTTP 403)— 该图片需要登录态或 API Key 无效",
+                    429: "触发 Civitai 限速(HTTP 429)— 稍后再试,或配置 API Key 提升限额",
+                }.get(resp.status, f"上游 HTTP {resp.status}")
+                return _json_error(reason, 502)
             data = await resp.json(content_type=None)
         # 解析也在 try 内:畸形 trpc 响应同样走结构化 502 + 熔断计数
         payload = (data.get("result") or {}).get("data") or {}

@@ -2519,7 +2519,12 @@ function attachIdAndTags(box, image) {
             + tags.map((tg) => `<span class="cs-trigger" style="cursor:pointer;white-space:nowrap" data-tagid="${esc(String(tg.id))}" title="ID ${esc(String(tg.id))}">#${esc(tg.name)}</span>`).join("");
         $$("[data-tagid]", tagRow).forEach((el) => { el.onclick = (ev) => copyText(el.dataset.tagid, ev.target); });
         refreshTagCombos(); // 新标签入库,刷新图像搜索节点的 tag 下拉选项
-    }).catch(() => { if (tagRow.isConnected) tagRow.style.display = "none"; });
+    }).catch((e) => {
+        // 不再静默隐藏:把服务端解读过的原因(缺 API Key/限速/代理超时)直接展示给用户
+        if (!tagRow.isConnected) return;
+        const msg = String((e && e.message) || e).slice(0, 110);
+        tagRow.firstElementChild.textContent = (S.lang === "zh" ? "标签加载失败: " : "Tags failed: ") + msg;
+    });
 }
 
 // 把本地标签映射刷进所有图像搜索节点的 tag combo 选项((none) 首项 + 名称排序)
