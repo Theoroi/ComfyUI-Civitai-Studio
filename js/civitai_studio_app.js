@@ -60,7 +60,7 @@ const STR = {
         noFiles: "该版本没有文件", previews: "预览图 ({n}) — 点击查看生成参数",
         genParams: "生成参数", noGenParams: "这张图没有公开生成参数。",
         positivePrompt: "正面提示词", negativePrompt: "负面提示词", copy: "复制",
-        copied: "已复制", resources: "用到资源",
+        copied: "已复制", copyFail: "复制失败", resources: "用到资源",
         kvModel: "模型", kvSampler: "采样器", kvSteps: "步数", kvSize: "尺寸",
         download: "⬇ 下载", startDownload: "开始下载", submitting: "提交中…",
         dlDialogTitle: "下载 — {name}", fileLabel: "文件", targetFolder: "目标目录",
@@ -165,7 +165,7 @@ const STR = {
         noFiles: "No files for this version", previews: "Previews ({n}) — click for generation params",
         genParams: "Generation params", noGenParams: "This image has no public generation params.",
         positivePrompt: "Positive prompt", negativePrompt: "Negative prompt", copy: "Copy",
-        copied: "Copied", resources: "Resources used",
+        copied: "Copied", copyFail: "Copy failed", resources: "Resources used",
         kvModel: "Model", kvSampler: "Sampler", kvSteps: "Steps", kvSize: "Size",
         download: "⬇ Download", startDownload: "Start download", submitting: "Submitting…",
         dlDialogTitle: "Download — {name}", fileLabel: "File", targetFolder: "Target folder",
@@ -418,13 +418,38 @@ const apiPost = (url, body) => apiJson(url, {
     body: JSON.stringify(body || {}),
 });
 
+// 复制文本:clipboard API 在部分环境会挂起(never-settled)或静默拒绝,
+// 这里带 execCommand 兜底 + 400ms 挂起超时;onDone(ok) 可选,用于自定义反馈
+function copyTextSafe(text, onDone) {
+    let settled = false;
+    const finish = (ok) => { if (!settled) { settled = true; if (onDone) onDone(ok); } };
+    const fallback = () => {
+        try {
+            const ta = document.createElement("textarea");
+            ta.value = text;
+            ta.style.cssText = "position:fixed;top:-999px;opacity:0;";
+            document.body.appendChild(ta);
+            ta.select();
+            const ok = document.execCommand("copy");
+            ta.remove();
+            finish(ok);
+        } catch (e) { finish(false); }
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => finish(true), () => fallback());
+        setTimeout(() => { if (!settled) fallback(); }, 400); // 挂起兜底(重复写同一文本无害)
+    } else {
+        fallback();
+    }
+}
+
 function copyText(text, btn) {
-    navigator.clipboard.writeText(text).then(() => {
+    copyTextSafe(text, (ok) => {
         if (!btn) return;
         const old = btn.textContent;
-        btn.textContent = t("copied");
+        btn.textContent = ok ? t("copied") : t("copyFail");
         setTimeout(() => { btn.textContent = old; }, 1200);
-    }).catch(() => {});
+    });
 }
 
 // ---------- 通用模态框(悬浮元素:无遮罩、可拖动;✕/Esc/点画布关闭) ----------
@@ -2410,21 +2435,27 @@ function renderSelInfo(node) {
     const loras = (meta.resources || [])
         .filter((r) => (r.type || "lora").toLowerCase() === "lora")
         .map((r) => `${r.name || "?"}×${r.weight ?? 1}`).join(", ");
+    // 注意:row 内部把 text 参数遮蔽进局部变量 t,翻译函数在此预取,不能在 row 内再调 t()
+    const copiedTxt = t("copied"), copyFailTxt = t("copyFail");
     const row = (label, text, color, bold) => {
         const t = text ? String(text) : "-";
         const d = document.createElement("div");
         d.style.cssText = "display:flex;gap:4px;min-width:0;cursor:pointer;" + (bold ? "font-weight:700;" : "");
         d.title = S.lang === "zh" ? "点击复制全文" : "Click to copy";
         // 不走 copyText(btn):它会用 textContent 覆盖整行,毁掉 label 颜色/间距与 title;
-        // 这里自管反馈:临时换成"已复制",到点原样恢复 innerHTML 与 title
+        // 这里自管反馈:复制后临时换成"✓ 已复制"(失败红叉),到点原样恢复 innerHTML 与 title。
+        // copyTextSafe 的 400ms 兜底保证 clipboard API 挂起时反馈也一定出现
         d.onclick = () => {
-            navigator.clipboard.writeText(t).then(() => {
-                const html = d.innerHTML, tip = d.title;
-                d.innerHTML = `<span style="color:#4caf50;flex:0 0 auto;">✓</span>`
-                    + `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(t("copied"))}</span>`;
-                d.title = S.lang === "zh" ? "已复制" : "Copied";
+            const html = d.innerHTML, tip = d.title;
+            copyTextSafe(t, (ok) => {
+                d.innerHTML = ok
+                    ? `<span style="color:#4caf50;flex:0 0 auto;">✓</span>`
+                      + `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(copiedTxt)}</span>`
+                    : `<span style="color:#e2836b;flex:0 0 auto;">✕</span>`
+                      + `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(copyFailTxt)}</span>`;
+                d.title = ok ? copiedTxt : copyFailTxt;
                 setTimeout(() => { d.innerHTML = html; d.title = tip; }, 1200);
-            }).catch(() => {});
+            });
         };
         d.innerHTML = `<span style="color:${color};flex:0 0 auto;">${esc(label)}</span>`
             + `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(t.length > 120 ? t.slice(0, 120) + "…" : t)}</span>`;
