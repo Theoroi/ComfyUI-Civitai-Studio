@@ -6,10 +6,11 @@ from .civitai_studio import downloader  # noqa: E402
 from .civitai_studio import local_index  # noqa: E402
 from .civitai_studio import routes  # noqa: E402
 from .civitai_studio.nodes import NODE_CLASS_MAPPINGS as trigger_mappings  # noqa: E402
+from .civitai_studio.nodes import NODE_DISPLAY_NAME_MAPPINGS as display_mappings  # noqa: E402
 from .civitai_studio.version import VERSION  # noqa: E402
 
 NODE_CLASS_MAPPINGS = {**trigger_mappings}
-NODE_DISPLAY_NAME_MAPPINGS = {}
+NODE_DISPLAY_NAME_MAPPINGS = {**display_mappings}
 WEB_DIRECTORY = "./js"
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
 

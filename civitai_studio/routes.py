@@ -155,7 +155,7 @@ async def image_tags(request):
     trpc tag.getVotableTags 取,这里复刻同一条链路.
     """
     image_id = request.match_info["image_id"]
-    if not image_id.isdigit():
+    if not (image_id.isascii() and image_id.isdigit()):
         return _json_error("image id 必须是数字", 400)
     remain = _tag_fetch_paused()
     if remain > 0:
@@ -169,6 +169,13 @@ async def image_tags(request):
                 _tag_fetch_fail()
                 return _json_error(f"上游 HTTP {resp.status}", 502)
             data = await resp.json(content_type=None)
+        # 解析也在 try 内:畸形 trpc 响应同样走结构化 502 + 熔断计数
+        payload = (data.get("result") or {}).get("data") or {}
+        raw = payload.get("json")
+        if not isinstance(raw, list):
+            raw = (raw or {}).get("items") or []
+        tags = [{"id": t["id"], "name": t["name"]} for t in raw
+                if isinstance(t, dict) and isinstance(t.get("id"), int) and t.get("name")]
     except civitai_client.CivitaiError as e:
         _tag_fetch_fail()
         return _json_error(e, 502)
@@ -177,11 +184,6 @@ async def image_tags(request):
         return _json_error(civitai_client.net_error_message(e), 502)
     _TAG_FETCH_STATE["fails"] = 0
     _TAG_FETCH_STATE["paused_until"] = 0.0
-    payload = (data.get("result") or {}).get("data") or {}
-    raw = payload.get("json")
-    if not isinstance(raw, list):
-        raw = (raw or {}).get("items") or []
-    tags = [{"id": t.get("id"), "name": t.get("name")} for t in raw if t.get("id") and t.get("name")]
     mapping = _load_tag_mapping()
     for t in tags:
         mapping[t["name"]] = t["id"]
@@ -248,6 +250,7 @@ async def get_config(request):
         "verify_hash": cfg.get("verify_hash", True),
         "max_concurrent": cfg.get("max_concurrent", 1),
         "persist_description": cfg.get("persist_description", False),
+        "tag_autocomplete": cfg.get("tag_autocomplete", False),
     })
 
 
@@ -269,7 +272,7 @@ async def set_config(request):
             except (TypeError, ValueError):
                 return _json_error(f"{key} 必须是整数", 400)
             partial[key] = max(lo, min(hi, value))
-    for key in ("proxy_images", "verify_hash", "persist_description"):
+    for key in ("proxy_images", "verify_hash", "persist_description", "tag_autocomplete"):
         if key in body:
             partial[key] = bool(body.get(key))
     cfg = config.update(partial)
@@ -833,10 +836,12 @@ else:
     @_routes.get("/extensions/ComfyUI-Civitai-Studio/{filename}")
     async def serve_extension_js(request):
         filename = request.match_info["filename"]
-        if "/" in filename or "\\" in filename or ".." in filename:
+        if "/" in filename or "\\" in filename or ".." in filename or ":" in filename:
             return web.Response(status=404)
-        fp = os.path.join(os.path.dirname(__file__), "..", "js", filename)
-        if not os.path.isfile(fp):
+        js_root = os.path.realpath(os.path.join(os.path.dirname(__file__), "..", "js"))
+        fp = os.path.realpath(os.path.join(js_root, filename))
+        # realpath 归一化后必须仍落在 js 目录内(防盘符相对路径等穿越)
+        if not fp.startswith(js_root + os.sep) or not os.path.isfile(fp):
             return web.Response(status=404)
         with open(fp, "r", encoding="utf-8") as f:
             content = f.read()

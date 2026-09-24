@@ -2,18 +2,34 @@
 
 节点里发网络请求用独立事件循环 + 独立会话(不碰主循环的共享会话);
 代理仅支持 HTTP 形态(socks 需在设置里改用 HTTP 端口)。
+CivitaiImageSearch.run 为 async:网络耗时部分经 asyncio.to_thread 进入
+线程池执行,避免阻塞 ComfyUI 主事件循环。
 """
 
+import asyncio
 import io
 import json
+import re
 import urllib.parse
 import urllib.request
 
 import aiohttp
+import folder_paths
 
 from . import civitai_client, local_index
 
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
+
+def _load_tag_mapping():
+    """本地 tag 名称→ID 映射(与 routes 侧共用同一文件)."""
+    try:
+        path = folder_paths.get_user_directory() + "/civitai_studio/tag_mapping.json"
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
 
 _BASE_MODEL_OPTIONS = [
     "SD 1.4", "SD 1.5", "SD 1.5 LCM", "SD 2.0", "SD 2.1", "SD 2.1 Unclip",
@@ -92,7 +108,12 @@ class CivitaiImageSearch:
     FUNCTION = "run"
     CATEGORY = "Civitai Studio"
 
-    def run(self, base_model, nsfw, tag, period, sort, limit, index, image_id, thumbs_size, panel_h):
+    async def run(self, base_model, nsfw, tag, period, sort, limit, index, image_id, thumbs_size, panel_h):
+        # 网络与下载均为阻塞调用,丢进线程池避免冻结 ComfyUI 主事件循环
+        return await asyncio.to_thread(
+            self._run_sync, base_model, nsfw, tag, period, sort, limit, index, image_id)
+
+    def _run_sync(self, base_model, nsfw, tag, period, sort, limit, index, image_id):
         params = {
             "limit": str(min(100, max(10, int(limit)))),
             "nsfw": str(nsfw), "sort": sort, "period": period, "withMeta": "true",
@@ -100,10 +121,23 @@ class CivitaiImageSearch:
         if base_model and base_model != "(any)":
             params["baseModels"] = base_model
         if tag:
-            # 官方 /images 的 tags 只认逗号分隔的数字 Tag ID,文本名会被忽略
-            ids = ",".join(t.strip() for t in tag.replace("，", ",").split(",") if t.strip().isdigit())
+            # 官方 /images 的 tags 只认逗号分隔的数字 Tag ID;名称经本地映射换 ID
+            tokens = [t.strip() for t in tag.replace("，", ",").split(",") if t.strip()]
+            ids = [t for t in tokens if t.isdigit()]
+            names = [t for t in tokens if not t.isdigit()]
+            unresolved = []
+            if names:
+                mapping = _load_tag_mapping()
+                for t in names:
+                    if t in mapping:
+                        ids.append(str(mapping[t]))
+                    else:
+                        unresolved.append(t)
+            if unresolved:
+                raise RuntimeError("tag 仅支持数字 ID(名称需先经大图悬浮层抓取入库),未识别: "
+                                   + ", ".join(unresolved))
             if ids:
-                params["tags"] = ids
+                params["tags"] = ",".join(ids)
         # ID 优先:填入 image_id 时按 ID 精确取图(带 meta),忽略 index 与筛选
         chosen = None
         wanted_id = str(image_id or "").strip()
@@ -113,6 +147,8 @@ class CivitaiImageSearch:
             })
             items = page.get("items") or []
             chosen = items[0] if items else None
+            if chosen is None:
+                raise RuntimeError(f"图片 ID {wanted_id} 未找到(可能已删除、无权限或 ID 有误)")
         if chosen is None:
             data = _sync_get_json("/images", params)
             items = data.get("items") or []

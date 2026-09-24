@@ -134,6 +134,7 @@ const STR = {
         galleryTab: "🖼 画廊", gallerySortNewest: "最新发布", gallerySortReactions: "最多互动", gallerySortComments: "最多评论",
         galTag: "Tag", galBase: "底模", loadMore: "加载更多", useAsOutput: "选为输出", selectedAsOutput: "已选为输出",
         sfwLabel: "全年龄", nsfwLabel: "包含 NSFW", galTagId: "Tag ID 或名称(逗号分隔)",
+        noTags: "无标签", tagsPaused: "标签抓取已暂停({sec} 秒后恢复)", noSelectionHint: "未选择(点击缩略图选择)",
         tagAutoLabel: "Tag 输入自动补全(使用本地 tag 映射)", tagsLoading: "标签加载中…",
         galleryEmpty: "没有图片。", galleryAuthor: "作者",
     },
@@ -237,6 +238,7 @@ const STR = {
         galleryTab: "🖼 Gallery", gallerySortNewest: "Newest", gallerySortReactions: "Most reactions", gallerySortComments: "Most comments",
         galTag: "Tag", galBase: "Base model", loadMore: "Load more", useAsOutput: "Use as output", selectedAsOutput: "Selected as output",
         sfwLabel: "SFW only", nsfwLabel: "Include NSFW", galTagId: "Tag ID or name, comma-separated",
+        noTags: "No tags", tagsPaused: "Tag fetch paused ({sec}s), retrying later", noSelectionHint: "Nothing selected (click a thumbnail)",
         tagAutoLabel: "Autocomplete tag input (local mapping)", tagsLoading: "Loading tags…",
         galleryEmpty: "No images.", galleryAuthor: "Author",
     },
@@ -624,7 +626,8 @@ function makeCard(model) {
             el.addEventListener("load", show);
         }
         attachCoverErrorHandler(el, url);
-        el.src = imgSrc(url) + (isVideo ? "#t=0.001" : "");
+        // 卡片封面只需要小图:走 CDN 缩略变体,视频封面保持原链
+        el.src = imgSrc(isVideo ? url : cdnThumb(url)) + (isVideo ? "#t=0.001" : "");
         $(".cs-card-cover", card).prepend(el);
     }
     card.onclick = () => openBrowseFloat(model.id);
@@ -635,6 +638,7 @@ function makeCard(model) {
 function dragFloat(panel, head) {
     head.addEventListener("pointerdown", (e) => {
         if (e.target.closest("button,a")) return;
+        panel.dataset.csDragged = "1";
         const sx = e.clientX - panel.offsetLeft, sy = e.clientY - panel.offsetTop;
         const move = (ev) => {
             panel.style.left = Math.max(0, ev.clientX - sx) + "px";
@@ -700,8 +704,11 @@ function watchSidebarDock() {
 
 function repositionFloats() {
     const floats = [];
-    if (S.ui.float) floats.push([S.ui.float, 440]);
-    for (const m of S.ui.floatModals || []) floats.push([m.overlay, parseFloat(m.overlay.dataset.csW) || 480]);
+    if (S.ui.float && !S.ui.float.dataset.csDragged) floats.push([S.ui.float, 440]);
+    for (const m of S.ui.floatModals || []) {
+        if (m.overlay.dataset.csDragged) continue;
+        floats.push([m.overlay, parseFloat(m.overlay.dataset.csW) || 480]);
+    }
     for (const [panel, w] of floats) positionFloat(panel, w);
 }
 
@@ -875,7 +882,9 @@ async function saveImageToOutput(url, btn) {
     }
 }
 
+let csVersionSeq = 0;
 async function renderVersion(version, model, box) {
+    const seq = ++csVersionSeq; // 乱序保护:慢响应不得覆盖新版本内容
     const body = box ? $("#cs-version-body", box) : null;
     if (!body || !version) return;
     const triggers = version.trainedWords || [];
@@ -889,6 +898,7 @@ async function renderVersion(version, model, box) {
             }
         }
     } catch (e) { /* 拉取失败用现有数据 */ }
+    if (seq !== csVersionSeq) return; // 期间用户已切到其它版本
     body.innerHTML = `
         ${triggers.length ? `
         <div class="cs-section">
@@ -1451,7 +1461,7 @@ function associateDialog(m) {
         if (firstImg) {
             thumb.style.display = "";
             thumb.dataset.direct = firstImg.url;
-            thumb.src = imgSrc(firstImg.url);
+            thumb.src = imgSrc(cdnThumb(firstImg.url));
         } else {
             thumb.style.display = "none";
         }
@@ -1653,10 +1663,6 @@ function renderGallery(reset) {
     if (!st.items.length && !st.loading) {
         grid.innerHTML = `<div class="cs-empty">${esc(t("galleryEmpty"))}</div>`;
     }
-}
-
-async function fetchGalleryPage(reset) {
-    await fetchGallery(reset);
 }
 
 function buildGalleryView(root) {
@@ -2187,8 +2193,6 @@ function injectStyles() {
 .cs-dl-fill.error { background:#e2543f; }
 .cs-dl-sub { display:flex; justify-content:space-between; gap:6px; font-size:11px; }
 .cs-status-done { color:#4caf50; } .cs-status-error { color:#e2543f; } .cs-status-cancelled { color:var(--desc-text-color,#999); }
-.cs-modal { position:fixed; inset:0; background:rgba(0,0,0,.7); z-index:99999; display:flex; align-items:center; justify-content:center; backdrop-filter:blur(2px); }
-.cs-modal-box { background:var(--comfy-menu-bg,#2a2a2a); border:1px solid var(--border-color,#444); border-radius:10px; padding:16px; width:min(92vw, 520px); max-height:88vh; overflow-y:auto; box-shadow:0 10px 40px rgba(0,0,0,.5); }
 .cs-modal-title { margin:0 0 10px; font-size:15px; }
 .cs-modal-msg { font-size:12px; color:var(--desc-text-color,#999); white-space:pre-line; }
 .cs-modal-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:14px; }
@@ -2244,7 +2248,7 @@ function renderSelInfo(node) {
         ? (node.csResults || []).find((it) => String(it.id) === wanted) || null
         : null;
     if (!sel) {
-        el.innerHTML = `<span style="color:#888;font-size:11px;">${esc(S.lang === "zh" ? "未选择(点击缩略图选择)" : "Nothing selected (click a thumbnail)")}</span>`;
+        el.innerHTML = `<span style="color:#888;font-size:11px;">${esc(t("noSelectionHint"))}</span>`;
         return;
     }
     const meta = sel.meta || {};
@@ -2300,9 +2304,9 @@ function attachIdAndTags(box, image) {
     apiGet(`/civitai_studio/image_tags/${encodeURIComponent(id)}`).then((d) => {
         const tb = $("[data-tags-box]", hint);
         if (!tb) return;
-        if (d.paused) { tb.textContent = S.lang === "zh" ? `标签抓取已暂停(${d.retryAfterSec}s 后恢复)` : `Tag fetch paused (${d.retryAfterSec}s)`; return; }
+        if (d.paused) { tb.textContent = t("tagsPaused", { sec: d.retryAfterSec }); return; }
         const tags = d.tags || [];
-        if (!tags.length) { tb.textContent = S.lang === "zh" ? "无标签" : "No tags"; return; }
+        if (!tags.length) { tb.textContent = t("noTags"); return; }
         tb.innerHTML = `<span style="color:#999">${esc(S.lang === "zh" ? "标签(点击复制 ID):" : "Tags (click to copy ID):")}</span> `
             + tags.map((t) => `<span class="cs-trigger" style="cursor:pointer" data-tagid="${esc(String(t.id))}" title="ID ${esc(String(t.id))}">#${esc(t.name)}</span>`).join(" ");
         $$("[data-tagid]", tb).forEach((el) => { el.onclick = (ev) => copyText(el.dataset.tagid, ev.target); });
@@ -2313,7 +2317,7 @@ function attachIdAndTags(box, image) {
 function mediaViewerHtml(item) {
     const src = esc(item.url || "");
     if (isVideoItem(item)) {
-        return `<video src="${src}" controls autoplay loop muted playsinline`
+        return `<video src="${esc(imgSrc(item.url || ""))}" controls autoplay loop muted playsinline`
             + ` style="max-width:100%;max-height:64vh;border-radius:8px;display:block;margin:0 auto;background:#000"></video>`;
     }
     return `<img src="${esc(imgSrc(item.url || ""))}" data-direct="${src}"`
@@ -2364,7 +2368,6 @@ function renderNodeThumbs(node) {
     items.forEach((it, i) => {
         const cell = document.createElement("div");
         cell.className = "cs-thumb";
-        cell.title = "index " + i;
         // 固定 4 列等宽:末行不足时尺寸不变(flex-grow 会让末行撑大)
         cell.style.cssText = `position:relative;flex:0 0 calc((100% - ${(cols - 1) * 6}px)/${cols});`
             + `max-width:calc((100% - ${(cols - 1) * 6}px)/${cols});`
@@ -2377,7 +2380,7 @@ function renderNodeThumbs(node) {
             v.loop = true;
             v.playsInline = true;
             v.preload = "metadata";
-            v.src = it.url || "";
+            v.src = imgSrc(it.url || "") + "#t=0.001";
             cell.appendChild(v);
         } else {
             const im = document.createElement("img");
@@ -2409,7 +2412,7 @@ function renderNodeThumbs(node) {
         const more = document.createElement("button");
         more.className = "cs-thumb-more cs-btn cs-btn-mini";
         more.style.cssText = "width:100%;margin-top:2px;";
-        more.textContent = S.lang === "zh" ? "加载更多" : "Load more";
+        more.textContent = t("loadMore");
         more.onclick = () => node.csLoadMore?.();
         strip.appendChild(more);
     }
@@ -2427,15 +2430,15 @@ function showNodeImageFloat(node, item) {
         ${kvs.length ? `<div class="cs-kv-grid" style="margin-top:10px">${kvs.map(([k, v]) => `<div><b>${esc(k)}</b><span>${esc(String(v))}</span></div>`).join("")}</div>` : ""}
         ${meta.prompt ? `<div class="cs-form-hint" style="margin-top:8px;max-height:120px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;">${esc(String(meta.prompt))}</div>` : ""}
         <div class="cs-form-hint" style="margin-top:8px">${esc(S.lang === "zh" ? "ID(点击复制):" : "ID (click to copy):")} <span class="cs-trigger" style="cursor:pointer" data-copy-id="${esc(String(item.id ?? ""))}">${esc(String(item.id ?? ""))}</span> · <span data-tags-box>${esc(t("tagsLoading"))}</span></div>
-        <div class="cs-modal-actions"><button class="cs-btn cs-btn-primary" data-use>${esc(S.lang === "zh" ? "选为输出" : "Use as output")}</button></div>`);
+        <div class="cs-modal-actions"><button class="cs-btn cs-btn-primary" data-use>${esc(t("useAsOutput"))}</button></div>`);
     $("[data-copy-id]", m.box).onclick = (ev) => copyText(String(item.id ?? ""), ev.target);
     // 拉取分类标签(网页端 trpc),点击标签复制其 ID
     apiGet(`/civitai_studio/image_tags/${encodeURIComponent(String(item.id))}`).then((d) => {
         const box = $("[data-tags-box]", m.box);
         if (!box) return;
-        if (d.paused) { box.textContent = S.lang === "zh" ? `标签抓取已暂停(${d.retryAfterSec}s 后恢复)` : `Tag fetch paused (${d.retryAfterSec}s)`; return; }
+        if (d.paused) { box.textContent = t("tagsPaused", { sec: d.retryAfterSec }); return; }
         const tags = d.tags || [];
-        if (!tags.length) { box.textContent = S.lang === "zh" ? "无标签" : "No tags"; return; }
+        if (!tags.length) { box.textContent = t("noTags"); return; }
         box.innerHTML = `<span style="color:#999">${esc(S.lang === "zh" ? "标签(点击复制 ID):" : "Tags (click to copy ID):")}</span> `
             + tags.map((t) => `<span class="cs-trigger" style="cursor:pointer" data-tagid="${esc(String(t.id))}" title="ID ${esc(String(t.id))}">#${esc(t.name)}</span>`).join(" ");
         $$("[data-tagid]", box).forEach((el) => {
@@ -2450,7 +2453,7 @@ function showNodeImageFloat(node, item) {
         if (idw) idw.value = String(item.id ?? "");
         m.close();
         renderNodeThumbs(node);
-        toast("success", S.lang === "zh" ? "已选为输出" : "Selected as output", "index " + Math.max(0, i));
+        toast("success", t("selectedAsOutput"), "index " + Math.max(0, i));
     };
 }
 
@@ -2519,7 +2522,7 @@ app.registerExtension({
                 const infoEl = document.createElement("div");
                 infoEl.style.cssText = "width:100%;display:flex;gap:8px;align-items:flex-start;"
                     + "background:rgba(255,255,255,.04);border:1px solid #3a3a40;border-radius:6px;padding:6px;";
-                infoEl.textContent = S.lang === "zh" ? "未选择(点击缩略图选择)" : "Nothing selected (click a thumbnail)";
+                infoEl.textContent = t("noSelectionHint");
                 node.csInfo = infoEl;
                 this.addDOMWidget("cs_info", "cs_info", infoEl);
                 const infoW = node.widgets.find((w2) => w2.name === "cs_info");
@@ -2581,6 +2584,13 @@ app.registerExtension({
                     const ss = String(widget("thumbs_size")?.value || "medium") + "|" + String(widget("panel_h")?.value || "");
                     if (ss !== node.csLastSizeSig) { node.csLastSizeSig = ss; renderNodeThumbs(node); }
                 }, 700);
+                // 节点删除时清理定时器与全局 wheel 监听,避免僵尸轮询/监听泄漏
+                const origOnRemoved = this.onRemoved;
+                this.onRemoved = function () {
+                    clearInterval(node.csPoll);
+                    if (node.csWheelGuard) window.removeEventListener("wheel", node.csWheelGuard, { capture: true });
+                    origOnRemoved?.apply(this, arguments);
+                };
                 return r;
             };
         }
@@ -2646,7 +2656,7 @@ app.registerExtension({
                             if (first?.url) {
                                 imgEl.dataset.retried = "";
                                 imgEl.style.display = "block";
-                                imgEl.src = imgSrc(first.url);
+                                imgEl.src = imgSrc(cdnThumb(first.url));
                             }
                         })
                         .catch(() => {});

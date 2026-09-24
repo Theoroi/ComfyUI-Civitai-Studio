@@ -13,12 +13,15 @@ ComfyUI 侧边栏插件:Civitai **在线浏览器 + 本地模型管理器 + 下�
 - **🌐 浏览**:搜索 Civitai 模型(类型 / 底模 / 排序 / 时间范围 / NSFW 分级过滤),无限滚动;卡片标记「已安装」;详情页含版本切换、触发词、文件列表、预览图画廊,点预览图可看生成参数(提示词 / 采样器 / Seed / 资源列表,一键复制)。
 - **⬇ 下载**:选目标目录(自动按模型类型映射到 checkpoints / loras / vae / controlnet 等注册目录)+ 子文件夹 + 文件名;串行/并发队列、实时速度、**断点续传**、下载后 **SHA256 校验**(可关),完成后自动写 `<模型文件名>.civitai.json` 元数据(含 version_id / 触发词 / hash)。
 - **📁 本地库**:按目录分类扫描所有本地模型,搜索、定位(打开资源管理器)、删除(带确认)、**检查更新**(基于 sidecar 里的 version_id 与 Civitai 最新版对比,不用哈希大文件),新版本一键回填同目录下载;**重命名**(同步 sidecar);**展开详情**(封面/元数据/触发词/说明/文件列表/Model ID 与 Version ID 复制/刷新元数据);**手动关联**未关联模型(按文件名智能搜索或粘贴链接,点选版本确认)。
-- **⚙ 设置**:API Key、HTTP 代理、API 站点、下载并发数、图片中转开关、SHA256 校验开关、**说明落盘开关(默认关)**(NSFW 档位在浏览页过滤器选择,自动记住)。
+- **⚙ 设置**:API Key、HTTP 代理、API 站点、下载并发数、图片中转开关、SHA256 校验开关、说明落盘开关(默认关)、Tag 自动补全开关(默认关)。
+- **🧩 工作流节点**:Civitai 图片搜索(缩略图点选,输出 positive / negative / lora_string / trigger_words / base_model / image)、触发词、LoRA 配方、显示文本;最小验证工作流见 `examples/image_search_verify.json`,拖入画布即可验证输出。
+- **🖼 画廊**:全站图片流,按 底模 / NSFW / Tag / 时间 / 排序 筛选;大图悬浮层含生成参数与分类标签(点击复制 ID)。
+- **🏷 Tag 工具**:图片页分类标签抓取(id+名称),自动累积到本地 `tag_mapping.json` 供筛选与联想。
 
 ## 兼容性
 
 - 需要 ComfyUI 前端支持 `extensionManager.registerSidebarTab`(2024-07 之后的前端均可;实测 **ComfyUI 0.37.0 / 前端 1.52.7**)。
-- 纯 UI 插件,无自定义节点;Python 依赖 `aiohttp`(ComfyUI 自带)+ `aiohttp-socks`(发布包默认安装;代码未装该库也能运行,仅 SOCKS 代理不可用并会提示)。
+- 内置 4 个自定义节点(图片搜索 / 触发词 / LoRA 配方 / 显示文本,详见 `examples/image_search_verify.json`);Python 依赖 `aiohttp`(ComfyUI 自带)+ `aiohttp-socks`(发布包默认安装;代码未装该库也能运行,仅 SOCKS 代理不可用并会提示)。
 
 ## 安装
 
