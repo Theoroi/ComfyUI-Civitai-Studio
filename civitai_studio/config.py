@@ -21,7 +21,7 @@ DEFAULTS = {
     "verify_hash": True,    # 下载完成后校验 SHA256
     "max_concurrent": 1,    # 并发下载数 1-4
     "persist_description": False,  # 说明/标签/封面落盘到 .civitai.json(默认关)
-    "tag_autocomplete": False,  # tag 输入按本地映射自动补全(默认关)
+    "tag_scrape": True,     # 是否读取非公开 API 抓取图片分类标签
 }
 
 

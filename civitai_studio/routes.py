@@ -192,6 +192,28 @@ async def image_tags(request):
     return web.json_response({"imageId": int(image_id), "tags": tags, "mappingCount": len(mapping)})
 
 
+@_post("/civitai_studio/remember_image/{image_id}")
+async def remember_image(request):
+    """记录最近点选的图片 ID(供节点 image_id 下拉与精确取图)."""
+    image_id = request.match_info["image_id"]
+    if not (image_id.isascii() and image_id.isdigit()):
+        return _json_error("image id 必须是数字", 400)
+    path = os.path.join(config._CONFIG_DIR, "recent_image_ids.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            ids = [str(x) for x in json.load(f)]
+    except Exception:
+        ids = []
+    ids = [image_id] + [x for x in ids if x != image_id]
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(ids[:50], f)
+    except Exception as e:
+        print(f"[Civitai-Studio] 最近图片 ID 写入失败: {e}")
+    return web.json_response({"ok": True, "ids": ids[:50]})
+
+
 @_get("/civitai_studio/tag_mapping")
 async def tag_mapping_list(request):
     """本地 tag 名称→ID 映射(供输入自动补全)."""
@@ -250,7 +272,7 @@ async def get_config(request):
         "verify_hash": cfg.get("verify_hash", True),
         "max_concurrent": cfg.get("max_concurrent", 1),
         "persist_description": cfg.get("persist_description", False),
-        "tag_autocomplete": cfg.get("tag_autocomplete", False),
+        "tag_scrape": cfg.get("tag_scrape", True),
     })
 
 
@@ -272,7 +294,7 @@ async def set_config(request):
             except (TypeError, ValueError):
                 return _json_error(f"{key} 必须是整数", 400)
             partial[key] = max(lo, min(hi, value))
-    for key in ("proxy_images", "verify_hash", "persist_description", "tag_autocomplete"):
+    for key in ("proxy_images", "verify_hash", "persist_description", "tag_scrape"):
         if key in body:
             partial[key] = bool(body.get(key))
     cfg = config.update(partial)

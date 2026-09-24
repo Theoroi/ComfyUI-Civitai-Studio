@@ -21,6 +21,17 @@ from . import civitai_client, local_index
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
 
+def _recent_image_ids():
+    """最近点选/查询过的图片 ID(新→旧),供 image_id 下拉列出."""
+    try:
+        path = folder_paths.get_user_directory() + "/civitai_studio/recent_image_ids.json"
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return [str(x) for x in data] if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
 def _load_tag_mapping():
     """本地 tag 名称→ID 映射(与 routes 侧共用同一文件)."""
     try:
@@ -95,9 +106,12 @@ class CivitaiImageSearch:
             "sort": (["Newest", "Most Reactions", "Most Comments"],),
             "limit": ("INT", {"default": 50, "min": 10, "max": 100, "step": 10}),
             "index": ("INT", {"default": 0, "min": 0, "max": 199}),
-            # 填入 Civitai 图片数字 ID 后,优先按 ID 精确取图与参数(忽略 index)
-            "image_id": ("STRING", {"default": "", "multiline": False,
-                                    "tooltip": "填入 Civitai 图片数字 ID:优先按此 ID 精确取图与生成参数(忽略 index)"}),
+            # COMBO:首项 (index) = 按 index 取图;其余为最近点选/查询过的图片 ID(选之即精确取图)
+            "image_id": (["(index)"] + _recent_image_ids(),
+                         {"tooltip": "选最近浏览的图片 ID 则精确取该图与参数;选 (index) 按下方序号取图"}),
+            # 面板布局参数:仅前端渲染使用
+            "thumbs_size": (["medium", "small", "large"],),
+            "panel_h": ("INT", {"default": 420, "min": 160, "max": 1600, "step": 20}),
         },
         # 面板布局参数:仅前端渲染使用,optional 保证旧 API 调用不因缺参被拒
         "optional": {

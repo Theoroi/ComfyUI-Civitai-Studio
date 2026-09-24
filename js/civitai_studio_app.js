@@ -135,7 +135,8 @@ const STR = {
         galTag: "Tag", galBase: "底模", loadMore: "加载更多", useAsOutput: "选为输出", selectedAsOutput: "已选为输出",
         sfwLabel: "全年龄", nsfwLabel: "包含 NSFW", galTagId: "Tag ID 或名称(逗号分隔)",
         noTags: "无标签", tagsPaused: "标签抓取已暂停({sec} 秒后恢复)", noSelectionHint: "未选择(点击缩略图选择)",
-        tagAutoLabel: "Tag 输入自动补全(使用本地 tag 映射)", tagsLoading: "标签加载中…",
+        tagScrapeLabel: "读取非公开 API 获取图片分类标签", tagsLoading: "标签加载中…",
+        tagsOff: "标签抓取已在设置中关闭", capHint: "已达显示上限(100)",
         galleryEmpty: "没有图片。", galleryAuthor: "作者",
     },
     en: {
@@ -239,7 +240,7 @@ const STR = {
         galTag: "Tag", galBase: "Base model", loadMore: "Load more", useAsOutput: "Use as output", selectedAsOutput: "Selected as output",
         sfwLabel: "SFW only", nsfwLabel: "Include NSFW", galTagId: "Tag ID or name, comma-separated",
         noTags: "No tags", tagsPaused: "Tag fetch paused ({sec}s), retrying later", noSelectionHint: "Nothing selected (click a thumbnail)",
-        tagAutoLabel: "Autocomplete tag input (local mapping)", tagsLoading: "Loading tags…",
+        tagScrapeLabel: "Fetch image category tags (unofficial API)", tagsLoading: "Loading tags…", tagsOff: "Tag scraping disabled in settings", capHint: "Display cap reached (100)",
         galleryEmpty: "No images.", galleryAuthor: "Author",
     },
 };
@@ -1703,8 +1704,8 @@ function buildGalleryView(root) {
         clearTimeout(debBase);
         debBase = setTimeout(() => { st.base = e.target.value.trim(); fetchGallery(true); }, 400);
     });
-    // tag 自动补全(设置开启时):拉本地映射填 datalist
-    if (S.cfg.tag_autocomplete) {
+    // tag 自动补全:拉本地映射填 datalist(随映射文件增长)
+    if (true) {
         apiGet("/civitai_studio/tag_mapping").then((d) => {
             const tags = d.tags || [];
             if (!tags.length) return;
@@ -1839,7 +1840,7 @@ async function openSettings() {
             <label class="cs-check"><input id="cs-set-pimg" type="checkbox" ${cfg.proxy_images ? "checked" : ""}/> ${esc(t("pimgLabel"))}</label>
             <label class="cs-check"><input id="cs-set-hash" type="checkbox" ${cfg.verify_hash ? "checked" : ""}/> ${esc(t("hashLabel"))}</label>
             <label class="cs-check"><input id="cs-set-pdesc" type="checkbox" ${cfg.persist_description ? "checked" : ""}/> ${esc(t("pdescLabel"))}</label>
-            <label class="cs-check"><input id="cs-set-tauto" type="checkbox" ${cfg.tag_autocomplete ? "checked" : ""}/> ${esc(t("tagAutoLabel"))}</label>
+            <label class="cs-check"><input id="cs-set-tscrape" type="checkbox" ${cfg.tag_scrape !== false ? "checked" : ""}/> ${esc(t("tagScrapeLabel"))}</label>
             <div class="cs-modal-msg">${esc(t("settingsMsg"))}</div>
             <div class="cs-modal-actions">
                 <button class="cs-btn" data-act="cancel">${esc(t("cancel"))}</button>
@@ -1869,7 +1870,7 @@ async function openSettings() {
             proxy_images: $("#cs-set-pimg", m.box).checked,
             verify_hash: $("#cs-set-hash", m.box).checked,
             persist_description: $("#cs-set-pdesc", m.box).checked,
-            tag_autocomplete: $("#cs-set-tauto", m.box).checked,
+            tag_scrape: $("#cs-set-tscrape", m.box).checked,
         };
         const key = $("#cs-set-key", m.box).value.trim();
         if (key) body.api_key = key;
@@ -1877,7 +1878,7 @@ async function openSettings() {
             await apiPost("/civitai_studio/config", body);
             S.cfg = { ...S.cfg, ...body };
             // 自动补全刚开启:立即预热映射与 datalist(否则要重开面板才生效)
-            if (S.cfg.tag_autocomplete && !S.tagMap) {
+            if (!S.tagMap) {
                 apiGet("/civitai_studio/tag_mapping").then((d) => {
                     const tags = d.tags || [];
                     S.tagMap = {};
@@ -2312,6 +2313,11 @@ function attachIdAndTags(box, image) {
         + ` · <span data-tags-box>${esc(t("tagsLoading"))}</span>`;
     box.insertBefore(hint, box.querySelector(".cs-kv-grid"));
     $("[data-copy-id]", hint).onclick = (ev) => copyText(id, ev.target);
+    if (S.cfg.tag_scrape === false) {
+        const tb = $("[data-tags-box]", hint);
+        if (tb) tb.textContent = t("tagsOff");
+        return;
+    }
     apiGet(`/civitai_studio/image_tags/${encodeURIComponent(id)}`).then((d) => {
         const tb = $("[data-tags-box]", hint);
         if (!tb) return;
@@ -2404,28 +2410,44 @@ function renderNodeThumbs(node) {
         if (idw?.value && String(idw.value) === String(it.id)) cell.style.borderColor = "#4a90e2";
         // 缺少生成参数的图:右上角小角标提示(缺什么列在 title 里)
         const meta = it.meta || {};
-        const miss = [];
-        if (!meta.prompt) miss.push(S.lang === "zh" ? "提示词" : "prompt");
-        if (!(meta.resources || []).some((r) => (r.type || "lora").toLowerCase() === "lora")) miss.push(S.lang === "zh" ? "lora" : "lora");
-        if (!(meta["Model hash"] || meta["Model"])) miss.push(S.lang === "zh" ? "底模" : "model");
-        if (miss.length) {
+        // 纵列三色感叹号:prompt(红) lora(黄) model(绿),缺哪个亮哪个
+        const missMarks = [];
+        if (!meta.prompt) missMarks.push("#e2836b");
+        if (!(meta.resources || []).some((r) => (r.type || "lora").toLowerCase() === "lora")) missMarks.push("#e2b96b");
+        if (!(meta["Model hash"] || meta["Model"])) missMarks.push("#8fd4a0");
+        if (missMarks.length) {
             const b = document.createElement("div");
-            b.style.cssText = "position:absolute;top:3px;right:3px;width:15px;height:15px;border-radius:50%;"
-                + "background:rgba(0,0,0,.55);color:#ffb74d;font-size:10px;display:flex;align-items:center;justify-content:center;";
-            b.textContent = "!";
-            b.title = (S.lang === "zh" ? "缺少: " : "missing: ") + miss.join(", ");
+            b.style.cssText = "position:absolute;top:3px;right:3px;display:flex;flex-direction:column;gap:2px;";
+            for (const color of missMarks) {
+                const dot = document.createElement("div");
+                dot.style.cssText = `width:12px;height:12px;border-radius:50%;background:rgba(0,0,0,.55);`
+                    + `color:${color};font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center;`
+                    + `border:1px solid ${color}66;`;
+                dot.textContent = "!";
+                b.appendChild(dot);
+            }
+            b.title = S.lang === "zh" ? "缺少生成参数(红:提示词 黄:Lora 绿:底模)" : "Missing (red: prompt, yellow: lora, green: model)";
             cell.appendChild(b);
         }
         cell.onclick = () => showNodeImageFloat(node, it);
         strip.appendChild(cell);
     });
     if (!st.loading && st.next && st.next.length) {
-        const more = document.createElement("button");
-        more.className = "cs-thumb-more cs-btn cs-btn-mini";
-        more.style.cssText = "width:100%;margin-top:2px;";
-        more.textContent = t("loadMore");
-        more.onclick = () => node.csLoadMore?.();
-        strip.appendChild(more);
+        if (items.length >= 100) {
+            // 达到显示上限:提示而非继续追加
+            const cap = document.createElement("div");
+            cap.className = "cs-thumb-more cs-btn cs-btn-mini";
+            cap.style.cssText = "width:100%;margin-top:2px;opacity:.7;cursor:default;";
+            cap.textContent = t("capHint");
+            strip.appendChild(cap);
+        } else {
+            const more = document.createElement("button");
+            more.className = "cs-thumb-more cs-btn cs-btn-mini";
+            more.style.cssText = "width:100%;margin-top:2px;";
+            more.textContent = t("loadMore");
+            more.onclick = () => node.csLoadMore?.();
+            strip.appendChild(more);
+        }
     }
     strip.scrollTop = keepScroll;
     nodeThumbsResize(node);
@@ -2444,6 +2466,11 @@ function showNodeImageFloat(node, item) {
         <div class="cs-modal-actions"><button class="cs-btn cs-btn-primary" data-use>${esc(t("useAsOutput"))}</button></div>`);
     $("[data-copy-id]", m.box).onclick = (ev) => copyText(String(item.id ?? ""), ev.target);
     // 拉取分类标签(网页端 trpc),点击标签复制其 ID
+    if (S.cfg.tag_scrape === false) {
+        const tb2 = $("[data-tags-box]", m.box);
+        if (tb2) tb2.textContent = t("tagsOff");
+        return;
+    }
     apiGet(`/civitai_studio/image_tags/${encodeURIComponent(String(item.id))}`).then((d) => {
         const box = $("[data-tags-box]", m.box);
         if (!box) return;
@@ -2461,7 +2488,12 @@ function showNodeImageFloat(node, item) {
         const idw = (node.widgets || []).find((w) => w.name === "image_id");
         const i = (node.csResults || []).indexOf(item);
         if (iw && i >= 0) iw.value = i;
-        if (idw) idw.value = String(item.id ?? "");
+        if (idw) {
+            idw.value = String(item.id ?? "");
+            // 下拉选项即时补入该 ID(后端 remember_image 已持久化)
+            const opts = idw.options?.values;
+            if (Array.isArray(opts) && !opts.includes(idw.value)) opts.unshift(idw.value);
+        }
         m.close();
         renderNodeThumbs(node);
         toast("success", t("selectedAsOutput"), "index " + Math.max(0, i));
