@@ -161,16 +161,12 @@ async def image_tags(request):
     if remain > 0:
         return web.json_response({"paused": True, "retryAfterSec": remain, "tags": []})
     inp = urllib.parse.quote(json.dumps({"json": {"id": int(image_id), "type": "image"}}))
-    # 跟随 API 站点配置(镜像 civitai.red / 官方):与搜索、画廊同源,不再硬编码官方域
+    # 跟随 API 站点配置(镜像 civitai.red / 官方):与搜索、画廊同源,不再硬编码官方域。
+    # trpc 端点需鉴权:匿名一律 401(Civitai 2026-09 收紧);Bearer 由 _headers_for 全局下发
     url = civitai_client.base_url().rstrip("/") + "/api/trpc/tag.getVotableTags?input=" + inp
-    # trpc 端点需要鉴权:匿名一律 401(Civitai 2026-09 收紧,官方与镜像同行为);
-    # 镜像的 /api/v1 会拒 Bearer(全局规则仍不给镜像发 key),但 trpc 带 Bearer 实测放行,
-    # 故仅在本路由显式下发 key
-    key = (config.load().get("api_key") or "").strip()
-    extra = {"Authorization": "Bearer " + key} if key else None
     try:
         timeout = aiohttp.ClientTimeout(total=30, connect=15)
-        async with await civitai_client.open_stream(url, extra_headers=extra, timeout=timeout, allow_redirects=True) as resp:
+        async with await civitai_client.open_stream(url, timeout=timeout, allow_redirects=True) as resp:
             if resp.status != 200:
                 _tag_fetch_fail()
                 # Civitai 2026-09 起对该 trpc 端点关闭匿名访问(HTTP 401),必须带 API Key;

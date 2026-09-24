@@ -2,8 +2,9 @@
 
 设计要点(评审 R1 后确定):
 - API 根路径 = base + /api/v1,所有 get_json 的 path 相对它。
-- API Key 只对官方域(civitai.com/civitai.green)下发,且按"实际请求 URL 的主机"
-  逐请求决定,镜像站(civitai.red 等)带 Bearer 会被拒成 403 网页(实测)。
+- API Key 按"实际请求 URL 的主机"逐请求决定,下发给 civitai 系域
+  (civitai.com / civitai.green / 镜像 civitai.red — 2026-09 复测三域接受同样的
+   Bearer;早期"镜像带 Bearer 被拒 403"的记录系其它原因,已更正)。
 - session 换代采用"延迟退役":旧 session 不就地 close,避免切断在途下载/图片流。
 - open_stream 默认不跟随重定向;需要跟随的调用方显式开启(image 代理逐跳校验白名单)。
 """
@@ -21,8 +22,8 @@ from . import config
 # API 与下载端点齐全,且不被 Cloudflare 盯;civitai.com 对代理出口 IP 经常弹网页挑战
 DEFAULT_BASE = "https://civitai.com"
 
-# 只有官方域才认识 civitai.com 签发的 API Key
-_OFFICIAL_HOSTS = ("civitai.com", "civitai.green")
+# 接受 civitai.com 签发 API Key(Bearer)的主机;镜像 civitai.red 同样接受(2026-09 复测)
+_KEY_HOSTS = ("civitai.com", "civitai.green", "civitai.red")
 # 图片代理允许的主机白名单(精确域或子域)
 _IMAGE_HOSTS = ("civitai.com", "civitai.red", "civitai.green", "civitai.work")
 
@@ -103,8 +104,9 @@ def _host_match(host, domains):
     return any(host == d or host.endswith("." + d) for d in domains)
 
 
-def is_official_host(url):
-    return _host_match(host_of(url), _OFFICIAL_HOSTS)
+def is_key_host(url):
+    """该主机是否下发 Bearer API Key(civitai 系域,含镜像;见 _KEY_HOSTS)."""
+    return _host_match(host_of(url), _KEY_HOSTS)
 
 
 def host_allowed_image(url):
@@ -138,10 +140,10 @@ def net_error_message(e):
 
 def _headers_for(url, extra=None):
     # 只发浏览器 UA(与 docs/civitai/civitai_pull.py 实测一致),勿加自定义 Accept 头。
-    # Bearer 按"本次请求目标主机"决定,且仅官方域下发。
+    # Bearer 按"本次请求目标主机"决定,civitai 系域(含镜像 red)均下发。
     headers = {"User-Agent": _UA}
     key = (config.load().get("api_key") or "").strip()
-    if key and is_official_host(url):
+    if key and is_key_host(url):
         headers["Authorization"] = "Bearer " + key
     if extra:
         headers.update(extra)
@@ -320,7 +322,7 @@ async def get_json(path, params=None, timeout=None):
                             msg = err.get("message")
                     hint = ""
                     if resp.status in (401, 403) and (config.load().get("api_key") or "").strip():
-                        hint = "(已配置 API Key:官方站点报 401/403 通常是 Key 失效;镜像站不下发 Key)"
+                        hint = "(已配置 API Key:报 401/403 通常是 Key 失效或该资源需要登录/Early Access)"
                     raise CivitaiError(f"HTTP {resp.status}: {msg or str(data)[:200]}{hint}")
                 try:
                     data = await resp.json(content_type=None)

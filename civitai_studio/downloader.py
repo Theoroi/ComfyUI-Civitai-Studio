@@ -241,16 +241,16 @@ class _DownloadStatusError(Exception):
 
 
 async def _download_candidates(url):
-    """下载地址候选:原 URL → 官方域;token 候选仅对官方域追加(镜像站不下发 Key)."""
+    """下载地址候选:原 URL → 官方域;token 候选对接受 Key 的 civitai 系域追加."""
     key = (config.load().get("api_key") or "").strip()
     out = [url]
     com = re.sub(r"(?<=://)[^/]+", "civitai.com", url, count=1)
     if com != url:
         out.append(com)
     if key:
-        if civitai_client.is_official_host(url):
+        if civitai_client.is_key_host(url):
             out.append(url + ("&" if "?" in url else "?") + "token=" + urllib.parse.quote(key))
-        if com != url and civitai_client.is_official_host(com):
+        if com != url and civitai_client.is_key_host(com):
             out.append(com + ("&" if "?" in com else "?") + "token=" + urllib.parse.quote(key))
     seen, dedup = set(), []
     for c in out:
