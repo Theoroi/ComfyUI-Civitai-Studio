@@ -923,6 +923,14 @@ async function renderVersion(version, model, box) {
     if (!body || !version) return;
     const triggers = version.trainedWords || [];
     let images = version.images || [];
+    // /models、/model-versions 端点的 images 不含图片 id("选为输出"需要 id):
+    // 优先改从 /images?modelVersionId= 拉取(items 带 id 与生成参数),失败回退现有数据
+    try {
+        if (version.id) {
+            const fd = await apiGet(`/civitai_studio/images?modelVersionId=${encodeURIComponent(String(version.id))}&limit=30`);
+            if (Array.isArray(fd.items) && fd.items.length) images = fd.items;
+        }
+    } catch (e) { /* 拉取失败回退现有数据 */ }
     // 镜像站的列表响应不含图片 meta:从 /version/{id} 拉全量(含生成参数)
     try {
         if (version.id && !images.some((i) => i.meta)) {
@@ -1080,6 +1088,8 @@ function selectAsOutput(item, preferred) {
         if (Array.isArray(opts) && !opts.includes(idw.value)) opts.unshift(idw.value);
         apiPost(`/civitai_studio/remember_image/${encodeURIComponent(idw.value)}`).catch(() => {});
     }
+    // 缓存选中图:它可能不在该节点的搜索结果里(csResults),信息面板刷新时兜底展示
+    node.csInfoCache = item;
     renderNodeThumbs(node);
     try { app.canvas.setDirty(true, true); } catch (e) {}
     toast("success", t("selectedAsOutput"), "image_id " + (item.id ?? ""));
@@ -2363,6 +2373,7 @@ function injectStyles() {
 .cs-gal-filters { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:8px; }
 .cs-gal-filters > * { width:100%; min-width:0; }
 .cs-media-view img, .cs-media-view video { max-width:100%; max-height:64vh; border-radius:8px; display:block; margin:0 auto; background:rgba(0,0,0,.35); }
+.cs-media-view video { height:64vh; object-fit:contain; }
 .cs-thumb video { pointer-events:none; }
 `;
     document.head.appendChild(style);
@@ -2433,7 +2444,8 @@ function renderTagChips(node) {
     const el = node.csTags;
     if (!el) return;
     el.innerHTML = "";
-    const names = String((node.widgets || []).find((w) => w.name === "tag")?.value || "")
+    const tsW = (node.widgets || []).find((w) => w.name === "tags_selected");
+    const names = String(tsW?.value || "")
         .split(",").map((s) => s.trim()).filter(Boolean);
     if (!names.length) {
         el.innerHTML = `<span style="color:#777;font-size:11px;">${esc(t("noTagsSel"))}</span>`;
@@ -2465,10 +2477,11 @@ function renderTagChips(node) {
 }
 
 function setNodeTags(node, names) {
+    const tsW = (node.widgets || []).find((w) => w.name === "tags_selected");
     const tagW = (node.widgets || []).find((w) => w.name === "tag");
-    if (!tagW) return;
     node.csTagSel = names.slice();
-    tagW.value = names.join(",");
+    if (tsW) tsW.value = names.join(",");
+    if (tagW) tagW.value = "(none)";
     renderTagChips(node);
     node.csSchedule?.();
 }
@@ -2483,6 +2496,10 @@ function renderSelInfo(node) {
     let sel = /^\d+$/.test(wanted)
         ? (node.csResults || []).find((it) => String(it.id) === wanted) || null
         : null;
+    // 选为输出的图可能不在本节点搜索结果里(如画廊/模型预览来源):用缓存兜底展示
+    if (!sel && node.csInfoCache && String(node.csInfoCache.id ?? "") === wanted) {
+        sel = node.csInfoCache;
+    }
     if (!sel) {
         el.innerHTML = `<span style="color:#888;font-size:11px;">${esc(t("noSelectionHint"))}</span>`;
         nodeThumbsResize(node); // 面板高度变了,同步节点尺寸防下方 widget 被裁
@@ -2606,8 +2623,9 @@ function refreshTagCombos() {
 function mediaViewerHtml(item) {
     const src = esc(item.url || "");
     if (isVideoItem(item)) {
+        // 高度固定(不随控制条显隐/元数据加载变化),否则浮窗会抖动变大变小
         return `<video src="${esc(imgSrc(item.url || ""))}" controls autoplay loop muted playsinline`
-            + ` style="max-width:100%;max-height:64vh;border-radius:8px;display:block;margin:0 auto;background:#000"></video>`;
+            + ` style="height:64vh;width:auto;max-width:100%;border-radius:8px;display:block;margin:0 auto;background:#000"></video>`;
     }
     return `<img src="${esc(imgSrc(item.url || ""))}" data-direct="${src}"`
         + ` style="max-width:100%;max-height:64vh;border-radius:8px;display:block;margin:0 auto"`
@@ -2879,26 +2897,31 @@ app.registerExtension({
                     node.widgets.splice(node.widgets.indexOf(infoW), 1);
                     node.widgets.unshift(infoW);
                 }
-                // tag 多选 chips 面板:DOM widget 插在 tag combo 之后,仅交互层(值存 tag widget 串)
+                // tag 多选:combo = 添加器(选中追加并复位);已选集合存于 tags_selected
+                // (隐藏 STRING widget,逗号串——普通文本 widget 序列化稳定,不像 combo 会
+                // 丢弃候选之外的值);chips 面板仅交互层
                 const tagW = widget("tag");
                 node.csTagSel = [];
+                let tsW = null;
                 if (tagW) {
                     const chipsEl = document.createElement("div");
                     chipsEl.style.cssText = "display:flex;flex-wrap:wrap;gap:4px;align-items:center;width:100%;min-height:18px;";
-                    const tagsW = this.addDOMWidget("cs_tags", "cs_tags", chipsEl);
-                    tagsW.serialize = false;
+                    const tagsDomW = this.addDOMWidget("cs_tags", "cs_tags", chipsEl);
+                    tagsDomW.serialize = false;
                     node.csTags = chipsEl;
-                    const ci = node.widgets.indexOf(tagsW);
+                    const ci = node.widgets.indexOf(tagsDomW);
                     if (ci >= 0) node.widgets.splice(ci, 1);
-                    node.widgets.splice(node.widgets.indexOf(tagW) + 1, 0, tagsW);
-                    // combo = 添加器:选中即追加进已选(去重)并复位,值存逗号串
+                    node.widgets.splice(node.widgets.indexOf(tagW) + 1, 0, tagsDomW);
+                    tsW = widget("tags_selected"); // INPUT_TYPES 真实字段,core 已按序创建
+                    // combo = 添加器:选中即追加进已选(去重)并复位
                     const tagCb = tagW.callback;
                     tagW.callback = function () {
                         const r2 = tagCb?.apply(this, arguments);
                         const val = String(tagW.value || "").trim();
                         if (val && val !== "(none)") {
                             if (!node.csTagSel.includes(val)) node.csTagSel.push(val);
-                            tagW.value = node.csTagSel.join(",");
+                            tagW.value = "(none)";
+                            if (tsW) tsW.value = node.csTagSel.join(",");
                             renderTagChips(node);
                             node.csSig = "";
                             debounced();
@@ -2919,6 +2942,11 @@ app.registerExtension({
                     // 多选标签(node.csTagSel,逗号串存于 tag widget):名称经本地映射换 ID。
                     // 默认 OR(单请求任一命中);设置开 AND 实验后 ≥2 个标签走漏斗式逐标签求交
                     const sel = (node.csTagSel || []).map((s) => String(s).trim()).filter(Boolean);
+                    // 映射未就绪(页面刚加载,tagMap 异步填充):拉取映射并保留 csSig,下轮轮询重试
+                    if (sel.length && !(S.tagMap && Object.keys(S.tagMap).length)) {
+                        refreshTagCombos();
+                        return;
+                    }
                     const ids = sel.map((s) => (/^\d+$/.test(s) ? s : (S.tagMap && S.tagMap[s]) || null)).filter(Boolean);
                     const andOn = !!S.cfg.tag_and_mode && ids.length > 1;
                     if (ids.length && !andOn) p.set("tags", ids.join(","));
@@ -2959,11 +2987,11 @@ app.registerExtension({
                 // 轮询 sig 变化保证 tag 等改动最终一定触发刷新(csSchedule 内部去重)
                 node.csPoll = setInterval(() => {
                     node.csSchedule?.();
-                    // tag 多选状态恢复:工作流保存的是逗号串,load 后首个轮询重建 chips
+                    // tag 多选状态恢复:从 tags_selected(逗号串)重建 chips 与选择集
                     if (!node.__csTagInit) {
                         node.__csTagInit = true;
-                        const tv = String(widget("tag")?.value || "").trim();
-                        if (tv && tv !== "(none)") {
+                        const tv = String(widget("tags_selected")?.value || "").trim();
+                        if (tv) {
                             node.csTagSel = tv.split(",").map((s) => s.trim()).filter(Boolean);
                             renderTagChips(node);
                             node.csSig = "";
@@ -2981,6 +3009,11 @@ app.registerExtension({
                             rowEl.style.fontWeight = "700";
                             rowEl.style.color = "var(--accent-color,#4a90e2)";
                             rowEl.dataset.csBold = "1";
+                        }
+                        // tags_selected 是隐藏存储 widget(值由 chips 条交互维护),不占版面
+                        if (rowEl.dataset.csTsHide === undefined && (rowEl.textContent || "").trim().startsWith("tags_selected")) {
+                            rowEl.style.display = "none";
+                            rowEl.dataset.csTsHide = "1";
                         }
                     }
                     // 面板布局参数或节点宽度变化 → 只重排版不重新拉取
@@ -3017,22 +3050,34 @@ app.registerExtension({
                     // (configure 可能重建 widget 对象,丢失 DOM 面板的 serialize=false 标记)
                     let v = v0.filter((x) => x !== null); // 剔除 DOM 面板的 null 占位
                     const isNumOrIdx = (x) => /^\d+$/.test(String(x)) || String(x) === "(index)";
-                    if (v.length === 11) {
-                        // 11 值:旧序含已移除的 lora_name(v[8]),丢弃
-                        v = [v[7], v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[9], v[10]];
+                    const order = ["image_id", "base_model", "nsfw", "tag", "tags_selected", "period", "sort", "limit", "index", "thumbs_size", "panel_h"];
+                    if (v.length === 11 && isNumOrIdx(v[0])) {
+                        // 新序 11 值(含 tags_selected):前端已按序消费,只需补 tags_selected 候选
+                    } else if (v.length === 11 && !isNumOrIdx(v[0])) {
+                        // 旧序 11 值(含 lora_name,已移除):重排为新序 11 值(tags_selected 置空)
+                        v = [v[7], v[0], v[1], v[2], v[3], v[4], v[5], v[6], "", v[9], v[10]];
                     } else if (v.length === 10 && !isNumOrIdx(v[0])) {
-                        // 10 值且首位不是 image_id:更老的旧序
-                        v = [v[7], v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[8], v[9]];
-                    } else if (v.length !== 10) {
+                        // 旧序 10 值(无 lora_name 的更早版本):重排为新序 11 值
+                        v = [v[7], v[0], v[1], v[2], v[3], v[4], v[5], v[6], "", v[8], v[9]];
+                    } else if (v.length !== 11) {
                         return r; // 未知结构不动
                     }
-                    // 无论是否重排,前端都已完成一次错位填充 → 必须按序重新赋值
-                    const order = ["image_id", "base_model", "nsfw", "tag", "period", "sort", "limit", "index", "thumbs_size", "panel_h"];
+                    // 前端按"可序列化 widget 顺序"消费值,顺序错位时必须按名字重新赋值
                     for (let i = 0; i < order.length && i < v.length; i++) {
                         const w = (this.widgets || []).find((x) => x.name === order[i]);
                         if (w) w.value = v[i];
                     }
                     this.__csValFixed = true;
+                    // 组合串同样补进 tag combo 候选,防恢复时被丢弃
+                    const tagW2 = (this.widgets || []).find((x) => x.name === "tag");
+                    if (tagW2) {
+                        const tv = String(tagW2.value || "").trim();
+                        if (tv && tv !== "(none)") {
+                            tagW2.options = tagW2.options || {};
+                            tagW2.options.values = tagW2.options.values || [];
+                            if (!tagW2.options.values.includes(tv)) tagW2.options.values.unshift(tv);
+                        }
+                    }
                 } catch (e) { /* 非常规工作流不动 */ }
                 return r;
             };
