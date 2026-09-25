@@ -137,6 +137,7 @@ def enqueue(payload):
         "verified": None,
         "created": time.time(),
         "finished": None,
+        "payload": dict(payload),  # 原始请求载荷:失败/取消后 retry 重新入队用(不出现在公开字段)
     }
     _jobs[job["id"]] = job
     _queue.put_nowait(job["id"])
@@ -447,6 +448,33 @@ def cancel(job_id):
         _cancel_flags.add(job_id)
         return True
     return False
+
+
+def retry(job_id):
+    """失败/已取消的任务重新入队;.part 断点仍在则自动续传(临时名由目标+URL 确定)."""
+    job = _jobs.get(job_id)
+    if not job:
+        raise ValueError("任务不存在(可能已被清理)")
+    if job["status"] not in ("error", "cancelled"):
+        raise ValueError("仅失败或已取消的任务可以重试")
+    payload = dict(job.get("payload") or {})
+    if not payload:
+        # 早期任务无载荷:用任务上已消毒的字段重建
+        payload = {
+            "version_id": job.get("version_id"),
+            "file_index": job.get("file_index", 0),
+            "model_id": job.get("model_id"),
+            "model_name": job.get("model_name"),
+            "version_name": job.get("version_name"),
+            "type": job.get("type"),
+            "base_model": job.get("base_model"),
+            "root": job.get("root"),
+            "subfolder": job.get("subfolder"),
+            "filename": job.get("filename"),
+        }
+    public = enqueue(payload)
+    _jobs.pop(job_id, None)  # 原任务让位,列表不出现两条同义记录
+    return public
 
 
 def clear_finished():

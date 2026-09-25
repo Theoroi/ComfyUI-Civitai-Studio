@@ -578,6 +578,18 @@ async def cancel_download(request):
     return _ok(cancelled=ok)
 
 
+@_post("/civitai_studio/downloads/retry")
+async def retry_download(request):
+    body = await _read_json_dict(request)
+    if body is None:
+        return _json_error("请求体必须是 JSON 对象", 400)
+    try:
+        job = downloader.retry(str(body.get("id", "")))
+    except ValueError as e:
+        return _json_error(e, 400)
+    return _ok(job=job)
+
+
 @_post("/civitai_studio/downloads/clear")
 async def clear_downloads(request):
     downloader.clear_finished()

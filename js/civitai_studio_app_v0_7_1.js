@@ -109,6 +109,7 @@ const STR = {
         stQueued: "排队中…", stDownloading: "下载中 {pct}% {speed}", stVerifying: "校验 SHA256…",
         stDone: "完成 ✔", stCancelled: "已取消", stError: "失败: ",
         cancelBtn: "取消" + "", cancelFailed: "取消失败", clearFailed: "清除失败",
+        retryResume: "重试(续传)", retryTip: "从已传输的字节处继续下载(.part 断点)", retryFailed: "重试失败",
         settingsTitle: "⚙ Civitai Studio 设置",
         keyLabel: "Civitai API Key(可选,下载受限模型/提高限额/提取tag)",
         keySetPh: "已设置(尾号 {tail}),留空保持不变", keyPh: "粘贴 API Key",
@@ -218,6 +219,7 @@ const STR = {
         stQueued: "Queued…", stDownloading: "Downloading {pct}% {speed}", stVerifying: "Verifying SHA256…",
         stDone: "Done ✔", stCancelled: "Cancelled", stError: "Failed: ",
         cancelBtn: "Cancel", cancelFailed: "Cancel failed", clearFailed: "Clear failed",
+        retryResume: "Retry (resume)", retryTip: "Resume from the transferred bytes (.part breakpoint)", retryFailed: "Retry failed",
         settingsTitle: "⚙ Civitai Studio settings",
         keyLabel: "Civitai API key (optional, for gated models / higher rate limits / tag scraping)",
         keySetPh: "Set (ends with {tail}) — leave empty to keep", keyPh: "Paste API key",
@@ -2234,13 +2236,25 @@ function renderDownloads(force) {
                 </div>
                 ${j.warning ? `<div class="cs-local-update">${esc(j.warning)}</div>` : ""}
             </div>
-            ${active ? `<button class="cs-btn cs-btn-mini cs-btn-danger" data-cancel="${esc(j.id)}">${esc(t("cancelBtn"))}</button>` : ""}
+            ${active ? `<button class="cs-btn cs-btn-mini cs-btn-danger" data-cancel="${esc(j.id)}">${esc(t("cancelBtn"))}</button>`
+                : (j.status === "error" || j.status === "cancelled") ? `<button class="cs-btn cs-btn-mini" data-retry="${esc(j.id)}" title="${esc(t("retryTip"))}">${esc(t("retryResume"))}</button>` : ""}
         </div>`;
     }).join("");
     $$("[data-cancel]", list).forEach((btn) => {
         btn.onclick = async () => {
             try { await apiPost("/civitai_studio/downloads/cancel", { id: btn.dataset.cancel }); }
             catch (e) { toast("error", t("cancelFailed"), e.message); }
+        };
+    });
+    // 失败/取消任务重试:后端以保存的载荷重新入队,.part 断点仍在则自动续传
+    $$("[data-retry]", list).forEach((btn) => {
+        btn.onclick = async () => {
+            btn.disabled = true;
+            try {
+                const res = await apiPost("/civitai_studio/downloads/retry", { id: btn.dataset.retry });
+                if (res.job) { S.dl.jobs.unshift(res.job); lastPollTs = 0; }
+                pollDownloads();
+            } catch (e) { toast("error", t("retryFailed"), e.message); btn.disabled = false; }
         };
     });
     const clr = $("#cs-dl-clear");
