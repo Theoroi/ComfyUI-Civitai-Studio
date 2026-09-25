@@ -527,10 +527,13 @@ async def enums(request):
 @_get("/civitai_studio/destinations")
 async def destinations(request):
     ctype = request.query.get("type", "Checkpoint")
-    keys = local_index.TYPE_TO_FOLDERS.get(ctype)
-    if keys is None:
-        # 未映射类型(Other/Poses 等)回退全部注册目录,保证仍可下载
+    if ctype == "all":
         keys = local_index.categories()
+    else:
+        keys = local_index.TYPE_TO_FOLDERS.get(ctype)
+        if keys is None:
+            # 未映射类型(Other/Poses 等)回退全部注册目录,保证仍可下载
+            keys = local_index.categories()
     out = []
     seen_roots = set()
     for key in keys:
@@ -542,7 +545,11 @@ async def destinations(request):
                 continue
             seen_roots.add(rp)
             out.append({"key": key, "root": root, "label": f"{key} · {root}"})
-    return web.json_response({"destinations": out})
+    resp: dict = {"destinations": out}
+    if ctype == "all":
+        # 下载框"模型类型"手动覆盖用:Civitai 类型 → 目录 key 映射
+        resp["type_map"] = {k: list(v) for k, v in local_index.TYPE_TO_FOLDERS.items()}
+    return web.json_response(resp)
 
 
 @_post("/civitai_studio/download")

@@ -63,7 +63,7 @@ const STR = {
         copied: "已复制", copyFail: "复制失败", resources: "相关资源",
         kvModel: "模型", kvSampler: "采样器", kvSteps: "步数", kvSize: "尺寸",
         download: "⬇ 下载", startDownload: "开始下载", submitting: "提交中…",
-        dlDialogTitle: "下载 — {name}", fileLabel: "文件", targetFolder: "目标目录",
+        dlDialogTitle: "下载 — {name}", fileLabel: "文件", targetFolder: "目标目录", modelTypeLabel: "模型类型(可改)",
         subfolder: "子文件夹(可选,自动创建)", subfolderPh: "例如: NSFW/角色",
         saveName: "保存文件名",
         dlHint: "下载完成后自动写入 .civitai.json 元数据{hash}",
@@ -172,7 +172,7 @@ const STR = {
         copied: "Copied", copyFail: "Copy failed", resources: "Related resources",
         kvModel: "Model", kvSampler: "Sampler", kvSteps: "Steps", kvSize: "Size",
         download: "⬇ Download", startDownload: "Start download", submitting: "Submitting…",
-        dlDialogTitle: "Download — {name}", fileLabel: "File", targetFolder: "Target folder",
+        dlDialogTitle: "Download — {name}", fileLabel: "File", targetFolder: "Target folder", modelTypeLabel: "Model type (override)",
         subfolder: "Subfolder (optional, created automatically)", subfolderPh: "e.g. NSFW/character",
         saveName: "Filename",
         dlHint: "Writes .civitai.json metadata on completion{hash}",
@@ -1488,12 +1488,19 @@ async function openDownloadDialog({ model, version, fileIndex = null, defaultRoo
     }
     let destinations = [];
     let destError = "";
+    let allDests = [], typeMap = {};
     try {
         const data = await apiGet(`/civitai_studio/destinations?type=${encodeURIComponent(model.type || "Other")}`);
         destinations = data.destinations || [];
     } catch (e) {
         destError = e.message;
     }
+    // 手动改类型用:全量目录 + Civitai 类型→目录映射(拉取失败仅退回"不可改类型")
+    try {
+        const all = await apiGet("/civitai_studio/destinations?type=all");
+        allDests = all.destinations || [];
+        typeMap = all.type_map || {};
+    } catch (e) { /* 忽略 */ }
     if (!destinations.length) {
         toast("error", t("openDownloadFailed"), destError ? t("destFetchFailed") + destError : t("noRegFolders"));
         return;
@@ -1504,6 +1511,14 @@ async function openDownloadDialog({ model, version, fileIndex = null, defaultRoo
     const normPath = (p) => String(p || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
     const matched = defaultRoot && destinations.find((d) => normPath(d.root) === normPath(defaultRoot));
     const preRoot = matched ? matched.root : destinations[0].root;
+    const curType = model.type || "Other";
+    const typeKeys = [...new Set([curType, ...Object.keys(typeMap)])];
+    const destsFor = (tp) => {
+        if (tp === curType) return destinations;
+        const keys = typeMap[tp];
+        const list = keys ? allDests.filter((d) => keys.includes(d.key)) : allDests;
+        return list.length ? list : destinations;
+    };
     const m = showModal(`
         <h3 class="cs-modal-title">${esc(t("dlDialogTitle", { name: version.name || model.name }))}</h3>
         <div class="cs-form">
@@ -1512,6 +1527,10 @@ async function openDownloadDialog({ model, version, fileIndex = null, defaultRoo
                 <select id="cs-dl-file">${files.map((f, i) =>
                     `<option value="${i}" ${i === selIdx ? "selected" : ""}>${esc(f.name)} (${fmtSize((f.sizeKB || 0) * 1024)})</option>`).join("")}
                 </select>
+            </label>` : ""}
+            ${typeKeys.length > 1 ? `
+            <label>${esc(t("modelTypeLabel"))}
+                <select id="cs-dl-type">${typeKeys.map((tp) => `<option value="${esc(tp)}" ${tp === curType ? "selected" : ""}>${esc(tp)}</option>`).join("")}</select>
             </label>` : ""}
             <label>${esc(t("targetFolder"))}
                 <select id="cs-dl-root">${destinations.map((d) =>
@@ -1538,6 +1557,17 @@ async function openDownloadDialog({ model, version, fileIndex = null, defaultRoo
             if (f) $("#cs-dl-name", m.box).value = f.name;
         };
     }
+    // 切类型 → 按映射重建目标目录;原目录仍在清单中则保持选中
+    const typeSel = $("#cs-dl-type", m.box);
+    if (typeSel) {
+        typeSel.onchange = () => {
+            const rootSel = $("#cs-dl-root", m.box);
+            const cur = rootSel.value;
+            const list = destsFor(typeSel.value);
+            rootSel.innerHTML = list.map((d) =>
+                `<option value="${esc(d.root)}" ${d.root === cur ? "selected" : ""}>${esc(d.label)}</option>`).join("");
+        };
+    }
     $("[data-act=ok]", m.box).onclick = async () => {
         const btn = $("[data-act=ok]", m.box);
         btn.disabled = true;
@@ -1549,7 +1579,7 @@ async function openDownloadDialog({ model, version, fileIndex = null, defaultRoo
                 model_id: model.id,
                 model_name: model.name,
                 version_name: version.name,
-                type: model.type,
+                type: typeSel ? typeSel.value : model.type,
                 base_model: version.baseModel,
                 root: $("#cs-dl-root", m.box).value,
                 subfolder: $("#cs-dl-sub", m.box).value.trim(),
