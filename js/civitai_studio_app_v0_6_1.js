@@ -2923,6 +2923,12 @@ app.registerExtension({
                 node.csStrip = strip;
                 const thumbsW = this.addDOMWidget("cs_thumbs", "cs_thumbs", strip);
                 thumbsW.serialize = false; // DOM 面板不写入工作流,避免 widgets_values 错位
+                // 缩略图面板移到 widgets 末尾:渲染在所有筛选器之下(panel_h 参数之上)
+                {
+                    const ti = node.widgets.indexOf(thumbsW);
+                    if (ti >= 0) node.widgets.splice(ti, 1);
+                    node.widgets.push(thumbsW);
+                }
                 if (this.size[0] < 460) this.size[0] = 460; // 保证默认 3 列以上
                 // 信息面板独立 widget,移到 widgets 首位:渲染在标题/输出端正下方
                 const infoEl = document.createElement("div");
@@ -2962,7 +2968,9 @@ app.registerExtension({
                     tagsDomW.serialize = false;
                     const ci = node.widgets.indexOf(tagsDomW);
                     if (ci >= 0) node.widgets.splice(ci, 1);
-                    node.widgets.splice(node.widgets.indexOf(tagW) + 1, 0, tagsDomW);
+                    // 插在 tags_selected(最后一个筛选字段)之后:渲染于筛选器与预览图之间
+                    const anchor = node.widgets.indexOf(tsW);
+                    node.widgets.splice(anchor >= 0 ? anchor + 1 : node.widgets.length, 0, tagsDomW);
                 }
 
                 const sig = () => ["base_model", "tags_selected", "sort", "period", "nsfw", "limit"]
