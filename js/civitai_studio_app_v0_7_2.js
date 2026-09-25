@@ -110,6 +110,8 @@ const STR = {
         stDone: "完成 ✔", stCancelled: "已取消", stError: "失败: ",
         cancelBtn: "取消" + "", cancelFailed: "取消失败", clearFailed: "清除失败",
         retryResume: "重试(续传)", retryTip: "从已传输的字节处继续下载(.part 断点)", retryFailed: "重试失败",
+        revealFile: "查看本地文件", toLocal: "本地库", moveBtn: "移动",
+        moveTitle: "移动 — {name}", movedToast: "已移动", moveFailed: "移动失败",
         settingsTitle: "⚙ Civitai Studio 设置",
         keyLabel: "Civitai API Key(可选,下载受限模型/提高限额/提取tag)",
         keySetPh: "已设置(尾号 {tail}),留空保持不变", keyPh: "粘贴 API Key",
@@ -220,6 +222,8 @@ const STR = {
         stDone: "Done ✔", stCancelled: "Cancelled", stError: "Failed: ",
         cancelBtn: "Cancel", cancelFailed: "Cancel failed", clearFailed: "Clear failed",
         retryResume: "Retry (resume)", retryTip: "Resume from the transferred bytes (.part breakpoint)", retryFailed: "Retry failed",
+        revealFile: "Show in folder", toLocal: "Local library", moveBtn: "Move",
+        moveTitle: "Move — {name}", movedToast: "Moved", moveFailed: "Move failed",
         settingsTitle: "⚙ Civitai Studio settings",
         keyLabel: "Civitai API key (optional, for gated models / higher rate limits / tag scraping)",
         keySetPh: "Set (ends with {tail}) — leave empty to keep", keyPh: "Paste API key",
@@ -1691,6 +1695,7 @@ function renderLocalList() {
                 <button class="cs-btn cs-btn-mini" data-associate="${esc(m.id)}">${esc(t("associateBtn"))}</button>`}
                 <button class="cs-btn cs-btn-mini" data-rename="${esc(m.id)}">${esc(t("renameBtn"))}</button>
                 <button class="cs-btn cs-btn-mini" data-reveal="${esc(m.id)}">${esc(t("revealBtn"))}</button>
+                <button class="cs-btn cs-btn-mini" data-move="${esc(m.id)}">${esc(t("moveBtn"))}</button>
                 <button class="cs-btn cs-btn-mini cs-btn-danger" data-delete="${esc(m.id)}">${esc(t("deleteBtn"))}</button>
             </div>
         </div>`;
@@ -1701,6 +1706,12 @@ function renderLocalList() {
             const m = findLocalModel(btn.dataset.reveal);
             try { await apiPost("/civitai_studio/local/reveal", { category: m.category, rel: m.rel }); }
             catch (e) { toast("error", t("revealFailed"), e.message); }
+        };
+    });
+    $$("[data-move]", list).forEach((btn) => {
+        btn.onclick = () => {
+            const m = findLocalModel(btn.dataset.move);
+            if (m) openMoveDialog(m);
         };
     });
     $$("[data-delete]", list).forEach((btn) => {
@@ -2237,7 +2248,9 @@ function renderDownloads(force) {
                 ${j.warning ? `<div class="cs-local-update">${esc(j.warning)}</div>` : ""}
             </div>
             ${active ? `<button class="cs-btn cs-btn-mini cs-btn-danger" data-cancel="${esc(j.id)}">${esc(t("cancelBtn"))}</button>`
-                : (j.status === "error" || j.status === "cancelled") ? `<button class="cs-btn cs-btn-mini" data-retry="${esc(j.id)}" title="${esc(t("retryTip"))}">${esc(t("retryResume"))}</button>` : ""}
+                : (j.status === "error" || j.status === "cancelled") ? `<button class="cs-btn cs-btn-mini" data-retry="${esc(j.id)}" title="${esc(t("retryTip"))}">${esc(t("retryResume"))}</button>`
+                : j.status === "done" && j.dest ? `<button class="cs-btn cs-btn-mini" data-reveal-dl="${esc(j.id)}">${esc(t("revealFile"))}</button>
+                <button class="cs-btn cs-btn-mini" data-tolocal="${esc(j.id)}">${esc(t("toLocal"))}</button>` : ""}
         </div>`;
     }).join("");
     $$("[data-cancel]", list).forEach((btn) => {
@@ -2255,6 +2268,27 @@ function renderDownloads(force) {
                 if (res.job) { S.dl.jobs.unshift(res.job); lastPollTs = 0; }
                 pollDownloads();
             } catch (e) { toast("error", t("retryFailed"), e.message); btn.disabled = false; }
+        };
+    });
+    // 完成任务:打开所在文件夹并选中文件
+    $$("[data-reveal-dl]", list).forEach((btn) => {
+        btn.onclick = async () => {
+            const j = S.dl.jobs.find((x) => x.id === btn.dataset.revealDl);
+            if (!j?.dest) return;
+            try { await apiPost("/civitai_studio/local/reveal", { path: j.dest }); }
+            catch (e) { toast("error", t("revealFailed"), e.message); }
+        };
+    });
+    // 完成任务:切到本地库并按版本名预填搜索
+    $$("[data-tolocal]", list).forEach((btn) => {
+        btn.onclick = async () => {
+            const j = S.dl.jobs.find((x) => x.id === btn.dataset.tolocal);
+            switchTab("local");
+            S.local.search = j?.version_name || j?.model_name || "";
+            const inp = $("#cs-local-search");
+            if (inp) inp.value = S.local.search;
+            await loadLocal(true);
+            renderLocalList();
         };
     });
     const clr = $("#cs-dl-clear");
@@ -2474,6 +2508,49 @@ function buildBrowseView(root) {
             if (!st.loading && st.nextCursor && !st.dirty) fetchBrowse(false);
         }
     });
+}
+
+// 移动模型到其它已注册目录:选目标根+子文件夹,文件与 .civitai.json 一并迁移
+async function openMoveDialog(m) {
+    let dests = [];
+    try {
+        const data = await apiGet("/civitai_studio/destinations?type=all");
+        dests = (data.destinations || []).filter((d) => d.root !== m.root);
+    } catch (e) { /* 空 → 下方报错返回 */ }
+    if (!dests.length) { toast("error", t("moveFailed"), t("noRegFolders")); return; }
+    const m2 = showModal(`
+        <h3 class="cs-modal-title">${esc(t("moveTitle", { name: m.name }))}</h3>
+        <div class="cs-form">
+            <label>${esc(t("targetFolder"))}
+                <select id="cs-mv-root">${dests.map((d, i) => `<option value="${i}">${esc(d.label)}</option>`).join("")}</select>
+            </label>
+            <label>${esc(t("subfolder"))}
+                <input id="cs-mv-sub" type="text" placeholder="${esc(t("subfolderPh"))}"/>
+            </label>
+            <div class="cs-modal-actions">
+                <button class="cs-btn" data-act="cancel">${esc(t("cancel"))}</button>
+                <button class="cs-btn cs-btn-primary" data-act="ok">${esc(t("moveBtn"))}</button>
+            </div>
+        </div>`);
+    $("[data-act=cancel]", m2.box).onclick = m2.close;
+    $("[data-act=ok]", m2.box).onclick = async () => {
+        const btn = $("[data-act=ok]", m2.box);
+        btn.disabled = true;
+        try {
+            const d = dests[parseInt($("#cs-mv-root", m2.box).value, 10)] || dests[0];
+            await apiPost("/civitai_studio/local/move", {
+                category: m.category, rel: m.rel,
+                root: d.root, subfolder: $("#cs-mv-sub", m2.box).value.trim(),
+            });
+            m2.close();
+            toast("success", t("movedToast"), m.name);
+            S.local.updates = {};
+            loadLocal(true);
+        } catch (e) {
+            toast("error", t("moveFailed"), e.message);
+            btn.disabled = false;
+        }
+    };
 }
 
 function buildLocalView(root) {

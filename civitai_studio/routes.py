@@ -7,6 +7,7 @@ import asyncio
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -651,21 +652,71 @@ async def local_reveal(request):
     body = await _read_json_dict(request)
     if body is None:
         return _json_error("请求体必须是 JSON 对象", 400)
-    await _scan_async(False)
-    path = local_index.resolve(body.get("category"), body.get("rel"))
-    if not path or not os.path.isfile(path):
-        return _json_error("文件不存在或不在模型目录内", 404)
-    folder = os.path.dirname(path)
+    path = str(body.get("path") or "")
+    if not path:
+        await _scan_async(False)
+        path = local_index.resolve(body.get("category"), body.get("rel")) or ""
+    path = os.path.normpath(path)
+    if not os.path.isfile(path):
+        return _json_error("文件不存在", 404)
+    # 防目录穿越:只允许打开已注册模型根内的文件
+    real = os.path.realpath(path)
+    parent = os.path.dirname(real).lower()
+    ok = any(
+        parent == os.path.realpath(r).lower() or parent.startswith(os.path.realpath(r).lower() + os.sep)
+        for key in local_index.categories() for r in local_index.roots_for(key)
+    )
+    if not ok:
+        return _json_error("文件不在已注册的模型目录内", 403)
     try:
         if sys.platform == "win32":
-            os.startfile(folder)  # noqa: S606
+            # explorer /select 打开所在文件夹并选中该文件(只开文件夹观感像"没定位到")
+            subprocess.Popen(["explorer", "/select,", str(real)])  # noqa: S603
         elif sys.platform == "darwin":
-            subprocess.Popen(["open", folder])  # noqa: S603, S607
+            subprocess.Popen(["open", "-R", str(real)])  # noqa: S603
         else:
-            subprocess.Popen(["xdg-open", folder])  # noqa: S603, S607
+            subprocess.Popen(["xdg-open", os.path.dirname(real)])  # noqa: S603,S607
     except OSError as e:
         return _json_error(f"打开文件夹失败: {e}", 500)
     return _ok()
+
+
+@_post("/civitai_studio/local/move")
+async def local_move(request):
+    body = await _read_json_dict(request)
+    if body is None:
+        return _json_error("请求体必须是 JSON 对象", 400)
+    await _scan_async(False)
+    src = local_index.resolve(body.get("category"), body.get("rel"))
+    if not src or not os.path.isfile(src):
+        return _json_error("源文件不存在或不在模型目录内", 404)
+    dest_root = downloader._validate_root(body.get("root"))
+    if dest_root is None:
+        return _json_error("目标目录不在已注册的模型目录内", 400)
+    sub = downloader.sanitize_subfolder(body.get("subfolder"))
+    dest_dir = os.path.join(dest_root, sub) if sub else dest_root
+    os.makedirs(dest_dir, exist_ok=True)
+    real_dest = os.path.realpath(dest_dir).lower()
+    real_root = os.path.realpath(dest_root).lower()
+    if real_dest != real_root and not real_dest.startswith(real_root + os.sep):
+        return _json_error("子文件夹越出目标目录", 400)
+    final = os.path.join(dest_dir, os.path.basename(src))
+    if os.path.normpath(final).lower() == os.path.normpath(src).lower():
+        return _json_error("目标位置与当前位置相同", 400)
+    base, ext = os.path.splitext(final)
+    n = 0
+    while os.path.exists(final):
+        n += 1
+        final = f"{base} ({n}){ext}"
+    try:
+        shutil.move(src, final)
+        side = local_index.sidecar_path(src)
+        if os.path.exists(side):
+            shutil.move(side, local_index.sidecar_path(final))
+    except OSError as e:
+        return _json_error(f"移动失败: {e}", 500)
+    local_index.schedule_rescan()
+    return _ok(path=final, name=os.path.basename(final))
 
 
 @_post("/civitai_studio/local/rename")
