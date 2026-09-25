@@ -63,9 +63,10 @@ class CivitaiImageSearch:
     def INPUT_TYPES(cls):
         # image_id 放首位:前端把它渲染在信息面板正下方(其余参数随后)
         return {"required": {
-            # COMBO:首项 (index) = 按 index 取图;其余为最近点选/查询过的图片 ID(选之即精确取图)
-            "image_id": (["(index)"] + _recent_image_ids(),
-                         {"tooltip": "选最近浏览的图片 ID 则精确取该图与参数;选 (index) 按序号取图"}),
+            # STRING:支持自由粘贴任意图片 ID;"(index)" = 按序号取图。
+            # 输入行下拉记忆由前端维护(后端 recent_image_ids.json 仍持久化成功记录)
+            "image_id": ("STRING", {"default": "(index)",
+                                    "tooltip": "图片 ID(自由粘贴);留 (index) 按序号取图"}),
             "base_model": (["(any)"] + sorted(_BASE_MODEL_OPTIONS, key=str.lower),),
             "nsfw": (["false", "true"],),
             # 多选标签存储:前端选择器(chips+下拉+自由输入)维护的逗号分隔名称串(隐藏)。

@@ -1265,6 +1265,24 @@ async function showImageMeta(image, opts = {}) {
     openImageDetail(image, opts);
 }
 
+// image_id 记忆:成功记录(点选/输入回车且 API 拉取成功)才入列表并持久化;
+// 404 的 ID 不保留。前端列表存 localStorage,datalist 提供下拉记忆
+function rememberImage(id) {
+    if (!id || !/^\d+$/.test(String(id))) return;
+    try {
+        const key = "cs_recent_image_ids";
+        const list = JSON.parse(localStorage.getItem(key) || "[]");
+        const i = list.indexOf(String(id));
+        if (i >= 0) list.splice(i, 1);
+        list.unshift(String(id));
+        localStorage.setItem(key, JSON.stringify(list.slice(0, 50)));
+        document.querySelectorAll("datalist[id^=cs-imgid-list]").forEach((dl) => {
+            dl.innerHTML = list.map((x) => `<option value="${esc(x)}"></option>`).join("");
+        });
+    } catch (e) { /* 隐私模式等场景忽略 */ }
+    apiPost(`/civitai_studio/remember_image/${encodeURIComponent(String(id))}`).catch(() => {});
+}
+
 // 把图片 ID 写进图像搜索节点的 image_id(优先显式指定,其次画布选中,最后第一个)
 function selectAsOutput(item, preferred) {
     const all = (app.graph?._nodes || []).filter((n) => n.type === "CivitaiImageSearch");
@@ -1283,10 +1301,8 @@ function selectAsOutput(item, preferred) {
     if (iw && i >= 0) iw.value = i;
     if (idw) {
         idw.value = String(item.id ?? "");
-        // 下拉选项即时补入该 ID;并回传后端持久化(校验与下次下拉都用)
-        const opts = idw.options?.values;
-        if (Array.isArray(opts) && !opts.includes(idw.value)) opts.unshift(idw.value);
-        apiPost(`/civitai_studio/remember_image/${encodeURIComponent(idw.value)}`).catch(() => {});
+        if (idw.inputEl) idw.inputEl.value = idw.value; // STRING widget 双写防重绘清空
+        rememberImage(idw.value);
     }
     // 缓存选中图:它可能不在该节点的搜索结果里(csResults),信息面板刷新时兜底展示
     node.csInfoCache = item;
@@ -2728,8 +2744,36 @@ function renderSelInfo(node) {
         sel = node.csInfoCache;
     }
     if (!sel) {
-        el.innerHTML = `<span style="color:#888;font-size:11px;">${esc(t("noSelectionHint"))}</span>`;
+        if (/^\d+$/.test(wanted)) {
+            // 输入/粘贴的 ID 不在结果与缓存里:发起 imageId 精确查询拉取(去重/防抖)
+            if (node.csInfoFetching !== wanted) {
+                node.csInfoFetching = wanted;
+                el.innerHTML = `<span style="color:#888;font-size:11px;">${esc(S.lang === "zh" ? "正在拉取图片 " + wanted + " …" : "Fetching image " + wanted + " …")}</span>`;
+                apiGet(`/civitai_studio/images?imageId=${encodeURIComponent(wanted)}&limit=1`)
+                    .then((d) => {
+                        const it = (d.items || []).find((x) => String(x.id) === wanted);
+                        if (it) {
+                            node.csInfoCache = it;
+                            if (node.csResults && !node.csResults.some((x) => String(x.id) === wanted)) node.csResults.unshift(it);
+                        } else {
+                            node.csInfoCache = { id: wanted, notFound: true };
+                        }
+                        node.csInfoFetching = null;
+                        renderSelInfo(node);
+                    })
+                    .catch(() => { node.csInfoFetching = null; renderSelInfo(node); });
+            } else {
+                el.innerHTML = `<span style="color:#888;font-size:11px;">${esc(S.lang === "zh" ? "正在拉取图片 " + wanted + " …" : "Fetching image " + wanted + " …")}</span>`;
+            }
+        } else {
+            el.innerHTML = `<span style="color:#888;font-size:11px;">${esc(t("noSelectionHint"))}</span>`;
+        }
         nodeThumbsResize(node); // 面板高度变了,同步节点尺寸防下方 widget 被裁
+        return;
+    }
+    if (sel.notFound) {
+        el.innerHTML = `<span style="color:#e2a23f;font-size:11px;">${esc(S.lang === "zh" ? "图片 " + sel.id + " 未找到(已删除/无权限/ID 有误)" : "Image " + sel.id + " not found")}</span>`;
+        nodeThumbsResize(node);
         return;
     }
     let meta = sel.meta || {};
@@ -3130,7 +3174,15 @@ app.registerExtension({
                 idInput.type = "text";
                 idInput.placeholder = S.lang === "zh" ? "输入/粘贴图片 ID,回车加载" : "Image ID, Enter to load";
                 idInput.style.cssText = "flex:1;min-width:0;font-size:11px;padding:3px 6px;";
-                idInput.onkeydown = (e) => {
+                idInput.setAttribute("list", "cs-imgid-list-" + (node.id ?? "x"));
+                const idDl = document.createElement("datalist");
+                idDl.id = "cs-imgid-list-" + (node.id ?? "x");
+                try {
+                    idDl.innerHTML = (JSON.parse(localStorage.getItem("cs_recent_image_ids") || "[]"))
+                        .map((id2) => `<option value="${esc(id2)}"></option>`).join("");
+                } catch (e) {}
+                idRow.appendChild(idDl);
+                                idInput.onkeydown = (e) => {
                     e.stopPropagation();
                     if (e.key === "Enter") {
                         const val = idInput.value.trim();
