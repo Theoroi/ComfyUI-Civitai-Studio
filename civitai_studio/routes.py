@@ -223,6 +223,59 @@ async def remember_image(request):
     return web.json_response({"ok": True, "ids": ids[:50]})
 
 
+# 版本信息解析缓存:vid → 精简模型信息(10 分钟,上限 200 条;同一 vid 全站唯一,命中率高)
+_VERSION_CACHE = {}
+_VERSION_CACHE_MAX = 200
+_VERSION_TTL = 600.0
+
+
+@_get("/civitai_studio/resolve_versions")
+async def resolve_versions(request):
+    """批量解析 model-versions:返回 vid → {AutoV3, modelId, modelName, versionName, type, baseModel}.
+
+    大图详情用它把 meta.resources(modelId 常为 null)/civitaiResources/modelVersionIds
+    解析成可跳转的模型信息;缓存避免重复请求。
+    """
+    raw = request.query.get("ids", "")
+    ids = [s.strip() for s in raw.split(",") if s.strip().isdigit()][:20]
+    if not ids:
+        return _json_error("ids 必须是逗号分隔的数字", 400)
+    out = {}
+    now = time.time()
+    fetch_list = []
+    for vid in ids:
+        hit = _VERSION_CACHE.get(vid)
+        if hit and now - hit[0] < _VERSION_TTL:
+            out[vid] = hit[1]
+        else:
+            fetch_list.append(vid)
+    if fetch_list:
+        import asyncio as _asyncio
+
+        async def fetch_one(vid):
+            try:
+                data = await civitai_client.get_json(f"/model-versions/{vid}")
+                files = data.get("files") or [{}]
+                mv = data.get("model") or {}
+                info = {
+                    "AutoV3": (files[0].get("hashes") or {}).get("AutoV3") or "",
+                    "modelId": mv.get("id"),
+                    "modelName": mv.get("name") or "",
+                    "versionName": data.get("name") or "",
+                    "baseModel": data.get("baseModel") or "",
+                }
+            except Exception as e:
+                info = {"error": civitai_client.net_error_message(e) if not isinstance(e, civitai_client.CivitaiError) else str(e)}
+            _VERSION_CACHE[vid] = (now, info)
+            if len(_VERSION_CACHE) > _VERSION_CACHE_MAX:
+                oldest = min(_VERSION_CACHE, key=lambda k: _VERSION_CACHE[k][0])
+                _VERSION_CACHE.pop(oldest, None)
+            out[vid] = info
+
+        await _asyncio.gather(*(fetch_one(vid) for vid in fetch_list))
+    return web.json_response({"versions": out})
+
+
 @_get("/civitai_studio/tag_mapping")
 async def tag_mapping_list(request):
     """本地 tag 名称→ID 映射(供输入自动补全)."""

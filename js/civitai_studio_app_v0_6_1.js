@@ -989,21 +989,189 @@ async function renderVersion(version, model, box) {
     });
 }
 
+// 大图资源列表:把 meta.resources/civitaiResources/modelVersionIds 解析为可操作 chips。
+// 每个 chip:模型名+权重+[已装|未装] 标记;>4 条折叠;未装 LoRA 可一键批量下载。
+async function renderResourceList(box, item, rawRes, civRes, vids, imgHashes) {
+    const listEl = box.querySelector("[data-res-list]");
+    const summaryEl = box.querySelector("[data-res-summary]");
+    if (!listEl) return;
+    const merged = new Map(); // vid → {name, weight, type}
+    const noVid = [];
+    for (const r of rawRes) {
+        if (r.modelVersionId) merged.set(String(r.modelVersionId), { name: r.name, weight: r.weight, type: r.type });
+        else noVid.push(r);
+    }
+    for (const r of civRes) {
+        const vid = String(r.modelVersionId);
+        if (!merged.has(vid)) merged.set(vid, { name: null, weight: r.weight, type: r.type });
+    }
+    // modelVersionIds 始终并入:它们是图片资源的可靠锚点(站内图 civitaiResources 会对齐,
+    // 外部图即使 resources 无 vid 也能解析出名称供比对)
+    for (const vid of vids) merged.set(String(vid), merged.get(String(vid)) || { name: null, weight: null, type: "" });
+    if (!merged.size && !noVid.length) {
+        const blk = box.querySelector("[data-res-block]");
+        if (blk) blk.style.display = "none";
+        return;
+    }
+    const isLora = (t, nm) => String(t || "").toLowerCase() === "lora" || /lora/i.test(String(nm || ""));
+    let localIndex = null;
+    const getLocal = async () => {
+        if (localIndex) return localIndex;
+        try {
+            const d = await apiGet("/civitai_studio/local");
+            localIndex = { byName: {}, byVersion: {}, models: d.models || [] };
+            for (const m2 of d.models || []) {
+                localIndex.byName[String(m2.name || "").toLowerCase()] = m2;
+                const cv = m2.civitai || {};
+                if (cv.version_id) localIndex.byVersion[String(cv.version_id)] = m2;
+                if (cv.model_id) {
+                    // 同模型多版本:任一版本命中即视为已装(展示用)
+                    if (!localIndex.byName[String(cv.model_name || "").toLowerCase()]) {
+                        localIndex.byName[String(cv.model_name || "").toLowerCase()] = m2;
+                    }
+                }
+            }
+        } catch (e) { localIndex = { byName: {}, byVersion: {}, models: [] }; }
+        return localIndex;
+    };
+    const local = await getLocal();
+    let versions = {};
+    const vidKeys = [...merged.keys()];
+    if (vidKeys.length) {
+        try {
+            const d = await apiGet("/civitai_studio/resolve_versions?ids=" + encodeURIComponent(vidKeys.join(",")));
+            versions = d.versions || {};
+            window.__csVerCache = Object.assign(window.__csVerCache || {}, versions);
+        } catch (e) { /* 解析失败降级名字展示 */ }
+    }
+    const hashPrefix = imgHashes || {};
+    const hashMatch = (vid) => {
+        const a3 = String((versions[vid] || {}).AutoV3 || "").toUpperCase();
+        if (!a3) return false;
+        return Object.values(hashPrefix).some((h) => String(h).toUpperCase() === a3.slice(0, String(h).length) && String(h).length >= 6);
+    };
+    const renderChips = (expanded) => {
+        listEl.innerHTML = "";
+        const makeChip = (label, vid, weight, lora, installed) => {
+            const chip = document.createElement("span");
+            const ok = !!installed;
+            chip.style.cssText = "display:inline-flex;align-items:center;gap:4px;border-radius:10px;padding:0 7px;"
+                + "font-size:11px;white-space:nowrap;cursor:pointer;"
+                + (ok ? "background:rgba(76,175,80,.16);border:1px solid #4caf5088;color:var(--fg-color,#eee);"
+                     : "background:rgba(226,162,63,.12);border:1px solid #e2a23f66;color:var(--fg-color,#eee);");
+            chip.title = ok
+                ? (S.lang === "zh" ? "已安装:" : "Installed: ") + (installed.rel || installed.name || "")
+                : (ok ? "" : (S.lang === "zh" ? "未安装,点击查看模型" : "Not installed, click to view"));
+            chip.innerHTML = "<span>" + esc((ok ? "✔ " : "✖ ") + label + (weight != null ? " × " + weight : "")) + "</span>";
+            chip.dataset.vid = vid || "";
+            chip.dataset.lora = lora ? "1" : "0";
+            chip.dataset.installed = ok ? (installed.name || "1") : "";
+            chip.onclick = () => {
+                const mid = versions[vid]?.modelId || vid;
+                if (mid && /^\d+$/.test(String(mid))) {
+                    (S.ui.floatModals || []).slice().forEach((mm) => mm.close());
+                    closeFloatDetail();
+                    openBrowseFloat(mid);
+                }
+            };
+            return chip;
+        };
+        const chips = [];
+        for (const [vid, r] of merged) {
+            const vinfo = versions[vid] || {};
+            const label = vinfo.modelName || vinfo.versionName || r.name || "版本 " + vid;
+            const lora = isLora(r.type, r.name) || isLora("", vinfo.modelName);
+            // 匹配优先级:version_id 精确 > 模型名 > AutoV3 hash 前缀
+            const installed = local.byVersion[vid]
+                || local.byName[String(vinfo.modelName || "").toLowerCase()]
+                || null;
+            chips.push(makeChip(label, vid, r.weight, lora, installed));
+        }
+        for (const r of noVid) {
+            const lname = String(r.name || "").toLowerCase();
+            chips.push(makeChip(r.name || "?", "", r.weight, isLora(r.type, r.name), local.byName[lname] || null));
+        }
+        const show = expanded ? chips : chips.slice(0, 4);
+        show.forEach((c) => listEl.appendChild(c));
+        if (chips.length > 4) {
+            const toggle = document.createElement("span");
+            toggle.textContent = expanded ? "▲" : "▼ +" + (chips.length - 4);
+            toggle.style.cssText = "cursor:pointer;font-size:11px;color:var(--accent-color,#4a90e2);align-self:center;";
+            toggle.onclick = () => renderChips(!expanded);
+            listEl.appendChild(toggle);
+        }
+        const missing = chips.filter((c) => c.dataset.installed === "" && c.dataset.lora === "1" && c.dataset.vid);
+        if (missing.length) {
+            const btn = document.createElement("button");
+            btn.className = "cs-btn cs-btn-mini";
+            btn.style.marginTop = "4px";
+            btn.textContent = S.lang === "zh" ? "一键补齐缺失 LoRA(" + missing.length + ")" : "Fetch missing LoRAs (" + missing.length + ")";
+            btn.onclick = async () => {
+                btn.disabled = true;
+                btn.textContent = S.lang === "zh" ? "提交中…" : "Submitting…";
+                let root = null;
+                try {
+                    const d = await apiGet("/civitai_studio/destinations?type=LoRA");
+                    if ((d.destinations || []).length) root = d.destinations[0].root;
+                } catch (e) {}
+                if (!root) {
+                    toast("error", S.lang === "zh" ? "未找到 LoRA 目录" : "No LoRA dir", S.lang === "zh" ? "请检查模型目录配置" : "Check model paths");
+                    btn.disabled = false;
+                    return;
+                }
+                let done = 0, fail = 0;
+                for (const c of missing) {
+                    const vid = c.dataset.vid;
+                    try {
+                        const vinfo = (window.__csVerCache || {})[vid] || {};
+                        await apiPost("/civitai_studio/download", {
+                            version_id: vid, file_index: 0,
+                            model_id: vinfo.modelId, model_name: vinfo.modelName || vid,
+                            version_name: vinfo.versionName || "", type: "LoRA",
+                            root, filename: "",
+                        });
+                        done++;
+                    } catch (e) { fail++; toast("error", S.lang === "zh" ? "下载失败" : "Download failed", String(e.message || e).slice(0, 70)); }
+                }
+                toast(done ? "success" : "error", S.lang === "zh" ? "已加入下载队列 " + done + " 项" : "Queued " + done, fail ? S.lang === "zh" ? fail + " 项失败" : fail + " failed" : "");
+                btn.textContent = S.lang === "zh" ? "已排队 " + done : "Queued " + done;
+                switchTab("downloads");
+            };
+            listEl.appendChild(btn);
+        }
+        if (summaryEl) summaryEl.textContent = S.lang === "zh"
+            ? "(" + chips.filter((c) => c.dataset.installed !== "").length + "/" + chips.length + " 已安装)"
+            : "";
+    };
+    renderChips(false);
+}
+
 // 统一大图详情浮层:画廊与图像搜索节点共用同一模板。
 // 按钮组:[保存图片](下载到 output)+ [选为输出](把 ID 写进图像搜索的 image_id)
 //        + [应用到工作流](仅当图片带生成参数时有)
 function openImageDetail(item, opts = {}) {
     let meta = item.meta || {};
-    if (meta && !meta.prompt && meta.meta) meta = meta.meta; // 剥掉 imageId 精确查询的包裹层
+    meta = unwrapMeta(meta);
     const hasMeta = !!(meta && (meta.prompt || meta.seed != null));
     const kv = hasMeta
-        ? [[t("kvModel"), meta.model], [t("kvSampler"), meta.sampler], [t("kvSteps"), meta.steps],
-           ["CFG", meta.cfgScale], ["Seed", meta.seed], [t("kvSize"), meta.size]]
+        ? [["Checkpoint", meta["Model"] || (meta.hashes || {}).model], ["Base Model", item.baseModel], [t("kvSampler"), meta.sampler], [t("kvSteps"), meta.steps],
+           ["CFG", meta.cfgScale], ["Seed", meta.seed], [t("kvSize"), (meta.width || "") + (meta.width ? "×" + meta.height : "")]]
         : [[t("galleryAuthor"), item.username], ["❤", fmtNum(item.stats?.heartCount ?? item.stats?.likeCount)]];
     const kvHtml = kv.filter(([, v]) => v !== undefined && v !== null && v !== "")
         .map(([k, v]) => `<div><b>${esc(k)}</b><span>${esc(String(v))}</span></div>`).join("");
-    const resources = (meta.resources || []).map((r, ri) =>
-        `<code class="cs-trigger" data-res-model="${esc(String(r.modelId || ""))}" data-res-idx="${ri}" title="${esc(S.lang === "zh" ? "点击查看该模型" : "Click to view model")}">${esc(r.name || r.modelName || "?")}${r.weight != null ? " × " + esc(r.weight) : ""}</code>`).join("");
+    // 资源条目统一收集:resources(外部图,含权重)+ civitaiResources(站内图,带 modelVersionId)
+    // + modelVersionIds(锚点);去重后交给异步解析渲染
+    const metaHashes = meta.hashes || {};
+    const rawRes = (meta.resources || []).map((r) => ({
+        name: r.name || r.modelName || "?", weight: r.weight, type: r.type || "",
+        modelId: r.modelId || null, modelVersionId: r.modelVersionId || null,
+    }));
+    const civRes = (meta.civitaiResources || []).filter((r) => r.modelVersionId);
+    const vidSet = new Set([
+        ...rawRes.map((r) => r.modelVersionId).filter(Boolean),
+        ...civRes.map((r) => r.modelVersionId).filter(Boolean),
+        ...(item.modelVersionIds || []),
+    ]);
     // 资源模型的 modelId(meta.resources[].modelId / modelVersionId 也可反查,此处用已知字段)
     const resModelIds = (meta.resources || [])
         .map((r2) => r2.modelId || r2.model_id).filter(Boolean);
@@ -1022,7 +1190,10 @@ function openImageDetail(item, opts = {}) {
             <textarea readonly rows="3">${esc(meta.negativePrompt || "")}</textarea>
         </div>` : ""}
         <div class="cs-kv-grid" style="margin-top:10px">${kvHtml}</div>
-        ${resources ? `<div class="cs-meta-block"><div class="cs-section-title">${esc(t("resources"))}</div><div class="cs-tags">${resources}</div></div>` : ""}
+        <div class="cs-meta-block" data-res-block style="${rawRes.length || vidSet.size ? "" : "display:none"}">
+            <div class="cs-section-title">${esc(t("resources"))} <span class="cs-form-hint" data-res-summary></span></div>
+            <div data-res-list style="display:flex;flex-wrap:wrap;gap:4px;"></div>
+        </div>
         <div class="cs-modal-actions">
             <button class="cs-btn" data-save-img>${esc(t("saveBtn"))}</button>
             <button class="cs-btn cs-btn-primary" data-use-as-output>${esc(t("useAsOutput"))}</button>
@@ -1042,21 +1213,9 @@ function openImageDetail(item, opts = {}) {
         openBrowseFloat(mid); // 在悬浮窗打开模型页(不再跳官网)
     };
     attachIdAndTags(m.box, item); // ID 行 + 标签行(插在 kv 网格之前)
-    // 用到资源:点击在悬浮窗打开对应模型页(无 modelId 时点开 Civitai 搜索)
-    $$("[data-res-model]", m.box).forEach((el) => {
-        el.title = el.title || (S.lang === "zh" ? "点击查看该模型" : "Click to view model");
-        el.onclick = () => {
-            const mid = el.dataset.resModel;
-            m.close();
-            if (mid && /^\d+$/.test(mid)) openBrowseFloat(mid);
-            else {
-                // 无 ID:按名称切到浏览页搜索
-                const name = el.textContent.split("×")[0].trim();
-                S.browse.query = name;
-                switchTab("browse");
-            }
-        };
-    });
+    // 资源流水线:解析(vid→模型信息) → 与 meta.hashes 前缀比对 → 本地索引匹配 → chips 渲染
+    renderResourceList(m.box, item, rawRes, civRes, [...vidSet], meta.hashes || {});
+
     $$("[data-copy]", m.box).forEach((btn) => {
         btn.onclick = () => {
             const ta = $("textarea", btn.closest(".cs-meta-block"));
@@ -2407,6 +2566,15 @@ function isVideoItem(item) {
     return (item.type || "") === "video" || /\.mp4($|\?)/.test(item.url || "");
 }
 
+// meta 剥壳:items[x].meta 可能是 {meta:{...}} 包裹层(imageId 精确查询),
+// 也可能直接是参数对象;生成参数(seed/steps/prompt/hashes/resources/civitaiResources)
+// 全在内层。全文件统一走这里,勿再手写 meta.meta 判断
+function unwrapMeta(rawMeta) {
+    let m = rawMeta || {};
+    if (m && !m.prompt && m.meta) m = m.meta;
+    return m || {};
+}
+
 // Civitai CDN 缩放变体:把 original=true 段换成 width=N,体积可降两个数量级
 function cdnThumb(url, w = 256) {
     if (!url) return "";
@@ -2416,11 +2584,11 @@ function cdnThumb(url, w = 256) {
 // 缺失生成参数的三色感叹号(prompt红/lora黄/model绿),纵列在缩略图右上角;节点条与画廊共用
 function appendMissingMarks(cell, rawMeta) {
     let meta = rawMeta || {};
-    if (meta && !meta.prompt && meta.meta) meta = meta.meta; // 剥掉 imageId 精确查询的包裹层
+    meta = unwrapMeta(meta);
     const miss = [];
     if (!meta.prompt) miss.push("#e2836b");
     if (!(meta.resources || []).some((r) => (r.type || "lora").toLowerCase() === "lora")) miss.push("#e2b96b");
-    if (!(meta["Model hash"] || meta["Model"])) miss.push("#8fd4a0");
+    if (!(meta["Model hash"] || meta["Model"] || (meta.hashes || {}).model)) miss.push("#8fd4a0");
     if (!miss.length) return;
     const b = document.createElement("div");
     b.style.cssText = "position:absolute;top:3px;right:3px;display:flex;flex-direction:column;gap:2px;z-index:2;";
@@ -2545,7 +2713,7 @@ function renderSelInfo(node) {
         return;
     }
     let meta = sel.meta || {};
-    if (meta && !meta.prompt && meta.meta) meta = meta.meta; // imageId 精确查询的包裹层
+    meta = unwrapMeta(meta);
     const loras = (meta.resources || [])
         .filter((r) => (r.type || "lora").toLowerCase() === "lora")
         .map((r) => `${r.name || "?"}×${r.weight ?? 1}`).join(", ");
@@ -2578,7 +2746,7 @@ function renderSelInfo(node) {
     el.innerHTML = "";
     // 左:缩略图,点击进统一大图详情(可保存/选为输出)
     const pic = document.createElement("div");
-    pic.style.cssText = "flex:0 0 64px;height:86px;background:#2e2e33;border-radius:4px;overflow:hidden;cursor:pointer;";
+    pic.style.cssText = "flex:0 0 64px;height:100px;background:#2e2e33;border-radius:4px;overflow:hidden;cursor:pointer;";
     pic.title = S.lang === "zh" ? "点击放大" : "Click to enlarge";
     const im = document.createElement("img");
     im.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;";
@@ -2590,12 +2758,13 @@ function renderSelInfo(node) {
     // 右:五行信息表(ID 加粗置顶)
     const lines = document.createElement("div");
     lines.style.cssText = "flex:1;min-width:0;font-size:11px;line-height:1.45;overflow:hidden;color:#ccc;"
-        + "display:flex;flex-direction:column;justify-content:space-between;height:86px;";
+        + "display:flex;flex-direction:column;justify-content:space-between;height:100px;";
     lines.appendChild(row("Image ID", sel.id, "#fff", true));
     lines.appendChild(row("Pos", meta.prompt, "#e2836b"));
     lines.appendChild(row("Neg", meta.negativePrompt, "#6ba1e2"));
     lines.appendChild(row("Lora", loras, "#e2b96b"));
-    lines.appendChild(row("Model", sel.baseModel, "#8fd4a0"));
+    lines.appendChild(row("Base", sel.baseModel, "#8fd4a0"));       // baseModel 基座
+    lines.appendChild(row("Ckpt", meta["Model"] || (meta.hashes || {}).model, "#8fd4a0")); // checkpoint
     el.appendChild(lines);
     nodeThumbsResize(node); // 面板高度变了,同步节点尺寸防下方 widget 被裁
 }
