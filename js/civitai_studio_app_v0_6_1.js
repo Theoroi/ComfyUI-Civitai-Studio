@@ -60,7 +60,7 @@ const STR = {
         noFiles: "该版本没有文件", previews: "预览图 ({n}) — 点击查看生成参数",
         genParams: "生成参数", noGenParams: "这张图没有公开生成参数。",
         positivePrompt: "正面提示词", negativePrompt: "负面提示词", copy: "复制",
-        copied: "已复制", copyFail: "复制失败", resources: "用到资源",
+        copied: "已复制", copyFail: "复制失败", resources: "相关资源",
         kvModel: "模型", kvSampler: "采样器", kvSteps: "步数", kvSize: "尺寸",
         download: "⬇ 下载", startDownload: "开始下载", submitting: "提交中…",
         dlDialogTitle: "下载 — {name}", fileLabel: "文件", targetFolder: "目标目录",
@@ -169,7 +169,7 @@ const STR = {
         noFiles: "No files for this version", previews: "Previews ({n}) — click for generation params",
         genParams: "Generation params", noGenParams: "This image has no public generation params.",
         positivePrompt: "Positive prompt", negativePrompt: "Negative prompt", copy: "Copy",
-        copied: "Copied", copyFail: "Copy failed", resources: "Resources used",
+        copied: "Copied", copyFail: "Copy failed", resources: "Related resources",
         kvModel: "Model", kvSampler: "Sampler", kvSteps: "Steps", kvSize: "Size",
         download: "⬇ Download", startDownload: "Start download", submitting: "Submitting…",
         dlDialogTitle: "Download — {name}", fileLabel: "File", targetFolder: "Target folder",
@@ -1067,7 +1067,8 @@ async function renderResourceList(box, item, rawRes, civRes, vids, imgHashes) {
             chip.dataset.lora = lora ? "1" : "0";
             chip.dataset.installed = ok ? (installed.name || "1") : "";
             chip.onclick = () => {
-                const mid = versions[vid]?.modelId || vid;
+                // 必须用 modelId(/models/{id});vid 传给 models API 会 404
+                const mid = versions[vid]?.modelId;
                 if (mid && /^\d+$/.test(String(mid))) {
                     (S.ui.floatModals || []).slice().forEach((mm) => mm.close());
                     closeFloatDetail();
@@ -1077,9 +1078,11 @@ async function renderResourceList(box, item, rawRes, civRes, vids, imgHashes) {
             return chip;
         };
         const chips = [];
+        const resolvedLabels = [];
         for (const [vid, r] of merged) {
             const vinfo = versions[vid] || {};
-            const label = vinfo.modelName || vinfo.versionName || r.name || "版本 " + vid;
+            const label = vinfo.modelName || vinfo.versionName || r.name || (S.lang === "zh" ? "版本 " + vid : "Version " + vid);
+            resolvedLabels.push(String(label).toLowerCase());
             const lora = isLora(r.type, r.name) || isLora("", vinfo.modelName);
             // 匹配优先级:version_id 精确 > 模型名 > AutoV3 hash 前缀
             const installed = local.byVersion[vid]
@@ -1089,6 +1092,8 @@ async function renderResourceList(box, item, rawRes, civRes, vids, imgHashes) {
         }
         for (const r of noVid) {
             const lname = String(r.name || "").toLowerCase();
+            // 去重:该名字已被某个已解析 vid 覆盖(名字互相包含)→ 跳过,避免同一资源显示两枚 chip
+            if (resolvedLabels.some((rl) => rl && (rl.includes(lname) || lname.includes(rl)))) continue;
             chips.push(makeChip(r.name || "?", "", r.weight, isLora(r.type, r.name), local.byName[lname] || null));
         }
         const show = expanded ? chips : chips.slice(0, 4);
@@ -1191,7 +1196,7 @@ function openImageDetail(item, opts = {}) {
         </div>` : ""}
         <div class="cs-kv-grid" style="margin-top:10px">${kvHtml}</div>
         <div class="cs-meta-block" data-res-block style="${rawRes.length || vidSet.size ? "" : "display:none"}">
-            <div class="cs-section-title">${esc(t("resources"))} <span class="cs-form-hint" data-res-summary></span></div>
+            <div class="cs-section-title">${esc(S.lang === "zh" ? "相关资源" : "Related resources")} <span class="cs-form-hint" data-res-summary></span></div>
             <div data-res-list style="display:flex;flex-wrap:wrap;gap:4px;"></div>
         </div>
         <div class="cs-modal-actions">

@@ -257,10 +257,19 @@ async def resolve_versions(request):
                 data = await civitai_client.get_json(f"/model-versions/{vid}")
                 files = data.get("files") or [{}]
                 mv = data.get("model") or {}
+                model_id = data.get("modelId") or mv.get("id")  # 镜像响应只有 modelId 顶层字段
+                model_name = mv.get("name") or ""
+                if model_id and not model_name:
+                    # 名称缺失时补查模型详情(仍走缓存)
+                    try:
+                        mdata = await civitai_client.get_model_cached(str(model_id))
+                        model_name = mdata.get("name") or ""
+                    except Exception:
+                        pass
                 info = {
                     "AutoV3": (files[0].get("hashes") or {}).get("AutoV3") or "",
-                    "modelId": mv.get("id"),
-                    "modelName": mv.get("name") or "",
+                    "modelId": model_id,
+                    "modelName": model_name,
                     "versionName": data.get("name") or "",
                     "baseModel": data.get("baseModel") or "",
                 }
