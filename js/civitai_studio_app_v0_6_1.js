@@ -262,7 +262,7 @@ let S = {
     },
     local: { models: [], search: "", type: "", loading: false, updates: {}, truncated: false, openId: null, detailCache: {} },
     dl: { jobs: [], lastSig: "", failStreak: 0 },
-    gal: { items: [], next: [], sort: "Newest", period: "AllTime", base: "", tag: "", nsfwLevel: 0, thumbSize: 256, loading: false, error: "" },
+    gal: { items: [], next: [], sort: "Newest", period: "AllTime", base: "", tag: "", imageId: "", nsfwLevel: 0, thumbSize: 256, loading: false, error: "" },
     ui: { tab: "browse", root: null, scrollTop: 0, detailId: null, backendStale: false },
 };
 
@@ -1081,7 +1081,11 @@ async function renderResourceList(box, item, rawRes, civRes, vids, imgHashes) {
         const resolvedLabels = [];
         for (const [vid, r] of merged) {
             const vinfo = versions[vid] || {};
-            const label = vinfo.modelName || vinfo.versionName || r.name || (S.lang === "zh" ? "版本 " + vid : "Version " + vid);
+            // chip 显示:模型名 +(版本号);两者皆缺才回退 版本 {id}
+            const verPart = vinfo.versionName && vinfo.modelName && vinfo.versionName !== vinfo.modelName ? ` (${vinfo.versionName})` : "";
+            const label = vinfo.modelName
+                ? vinfo.modelName + verPart
+                : (vinfo.versionName || r.name || (S.lang === "zh" ? "版本 " + vid : "Version " + vid));
             resolvedLabels.push(String(label).toLowerCase());
             const lora = isLora(r.type, r.name) || isLora("", vinfo.modelName);
             // 匹配优先级:version_id 精确 > 模型名 > AutoV3 hash 前缀
@@ -1860,6 +1864,8 @@ async function fetchGallery(reset) {
     try {
         const p = new URLSearchParams({ limit: "24", sort: st.sort, period: st.period });
         p.set("nsfw", st.nsfwLevel > 0 ? "true" : "false");
+        // 图片 ID 精确搜索:后端 /images 支持 imageId 单图直查(带 meta)
+        if (String(st.imageId || "").trim()) p.set("imageId", String(st.imageId).trim());
         if (st.base) p.set("baseModels", st.base);
         if (st.tag.trim()) {
             // 纯数字直接用;名称经本地映射(名称→ID)转换,查不到的跳过
@@ -1967,6 +1973,7 @@ function buildGalleryView(root) {
         <div class="cs-filters cs-filters-gal">
             <input id="cs-gal-base" class="cs-span-full" list="cs-gal-base-list" type="text" placeholder="${esc(t("basePlaceholder"))}" value="${esc(st.base)}"/>
             <datalist id="cs-gal-base-list">${BASE_MODELS.map((b) => `<option value="${esc(b)}"></option>`).join("")}</datalist>
+            <input id="cs-gal-imgid" class="cs-span-full" type="text" placeholder="${esc(S.lang === "zh" ? "图片 ID 精确搜索(回车)" : "Image ID exact search (Enter)")}" value="${esc(st.imageId || "")}" autocomplete="off"/>
             <div id="cs-gal-tag-picker" class="cs-span-full"></div>
             <select id="cs-gal-period">${PERIODS.map((p) => `<option value="${p}" ${st.period === p ? "selected" : ""}>${esc(periodLabel(p))}</option>`).join("")}</select>
             <select id="cs-gal-sort">
@@ -1995,6 +2002,14 @@ function buildGalleryView(root) {
         clearTimeout(buildGalleryView._deb);
         buildGalleryView._deb = setTimeout(() => fetchGallery(true), 600);
     };
+    // 图片 ID 精确搜索:回车/清空即刷新;与其它筛选互斥性弱(后端 imageId 优先)
+    $("#cs-gal-imgid", view).addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { st.imageId = e.target.value.trim(); fetchGallery(true); }
+        e.stopPropagation();
+    });
+    $("#cs-gal-imgid", view).addEventListener("input", (e) => {
+        if (!e.target.value.trim() && st.imageId) { st.imageId = ""; fetchGallery(true); } // 清空即恢复
+    });
     // tag 选择器(与节点共用 createTagPicker 组件):chips + 下拉添加器 + 自由输入
     {
         const tagNames = () => String(st.tag || "").split(",").map((s) => s.trim()).filter(Boolean);
@@ -3106,10 +3121,46 @@ app.registerExtension({
                 if (this.size[0] < 460) this.size[0] = 460; // 保证默认 3 列以上
                 // 信息面板独立 widget,移到 widgets 首位:渲染在标题/输出端正下方
                 const infoEl = document.createElement("div");
-                infoEl.style.cssText = "width:100%;display:flex;gap:8px;align-items:flex-start;"
+                infoEl.style.cssText = "width:100%;display:flex;flex-direction:column;gap:6px;"
                     + "background:rgba(255,255,255,.04);border:1px solid #3a3a40;border-radius:6px;padding:6px;";
-                infoEl.textContent = t("noSelectionHint");
-                node.csInfo = infoEl;
+                // image_id 自由输入行:combo 候选之外也能粘贴任意图片 ID,回车/失焦即更新信息面板
+                const idRow = document.createElement("div");
+                idRow.style.cssText = "display:flex;gap:4px;align-items:center;";
+                const idInput = document.createElement("input");
+                idInput.type = "text";
+                idInput.placeholder = S.lang === "zh" ? "输入/粘贴图片 ID,回车加载" : "Image ID, Enter to load";
+                idInput.style.cssText = "flex:1;min-width:0;font-size:11px;padding:3px 6px;";
+                idInput.onkeydown = (e) => {
+                    e.stopPropagation();
+                    if (e.key === "Enter") {
+                        const val = idInput.value.trim();
+                        const idw2 = widget("image_id");
+                        if (idw2 && val && val !== String(idw2.value)) {
+                            idw2.value = val;
+                            if (idw2.options?.values) { idw2.options.values.unshift(val); }
+                            apiPost(`/civitai_studio/remember_image/${encodeURIComponent(val)}`).catch(() => {});
+                            node.csLastId = "";
+                        }
+                        idInput.blur(); // 顺带失焦;onblur 里值已一致不会重复提交
+                    }
+                };
+                idInput.onblur = () => {
+                    const val = idInput.value.trim();
+                    const idw2 = widget("image_id");
+                    if (idw2 && val && val !== String(idw2.value)) {
+                        idw2.value = val;
+                        if (idw2.options?.values) { idw2.options.values.unshift(val); }
+                        apiPost(`/civitai_studio/remember_image/${encodeURIComponent(val)}`).catch(() => {});
+                        node.csLastId = "";
+                    }
+                };
+                idRow.appendChild(idInput);
+                infoEl.appendChild(idRow);
+                const infoBody = document.createElement("div");
+                infoBody.style.cssText = "display:flex;gap:8px;align-items:flex-start;width:100%;";
+                infoEl.appendChild(infoBody);
+                node.csInfoIdInput = idInput;
+                node.csInfo = infoBody;
                 const infoW2 = this.addDOMWidget("cs_info", "cs_info", infoEl);
                 infoW2.serialize = false;
                 const infoW = node.widgets.find((w2) => w2.name === "cs_info");
@@ -3216,7 +3267,7 @@ app.registerExtension({
                     }
                     // image_id 手动粘贴/修改也要刷新信息面板(文本输入不触发事件)
                     const cur = widget("image_id")?.value || "";
-                    if (cur !== node.csLastId) { node.csLastId = cur; renderSelInfo(node); }
+                    if (cur !== node.csLastId) { node.csLastId = cur; renderSelInfo(node); if (node.csInfoIdInput && document.activeElement !== node.csInfoIdInput) node.csInfoIdInput.value = cur === "(index)" ? "" : cur; }
                     // image_id widget 行加粗+强调色:画布与右侧参数面板都扫(行元素渲染后才存在,
                     // dataset 标记防重复设置;命中一次即止的单次标记会漏掉后渲染的面板)
                     for (const rowEl of document.querySelectorAll(".lg-node-widget")) {
