@@ -3142,9 +3142,9 @@ app.registerExtension({
                     tagsDomW.serialize = false;
                     const ci = node.widgets.indexOf(tagsDomW);
                     if (ci >= 0) node.widgets.splice(ci, 1);
-                    // 插在 tags_selected(最后一个筛选字段)之后:渲染于筛选器与预览图之间
-                    const anchor = node.widgets.indexOf(tsW);
-                    node.widgets.splice(anchor >= 0 ? anchor + 1 : node.widgets.length, 0, tagsDomW);
+                    // 紧贴缩略图面板(thumbsW 之前):chips 是预览的过滤器,故放 panel_h 之后、"点击放大/选择"之上
+                    const anchor = node.widgets.indexOf(thumbsW);
+                    node.widgets.splice(anchor >= 0 ? anchor : node.widgets.length, 0, tagsDomW);
                 }
 
                 const sig = () => ["base_model", "tags_selected", "sort", "period", "nsfw", "limit"]
