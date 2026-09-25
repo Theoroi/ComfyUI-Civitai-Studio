@@ -2689,10 +2689,8 @@ function renderNodeThumbs(node) {
     rows.forEach((r, ri) => {
         const arSum = r.reduce((s, c) => s + c.ar, 0);
         const avail = W - (r.length - 1) * gap;
-        let h = avail / arSum;
-        if (ri === rows.length - 1 && h > rowH * 1.15) h = rowH; // 末行不过度放大
-        h = Math.min(h, rowH * 1.6); // 独行超宽横图的行高上限
-        if (arSum * h > avail) h *= avail / (arSum * h); // 舍入超宽回调
+        let h = Math.min(avail / arSum, rowH); // 统一以目标行高为上限:拖宽时行高不变、只增每行张数,与 thumbs_size 语义一致
+        if (arSum * h > avail) h *= avail / (arSum * h); // 舍入超宽回调(仅轻微缩,幅度 ≤ 一张图的宽高比误差)
         for (const c of r) {
             const cell = document.createElement("div");
             cell.className = "cs-thumb";
