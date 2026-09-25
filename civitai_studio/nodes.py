@@ -61,9 +61,9 @@ class CivitaiImageSearch:
 
     @classmethod
     def INPUT_TYPES(cls):
-        # image_id 放首位:前端把它渲染在信息面板正下方(其余参数随后)
+        # image_id 放首位:值由前端信息面板的输入行/[选为输出]维护,poll 会隐藏本行渲染
+        # (必须保留在 INPUT_TYPES:执行链路按名传参,且序列化依赖 widget 存在)
         return {"required": {
-            # 隐藏字段(前端信息面板输入行承载,节点上不渲染 COMBO/文本框)
             "image_id": ("STRING", {"default": "(index)"}),
             "base_model": (["(any)"] + sorted(_BASE_MODEL_OPTIONS, key=str.lower),),
             "nsfw": (["false", "true"],),
@@ -77,7 +77,9 @@ class CivitaiImageSearch:
         },
         # 面板布局参数:仅前端渲染使用,optional 保证旧 API 调用不因缺参被拒
         "optional": {
-            "thumbs_size": (["128", "256", "512"],),
+            # 缩略图统一行高:选项带 px 单位,前端 parseInt 取数值;键名必须与 run 的
+            # thumbs_height 参数一致(ComfyUI 按名传参,不一致直接 TypeError)
+            "thumbs_height": (["128px", "256px", "512px"],),
             "panel_h": ("INT", {"default": 420, "min": 160, "max": 1600, "step": 20}),
         }}
 

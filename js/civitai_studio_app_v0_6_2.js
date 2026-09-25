@@ -279,6 +279,16 @@ function sortEnumNames(list) {
         .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
 }
 
+// 底模下拉选项:首项"全部底模"(空值),其余枚举按字母序——与节点 COMBO 同数据源,
+// 用原生 select 而非 datalist 联想(后者弹层是浏览器私样式,与 ComfyUI 原生下拉观感不一)
+function baseSelectOptions(selected, list) {
+    const sel = String(selected || "").toLowerCase();
+    return [`<option value=""${sel ? "" : " selected"}>${esc(S.lang === "zh" ? "全部底模" : "All base models")}</option>`]
+        .concat(sortEnumNames(list).map((b) =>
+            `<option value="${esc(b)}"${sel === b.toLowerCase() ? " selected" : ""}>${esc(b)}</option>`))
+        .join("");
+}
+
 function detectLang() {
     let loc = "";
     try {
@@ -1987,8 +1997,7 @@ function buildGalleryView(root) {
     view.dataset.view = "gallery";
     view.innerHTML = `
         <div class="cs-filters cs-filters-gal">
-            <input id="cs-gal-base" class="cs-span-full" list="cs-gal-base-list" type="text" placeholder="${esc(t("basePlaceholder"))}" value="${esc(st.base)}"/>
-            <datalist id="cs-gal-base-list">${BASE_MODELS.map((b) => `<option value="${esc(b)}"></option>`).join("")}</datalist>
+            <select id="cs-gal-base" class="cs-span-full">${baseSelectOptions(st.base, BASE_MODELS)}</select>
             <input id="cs-gal-imgid" class="cs-span-full" type="text" placeholder="${esc(S.lang === "zh" ? "图片 ID 精确搜索(回车)" : "Image ID exact search (Enter)")}" value="${esc(st.imageId || "")}" autocomplete="off"/>
             <div id="cs-gal-tag-picker" class="cs-span-full"></div>
             <select id="cs-gal-period">${PERIODS.map((p) => `<option value="${p}" ${st.period === p ? "selected" : ""}>${esc(periodLabel(p))}</option>`).join("")}</select>
@@ -2039,21 +2048,20 @@ function buildGalleryView(root) {
         });
         csTagPickers.add(tp);
     }
-    let debBase;
-    $("#cs-gal-base", view).addEventListener("input", (e) => {
-        clearTimeout(debBase);
-        debBase = setTimeout(() => { st.base = e.target.value.trim(); fetchGallery(true); }, 400);
+    $("#cs-gal-base", view).addEventListener("change", (e) => {
+        st.base = e.target.value;
+        fetchGallery(true);
     });
     // tag 名称映射(详情浮层抓取后由 refreshTagCombos 一并维护 S.tagMap)
     apiGet("/civitai_studio/tag_mapping").then((d) => {
         S.tagMap = S.tagMap || {};
         (d.tags || []).forEach((t2) => { S.tagMap[t2.name] = t2.id; });
     }).catch(() => {});
-    // 底模联想列表:内置种子 + 站方枚举补全(与浏览页一致)
+    // 底模下拉:内置种子 + 站方枚举补全(与浏览页一致;重建后保持当前选择)
     apiGet("/civitai_studio/enums").then((d) => {
-        const list = sortEnumNames(d.ActiveBaseModel || d.BaseModel || []);
-        const dl = $("#cs-gal-base-list", view);
-        if (dl && list.length) dl.innerHTML = list.map((b) => `<option value="${esc(String(b))}"></option>`).join("");
+        const list = (d.ActiveBaseModel || d.BaseModel || []);
+        const sel = $("#cs-gal-base", view);
+        if (sel && list.length) sel.innerHTML = baseSelectOptions(st.base, list);
     }).catch(() => {});
     $("#cs-gal-content", view).addEventListener("scroll", (e) => {
         const el = e.target;
@@ -2265,8 +2273,7 @@ function buildBrowseView(root) {
             <button class="cs-chip" data-preset="best-month">${esc(t("presetBestMonth"))}</button>
         </div>
         <div class="cs-filters">
-            <input id="cs-f-base" class="cs-span-full" list="cs-base-list" type="text" placeholder="${esc(t("basePlaceholder"))}" value="${esc(st.base)}"/>
-            <datalist id="cs-base-list">${BASE_MODELS.map((b) => `<option value="${esc(b)}"></option>`).join("")}</datalist>
+            <select id="cs-f-base" class="cs-span-full">${baseSelectOptions(st.base, BASE_MODELS)}</select>
             <select id="cs-f-type" class="cs-span-full"><option value="">${esc(t("allTypes"))}</option>${TYPE_OPTIONS.map((tp) => `<option value="${tp}" ${st.type === tp ? "selected" : ""}>${esc(tp)}</option>`).join("")}</select>
             <select id="cs-f-period">${PERIODS.map((p) => `<option value="${p}" ${st.period === p ? "selected" : ""}>${esc(periodLabel(p))}</option>`).join("")}</select>
             <select id="cs-f-sort">${SORTS.map((s) => `<option value="${s}" ${st.sort === s ? "selected" : ""}>${esc(sortLabel(s))}</option>`).join("")}</select>
@@ -2303,22 +2310,15 @@ function buildBrowseView(root) {
             triggerBrowseRefresh();
         };
     });
-    // 底模为可输入枚举(datalist 联想),便于使用站方新增的底模名
-    let debBase;
-    $("#cs-f-base", view).addEventListener("input", (e) => {
-        clearTimeout(debBase);
-        debBase = setTimeout(() => {
-            st.base = e.target.value.trim();
-            triggerBrowseRefresh();
-        }, 400);
+    $("#cs-f-base", view).addEventListener("change", (e) => {
+        st.base = e.target.value;
+        triggerBrowseRefresh();
     });
-    // 打开面板即拉取站方枚举,动态补全底模联想列表与类型下拉(失败保留内置种子)
+    // 打开面板即拉取站方枚举,动态补全底模下拉与类型下拉(失败保留内置种子)
     apiGet("/civitai_studio/enums").then((d) => {
-        const list = sortEnumNames(d.ActiveBaseModel || d.BaseModel || []);
-        if (list.length) {
-            const dl = $("#cs-base-list", view);
-            if (dl) dl.innerHTML = list.map((b) => `<option value="${esc(String(b))}"></option>`).join("");
-        }
+        const list = (d.ActiveBaseModel || d.BaseModel || []);
+        const sel = $("#cs-f-base", view);
+        if (sel && list.length) sel.innerHTML = baseSelectOptions(st.base, list);
         const typeSel = $("#cs-f-type", view);
         if (typeSel && Array.isArray(d.ModelType) && d.ModelType.length) {
             const cur = st.type;
@@ -2946,57 +2946,40 @@ function renderNodeThumbs(node) {
         msg.textContent = node.csMsg || (S.lang === "zh" ? "没有结果" : "No results");
         strip.appendChild(msg);
     }
-    // 两端对齐行排版(相册式):按宽高比贪心成行,行内等高、铺满整行宽;
-    // 末行不拉伸保持目标行高。横竖图混排不再出现固定列裁切/大块留白
-    const gap = 6;
-    // 用节点逻辑宽度而非 strip.clientWidth:DOM 实时宽度受上一帧渲染结果(滚动条/
-    // 未完成布局)影响,拖宽瞬间会读到旧值导致"拉到放满一行又被调小"的来回抖动
-    const W = Math.max(160, node.size[0] - 24); // 12px 左右内边距
-    const rows = [];
-    let row = [], rowAr = 0;
+    // 缩略图行高恒等于 thumbs_height:尺寸绝不随节点宽度/所在行变化(节点宽度只
+    // 决定每行放几张,换行交给 flex-wrap)。原两端对齐的动态行高按需求移除
     for (const it of items) {
-        const ar = it.width && it.height ? it.width / it.height : 0.75; // 缺尺寸按 3:4 竖图处理
-        row.push({ it, ar });
-        rowAr += ar;
-        if (rowAr * rowH + (row.length - 1) * gap >= W) { rows.push(row); row = []; rowAr = 0; }
-    }
-    if (row.length) rows.push(row);
-    rows.forEach((r, ri) => {
-        const arSum = r.reduce((s, c) => s + c.ar, 0);
-        const avail = W - (r.length - 1) * gap;
-        let h = Math.min(avail / arSum, rowH); // 统一以目标行高为上限:拖宽时行高不变、只增每行张数,与 thumbs_height 语义一致
-        if (arSum * h > avail) h *= avail / (arSum * h); // 舍入超宽回调(仅轻微缩,幅度 ≤ 一张图的宽高比误差)
-        for (const c of r) {
-            const cell = document.createElement("div");
-            cell.className = "cs-thumb";
-            cell.style.cssText = `position:relative;flex:0 0 ${(c.ar * h).toFixed(1)}px;width:${(c.ar * h).toFixed(1)}px;`
-                + `height:${h.toFixed(1)}px;box-sizing:border-box;background:#2e2e33;border:2px solid #555;`
-                + "border-radius:4px;overflow:hidden;cursor:pointer;";
-            if (isVideoItem(c.it)) {
-                // 静音取首帧作缩略图
-                const v = document.createElement("video");
-                v.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;";
-                v.muted = true;
-                v.loop = true;
-                v.playsInline = true;
-                v.preload = "metadata";
-                v.src = imgSrc(c.it.url || "") + "#t=0.001";
-                cell.appendChild(v);
-                appendPlayBadge(cell);
-            } else {
-                const im = document.createElement("img");
-                im.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;";
-                const thumb = cdnThumb(c.it.url || "");
-                im.onerror = () => { if (!im.dataset.retried) { im.dataset.retried = "1"; im.src = altSrc(thumb); } };
-                im.src = imgSrc(thumb);
-                cell.appendChild(im);
-            }
-            if (idw?.value && String(idw.value) === String(c.it.id)) cell.style.borderColor = "#4a90e2";
-            appendMissingMarks(cell, c.it.meta);
-            cell.onclick = () => showNodeImageFloat(node, c.it);
-            strip.appendChild(cell);
+        const c = { it, ar: it.width && it.height ? it.width / it.height : 0.75 }; // 缺尺寸按 3:4 竖图处理
+        const h = rowH;
+        const cell = document.createElement("div");
+        cell.className = "cs-thumb";
+        cell.style.cssText = `position:relative;flex:0 0 ${(c.ar * h).toFixed(1)}px;width:${(c.ar * h).toFixed(1)}px;`
+            + `height:${h.toFixed(1)}px;box-sizing:border-box;background:#2e2e33;border:2px solid #555;`
+            + "border-radius:4px;overflow:hidden;cursor:pointer;";
+        if (isVideoItem(c.it)) {
+            // 静音取首帧作缩略图
+            const v = document.createElement("video");
+            v.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;";
+            v.muted = true;
+            v.loop = true;
+            v.playsInline = true;
+            v.preload = "metadata";
+            v.src = imgSrc(c.it.url || "") + "#t=0.001";
+            cell.appendChild(v);
+            appendPlayBadge(cell);
+        } else {
+            const im = document.createElement("img");
+            im.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;";
+            const thumb = cdnThumb(c.it.url || "");
+            im.onerror = () => { if (!im.dataset.retried) { im.dataset.retried = "1"; im.src = altSrc(thumb); } };
+            im.src = imgSrc(thumb);
+            cell.appendChild(im);
         }
-    });
+        if (idw?.value && String(idw.value) === String(c.it.id)) cell.style.borderColor = "#4a90e2";
+        appendMissingMarks(cell, c.it.meta);
+        cell.onclick = () => showNodeImageFloat(node, c.it);
+        strip.appendChild(cell);
+    }
     if (!st.loading && st.next && st.next.length) {
         if (items.length >= 100) {
             // 达到显示上限:提示而非继续追加
@@ -3163,6 +3146,11 @@ app.registerExtension({
                     node.widgets.push(thumbsW);
                 }
                 if (this.size[0] < 460) this.size[0] = 460; // 保证默认 3 列以上
+                // 新节点默认 256px(COMBO 首选项是 128px;加载旧工作流时 configure 会以存档值覆盖)
+                {
+                    const thW0 = widget("thumbs_height");
+                    if (thW0 && thW0.value === "128px") thW0.value = "256px";
+                }
                 // 信息面板独立 widget,移到 widgets 首位:渲染在标题/输出端正下方
                 const infoEl = document.createElement("div");
                 infoEl.style.cssText = "width:100%;display:flex;flex-direction:column;gap:6px;"
@@ -3279,14 +3267,13 @@ app.registerExtension({
                     // image_id 手动粘贴/修改也要刷新信息面板(文本输入不触发事件)
                     const cur = widget("image_id")?.value || "";
                     if (cur !== node.csLastId) { node.csLastId = cur; renderSelInfo(node); }
-                    // image_id widget 行加粗+强调色:画布与右侧参数面板都扫(行元素渲染后才存在,
-                    // dataset 标记防重复设置;命中一次即止的单次标记会漏掉后渲染的面板)
+                    // image_id 行不渲染(值由信息面板输入行/[选为输出]维护):画布与右侧
+                    // 参数面板都扫(行元素渲染后才存在,dataset 标记防重复设置)
                     for (const rowEl of document.querySelectorAll(".lg-node-widget")) {
-                        if (rowEl.dataset.csBold) continue;
+                        if (rowEl.dataset.csRowHide) continue;
                         if ((rowEl.textContent || "").trim().startsWith("image_id")) {
-                            rowEl.style.fontWeight = "700";
-                            rowEl.style.color = "var(--accent-color,#4a90e2)";
-                            rowEl.dataset.csBold = "1";
+                            rowEl.style.display = "none";
+                            rowEl.dataset.csRowHide = "1";
                         }
                         // tags_selected 是隐藏存储 widget(值由 chips 条交互维护),不占版面
                         if (rowEl.dataset.csTsHide === undefined && (rowEl.textContent || "").trim().startsWith("tags_selected")) {
@@ -3369,10 +3356,13 @@ app.registerExtension({
                     let vi = 0;
                     for (const name of order) {
                         const w = (this.widgets || []).find((x) => x.name === name);
-                        const val = vi < v.length ? v[vi] : undefined;
+                        let val = vi < v.length ? v[vi] : undefined;
                         vi++;
                         if (!w) continue; // 缺失槽位(如已删的 tag)直接丢弃其值
                         if (val === undefined) break;
+                        if (name === "thumbs_height" && /^(small|medium|large)$/.test(String(val))) {
+                            val = { small: "128px", medium: "256px", large: "512px" }[String(val)]; // 旧 thumbs_size 语义值迁移
+                        }
                         w.value = val;
                         if (w.inputEl) w.inputEl.value = val; // text widget 不同步 inputEl 会被重绘反向清空
                     }
