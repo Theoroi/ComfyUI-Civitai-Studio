@@ -2598,6 +2598,32 @@ function nodeThumbsResize(node) {
     } catch (e) { /* 旧版接口缺失时忽略 */ }
 }
 
+// 缩略图区自适应节点:strip 是节点最后一个 widget,高度 = 节点高 - 其上方内容高,
+// 拖节点下缘即增减可视区(缩略图在区内滚动),panel_h 只作初始默认值。
+// 节点 DOM 在画布缩放容器内:bounding rect 差值要除以实际缩放比才得布局像素;
+// 末尾按 scrollHeight 溢出回 trim 一次,吸收节点内边距/取整误差,防止 resize 循环
+function nodeThumbsFill(node) {
+    try {
+        const strip = node.csStrip;
+        if (!strip) return;
+        const root = strip.closest(".lg-node");
+        if (!root) return;
+        const client = root.clientHeight;
+        if (client < 60 || node.size[1] < 60) return;
+        const rect = root.getBoundingClientRect();
+        const zoom = rect.height / client;
+        if (!isFinite(zoom) || zoom <= 0) return;
+        const topPx = (strip.getBoundingClientRect().top - rect.top) / zoom;
+        const h = Math.round(Math.max(120, client - topPx - 8));
+        if (String(node.csLastFillH) === String(h)) return;
+        strip.style.maxHeight = "none";
+        strip.style.height = h + "px";
+        const over = root.scrollHeight - client;
+        if (over > 0) strip.style.height = Math.max(120, h - over - 2) + "px";
+        node.csLastFillH = strip.style.height;
+    } catch (e) { /* 旧版接口缺失时忽略 */ }
+}
+
 function isVideoItem(item) {
     return (item.type || "") === "video" || /\.mp4($|\?)/.test(item.url || "");
 }
@@ -2913,8 +2939,8 @@ function renderNodeThumbs(node) {
     const wv = (name) => { const w = (node.widgets || []).find((x) => x.name === name); return w ? w.value : undefined; };
     // thumbs_height 值即目标行高(px):两端对齐行排版按宽高比成行,行内等高铺满整行宽
     const rowH = Math.max(64, parseInt(wv("thumbs_height"), 10) || 256);
-    const panelH = Math.max(160, parseInt(wv("panel_h"), 10) || 420);
-    strip.style.maxHeight = panelH + "px";
+    const panelH = Math.max(160, parseInt(wv("panel_h"), 10) || 420); // 初始默认区高;节点拖动后由 nodeThumbsFill 接管
+    strip.style.height = panelH + "px";
     strip.querySelectorAll(".cs-thumb,.cs-thumb-msg,.cs-thumb-bar,.cs-thumb-more,.cs-selinfo")
         .forEach((el) => el.remove());
     const st = node.csFetch || {};
@@ -3000,6 +3026,7 @@ function renderNodeThumbs(node) {
     }
     strip.scrollTop = keepScroll;
     nodeThumbsResize(node);
+    nodeThumbsFill(node);
 }
 
 // 节点缩略图点击 → 统一大图详情浮层(与画廊共用;选为输出默认写入本节点)
@@ -3324,6 +3351,7 @@ app.registerExtension({
                     // 轮询兜底:内容变化后节点高度没跟上时重新贴合(只精确贴合,
                     // 修复矮节点里 image_id 等 widget 被裁在节点外无法点选)
                     nodeThumbsResize(node);
+                    nodeThumbsFill(node); // 拖节点边缘 → 缩略图区自适应剩余高度
                 }, 700);
                 // 节点删除时清理定时器与全局 wheel 监听,避免僵尸轮询/监听泄漏
                 const origOnRemoved = this.onRemoved;
