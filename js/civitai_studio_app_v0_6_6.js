@@ -279,14 +279,60 @@ function sortEnumNames(list) {
         .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
 }
 
-// 底模下拉选项:首项"全部底模"(空值),其余枚举按字母序——与节点 COMBO 同数据源,
-// 用原生 select 而非 datalist 联想(后者弹层是浏览器私样式,与 ComfyUI 原生下拉观感不一)
-function baseSelectOptions(selected, list) {
-    const sel = String(selected || "").toLowerCase();
-    return [`<option value=""${sel ? "" : " selected"}>${esc(S.lang === "zh" ? "全部底模" : "All base models")}</option>`]
-        .concat(sortEnumNames(list).map((b) =>
-            `<option value="${esc(b)}"${sel === b.toLowerCase() ? " selected" : ""}>${esc(b)}</option>`))
-        .join("");
+// 底模联想输入:可自由输入 + 自动补全弹层;弹层视觉对齐 ComfyUI 原生 combo 下拉
+// (深色圆角面板/悬停高亮,走 ComfyUI 主题变量),替代浏览器 datalist 私样式。
+// input:文本框;getCands():候选数组(枚举刷新后整体替换);onCommit(val):回车/点选提交
+function attachComboComplete(input, getCands, onCommit) {
+    const pop = document.createElement("div");
+    pop.style.cssText = "position:fixed;z-index:10000;display:none;max-height:240px;overflow-y:auto;"
+        + "background:var(--comfy-input-bg,var(--bg-color,#2b2b30));color:var(--fg-color,#ddd);"
+        + "border:1px solid var(--border-color,#3a3a40);border-radius:6px;"
+        + "box-shadow:0 6px 18px rgba(0,0,0,.45);padding:4px;font-size:12px;cursor:default;";
+    let items = [], hi = -1;
+    const close = () => { pop.style.display = "none"; hi = -1; };
+    const hiApply = () => [...pop.children].forEach((el, i) => {
+        el.style.background = i === hi ? "var(--border-color,#3f3f46)" : "transparent";
+    });
+    const renderPop = () => {
+        const q = input.value.trim().toLowerCase();
+        items = (getCands() || []).filter((c) => !q || c.toLowerCase().includes(q)).slice(0, 80);
+        hi = -1;
+        if (!items.length) { close(); return; }
+        pop.innerHTML = items.map((c) => `<div class="cs-combo-item" style="padding:5px 10px;border-radius:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(c)}</div>`).join("");
+        const r = input.getBoundingClientRect();
+        pop.style.left = r.left + "px";
+        pop.style.top = r.bottom + 2 + "px";
+        pop.style.width = Math.max(r.width, 180) + "px";
+        pop.style.display = "block";
+    };
+    const pick = (i) => {
+        if (i < 0 || i >= items.length) return;
+        input.value = items[i];
+        close();
+        onCommit(items[i]);
+    };
+    pop.addEventListener("pointerdown", (e) => { // pointerdown 先于 input 失焦,点选必生效
+        const it = e.target.closest(".cs-combo-item");
+        if (it) { e.preventDefault(); pick([...pop.children].indexOf(it)); }
+    });
+    pop.addEventListener("mouseover", (e) => {
+        const it = e.target.closest(".cs-combo-item");
+        hi = it ? [...pop.children].indexOf(it) : -1;
+        hiApply();
+    });
+    input.addEventListener("focus", renderPop);
+    input.addEventListener("input", renderPop);
+    input.addEventListener("blur", () => setTimeout(close, 120));
+    input.addEventListener("keydown", (e) => {
+        e.stopPropagation();
+        if (pop.style.display !== "block") { if (e.key === "Enter") { close(); onCommit(input.value.trim()); } return; }
+        if (e.key === "ArrowDown") { hi = Math.min(items.length - 1, hi + 1); hiApply(); e.preventDefault(); }
+        else if (e.key === "ArrowUp") { hi = Math.max(-1, hi - 1); hiApply(); e.preventDefault(); }
+        else if (e.key === "Enter") { e.preventDefault(); if (hi >= 0) pick(hi); else { close(); onCommit(input.value.trim()); } }
+        else if (e.key === "Escape") close();
+    });
+    window.addEventListener("scroll", () => { if (pop.style.display === "block") close(); }, { capture: true });
+    if (!pop.isConnected) document.body.appendChild(pop);
 }
 
 function detectLang() {
@@ -1997,7 +2043,7 @@ function buildGalleryView(root) {
     view.dataset.view = "gallery";
     view.innerHTML = `
         <div class="cs-filters cs-filters-gal">
-            <select id="cs-gal-base" class="cs-span-full">${baseSelectOptions(st.base, BASE_MODELS)}</select>
+            <input id="cs-gal-base" class="cs-span-full" type="text" placeholder="${esc(t("basePlaceholder"))}" value="${esc(st.base)}"/>
             <input id="cs-gal-imgid" class="cs-span-full" type="text" placeholder="${esc(S.lang === "zh" ? "图片 ID 精确搜索(回车)" : "Image ID exact search (Enter)")}" value="${esc(st.imageId || "")}" autocomplete="off"/>
             <div id="cs-gal-tag-picker" class="cs-span-full"></div>
             <select id="cs-gal-period">${PERIODS.map((p) => `<option value="${p}" ${st.period === p ? "selected" : ""}>${esc(periodLabel(p))}</option>`).join("")}</select>
@@ -2048,20 +2094,23 @@ function buildGalleryView(root) {
         });
         csTagPickers.add(tp);
     }
-    $("#cs-gal-base", view).addEventListener("change", (e) => {
-        st.base = e.target.value;
-        fetchGallery(true);
+    // 底模:可自由输入 + 自动补全弹层(与浏览页共用 attachComboComplete)
+    const galBaseCands = { list: BASE_MODELS };
+    attachComboComplete($("#cs-gal-base", view), () => galBaseCands.list, (val) => { st.base = val; fetchGallery(true); });
+    let debBase;
+    $("#cs-gal-base", view).addEventListener("input", (e) => {
+        clearTimeout(debBase);
+        debBase = setTimeout(() => { st.base = e.target.value.trim(); fetchGallery(true); }, 400);
     });
     // tag 名称映射(详情浮层抓取后由 refreshTagCombos 一并维护 S.tagMap)
     apiGet("/civitai_studio/tag_mapping").then((d) => {
         S.tagMap = S.tagMap || {};
         (d.tags || []).forEach((t2) => { S.tagMap[t2.name] = t2.id; });
     }).catch(() => {});
-    // 底模下拉:内置种子 + 站方枚举补全(与浏览页一致;重建后保持当前选择)
+    // 底模候选:内置种子 + 站方枚举补全(与浏览页一致)
     apiGet("/civitai_studio/enums").then((d) => {
         const list = (d.ActiveBaseModel || d.BaseModel || []);
-        const sel = $("#cs-gal-base", view);
-        if (sel && list.length) sel.innerHTML = baseSelectOptions(st.base, list);
+        if (list.length) galBaseCands.list = sortEnumNames(list);
     }).catch(() => {});
     $("#cs-gal-content", view).addEventListener("scroll", (e) => {
         const el = e.target;
@@ -2273,7 +2322,7 @@ function buildBrowseView(root) {
             <button class="cs-chip" data-preset="best-month">${esc(t("presetBestMonth"))}</button>
         </div>
         <div class="cs-filters">
-            <select id="cs-f-base" class="cs-span-full">${baseSelectOptions(st.base, BASE_MODELS)}</select>
+            <input id="cs-f-base" class="cs-span-full" type="text" placeholder="${esc(t("basePlaceholder"))}" value="${esc(st.base)}"/>
             <select id="cs-f-type" class="cs-span-full"><option value="">${esc(t("allTypes"))}</option>${TYPE_OPTIONS.map((tp) => `<option value="${tp}" ${st.type === tp ? "selected" : ""}>${esc(tp)}</option>`).join("")}</select>
             <select id="cs-f-period">${PERIODS.map((p) => `<option value="${p}" ${st.period === p ? "selected" : ""}>${esc(periodLabel(p))}</option>`).join("")}</select>
             <select id="cs-f-sort">${SORTS.map((s) => `<option value="${s}" ${st.sort === s ? "selected" : ""}>${esc(sortLabel(s))}</option>`).join("")}</select>
@@ -2310,15 +2359,18 @@ function buildBrowseView(root) {
             triggerBrowseRefresh();
         };
     });
-    $("#cs-f-base", view).addEventListener("change", (e) => {
-        st.base = e.target.value;
-        triggerBrowseRefresh();
+    // 底模:可自由输入 + 自动补全弹层(视觉对齐 ComfyUI 原生 combo);输入 400ms 防抖即刷
+    const baseCands = { list: BASE_MODELS };
+    attachComboComplete($("#cs-f-base", view), () => baseCands.list, (val) => { st.base = val; triggerBrowseRefresh(); });
+    let debBase;
+    $("#cs-f-base", view).addEventListener("input", (e) => {
+        clearTimeout(debBase);
+        debBase = setTimeout(() => { st.base = e.target.value.trim(); triggerBrowseRefresh(); }, 400);
     });
-    // 打开面板即拉取站方枚举,动态补全底模下拉与类型下拉(失败保留内置种子)
+    // 打开面板即拉取站方枚举,动态补全底模候选与类型下拉(失败保留内置种子)
     apiGet("/civitai_studio/enums").then((d) => {
         const list = (d.ActiveBaseModel || d.BaseModel || []);
-        const sel = $("#cs-f-base", view);
-        if (sel && list.length) sel.innerHTML = baseSelectOptions(st.base, list);
+        if (list.length) baseCands.list = sortEnumNames(list);
         const typeSel = $("#cs-f-type", view);
         if (typeSel && Array.isArray(d.ModelType) && d.ModelType.length) {
             const cur = st.type;
@@ -2595,32 +2647,6 @@ function nodeThumbsResize(node) {
         const overflow = root.scrollHeight - client; // >0:内容被裁;=0:贴合
         if (overflow > 4) node.setSize([node.size[0], node.size[1] + overflow / m]);
         else if (overflow < -30) node.setSize([node.size[0], Math.max(180, node.size[1] + overflow / m)]);
-    } catch (e) { /* 旧版接口缺失时忽略 */ }
-}
-
-// 缩略图区自适应节点:strip 是节点最后一个 widget,区高上限 = 节点高 - 其上方内容高,
-// 拖节点下缘即增减可视区(缩略图在区内滚动),panel_h 只作初始默认上限。
-// 必须用 max-height 而非显式 height:显式高度会与 nodeThumbsResize(节点贴合内容)
-// 构成正反馈,量测误差逐轮放大,把节点撑到全部缩略图的天然高度;max-height 保证
-// 内容永远不会把 scrollHeight 顶过节点高,节点只由用户拖动决定。
-// rect 差值除以实际缩放比换算布局像素,不受画布 zoom 影响
-function nodeThumbsFill(node) {
-    try {
-        const strip = node.csStrip;
-        if (!strip) return;
-        const root = strip.closest(".lg-node");
-        if (!root) return;
-        const client = root.clientHeight;
-        if (client < 60 || node.size[1] < 60) return;
-        const rect = root.getBoundingClientRect();
-        const zoom = rect.height / client;
-        if (!isFinite(zoom) || zoom <= 0) return;
-        const topPx = (strip.getBoundingClientRect().top - rect.top) / zoom;
-        const h = Math.round(Math.max(120, client - topPx - 8));
-        if (String(node.csLastFillH) === String(h)) return;
-        strip.style.height = ""; // 清掉 v0_6_4 可能留下的显式高度
-        strip.style.maxHeight = h + "px";
-        node.csLastFillH = strip.style.maxHeight;
     } catch (e) { /* 旧版接口缺失时忽略 */ }
 }
 
@@ -2939,8 +2965,7 @@ function renderNodeThumbs(node) {
     const wv = (name) => { const w = (node.widgets || []).find((x) => x.name === name); return w ? w.value : undefined; };
     // thumbs_height 值即目标行高(px):两端对齐行排版按宽高比成行,行内等高铺满整行宽
     const rowH = Math.max(64, parseInt(wv("thumbs_height"), 10) || 256);
-    const panelH = Math.max(160, parseInt(wv("panel_h"), 10) || 420); // 初始默认区高;节点拖动后由 nodeThumbsFill 接管
-    strip.style.height = ""; // 不用显式高度(会与节点贴合逻辑正反馈撑长节点)
+    const panelH = Math.max(160, parseInt(wv("panel_h"), 10) || 420);
     strip.style.maxHeight = panelH + "px";
     strip.querySelectorAll(".cs-thumb,.cs-thumb-msg,.cs-thumb-bar,.cs-thumb-more,.cs-selinfo")
         .forEach((el) => el.remove());
@@ -3027,7 +3052,6 @@ function renderNodeThumbs(node) {
     }
     strip.scrollTop = keepScroll;
     nodeThumbsResize(node);
-    nodeThumbsFill(node);
 }
 
 // 节点缩略图点击 → 统一大图详情浮层(与画廊共用;选为输出默认写入本节点)
@@ -3352,7 +3376,6 @@ app.registerExtension({
                     // 轮询兜底:内容变化后节点高度没跟上时重新贴合(只精确贴合,
                     // 修复矮节点里 image_id 等 widget 被裁在节点外无法点选)
                     nodeThumbsResize(node);
-                    nodeThumbsFill(node); // 拖节点边缘 → 缩略图区自适应剩余高度
                 }, 700);
                 // 节点删除时清理定时器与全局 wheel 监听,避免僵尸轮询/监听泄漏
                 const origOnRemoved = this.onRemoved;
