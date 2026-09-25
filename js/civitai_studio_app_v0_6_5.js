@@ -2598,10 +2598,12 @@ function nodeThumbsResize(node) {
     } catch (e) { /* 旧版接口缺失时忽略 */ }
 }
 
-// 缩略图区自适应节点:strip 是节点最后一个 widget,高度 = 节点高 - 其上方内容高,
-// 拖节点下缘即增减可视区(缩略图在区内滚动),panel_h 只作初始默认值。
-// 节点 DOM 在画布缩放容器内:bounding rect 差值要除以实际缩放比才得布局像素;
-// 末尾按 scrollHeight 溢出回 trim 一次,吸收节点内边距/取整误差,防止 resize 循环
+// 缩略图区自适应节点:strip 是节点最后一个 widget,区高上限 = 节点高 - 其上方内容高,
+// 拖节点下缘即增减可视区(缩略图在区内滚动),panel_h 只作初始默认上限。
+// 必须用 max-height 而非显式 height:显式高度会与 nodeThumbsResize(节点贴合内容)
+// 构成正反馈,量测误差逐轮放大,把节点撑到全部缩略图的天然高度;max-height 保证
+// 内容永远不会把 scrollHeight 顶过节点高,节点只由用户拖动决定。
+// rect 差值除以实际缩放比换算布局像素,不受画布 zoom 影响
 function nodeThumbsFill(node) {
     try {
         const strip = node.csStrip;
@@ -2616,11 +2618,9 @@ function nodeThumbsFill(node) {
         const topPx = (strip.getBoundingClientRect().top - rect.top) / zoom;
         const h = Math.round(Math.max(120, client - topPx - 8));
         if (String(node.csLastFillH) === String(h)) return;
-        strip.style.maxHeight = "none";
-        strip.style.height = h + "px";
-        const over = root.scrollHeight - client;
-        if (over > 0) strip.style.height = Math.max(120, h - over - 2) + "px";
-        node.csLastFillH = strip.style.height;
+        strip.style.height = ""; // 清掉 v0_6_4 可能留下的显式高度
+        strip.style.maxHeight = h + "px";
+        node.csLastFillH = strip.style.maxHeight;
     } catch (e) { /* 旧版接口缺失时忽略 */ }
 }
 
@@ -2940,7 +2940,8 @@ function renderNodeThumbs(node) {
     // thumbs_height 值即目标行高(px):两端对齐行排版按宽高比成行,行内等高铺满整行宽
     const rowH = Math.max(64, parseInt(wv("thumbs_height"), 10) || 256);
     const panelH = Math.max(160, parseInt(wv("panel_h"), 10) || 420); // 初始默认区高;节点拖动后由 nodeThumbsFill 接管
-    strip.style.height = panelH + "px";
+    strip.style.height = ""; // 不用显式高度(会与节点贴合逻辑正反馈撑长节点)
+    strip.style.maxHeight = panelH + "px";
     strip.querySelectorAll(".cs-thumb,.cs-thumb-msg,.cs-thumb-bar,.cs-thumb-more,.cs-selinfo")
         .forEach((el) => el.remove());
     const st = node.csFetch || {};
