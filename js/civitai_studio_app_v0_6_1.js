@@ -139,7 +139,7 @@ const STR = {
         noTags: "无标签", tagsPaused: "标签抓取已暂停({sec} 秒后恢复)", noSelectionHint: "未选择(点击缩略图选择)",
         tagScrapeLabel: "读取非公开 API 获取图片分类标签，需要Civitai API Key", tagsLoading: "标签加载中…",
         tagAndLabel: "实验:多标签 AND 语义(逐标签查询求交集,请求量更大)", clearTags: "清空",
-        noTagsSel: "未选标签(从上方 tag 下拉添加,可多选;多标签为任一命中)",
+        noTagsSel: "未选标签(下拉选择或输入名称/ID,可多选;多标签任一命中)",
         tagsOff: "标签抓取已在设置中关闭", capHint: "已达显示上限(100)",
         galleryEmpty: "没有图片。", galleryAuthor: "作者",
     },
@@ -248,7 +248,7 @@ const STR = {
         noTags: "No tags", tagsPaused: "Tag fetch paused ({sec}s), retrying later", noSelectionHint: "Nothing selected (click a thumbnail)",
         tagScrapeLabel: "Fetch image category tags (unofficial API), requires Civitai API Key", tagsLoading: "Loading tags…", tagsOff: "Tag scraping disabled in settings", capHint: "Display cap reached (100)",
         tagAndLabel: "Experimental: multi-tag AND (per-tag queries + intersection, more requests)", clearTags: "Clear",
-        noTagsSel: "No tags (add from tag dropdown, multi-select; any-match semantics)",
+        noTagsSel: "No tags (pick from dropdown or type name/ID, multi-select; any-match)",
         galleryEmpty: "No images.", galleryAuthor: "Author",
     },
 };
@@ -1771,7 +1771,7 @@ function buildGalleryView(root) {
         <div class="cs-filters cs-filters-gal">
             <input id="cs-gal-base" class="cs-span-full" list="cs-gal-base-list" type="text" placeholder="${esc(t("basePlaceholder"))}" value="${esc(st.base)}"/>
             <datalist id="cs-gal-base-list">${BASE_MODELS.map((b) => `<option value="${esc(b)}"></option>`).join("")}</datalist>
-            <input id="cs-gal-tag" class="cs-span-full" type="text" placeholder="${esc(t("galTagId"))}" value="${esc(st.tag)}" autocomplete="off"/>
+            <div id="cs-gal-tag-picker" class="cs-span-full"></div>
             <select id="cs-gal-period">${PERIODS.map((p) => `<option value="${p}" ${st.period === p ? "selected" : ""}>${esc(periodLabel(p))}</option>`).join("")}</select>
             <select id="cs-gal-sort">
                 <option value="Newest">${esc(t("gallerySortNewest"))}</option>
@@ -1799,45 +1799,18 @@ function buildGalleryView(root) {
         clearTimeout(buildGalleryView._deb);
         buildGalleryView._deb = setTimeout(() => fetchGallery(true), 600);
     };
-    // tag 补全:自绘下拉弹层(样式与侧边栏一致;原生 datalist 样式不受控、与其它下拉不一致)。
-    // 列出本地已入库标签名称,点击填入;无匹配时仍可自由输入数字 ID
+    // tag 选择器(与节点共用 createTagPicker 组件):chips + 下拉添加器 + 自由输入
     {
-        const tagInput = $("#cs-gal-tag", view);
-        let pop = null;
-        const closePop = () => { if (pop) { pop.remove(); pop = null; } };
-        const showPop = () => {
-            closePop();
-            const names = Object.keys(S.tagMap || {});
-            const q = tagInput.value.trim().toLowerCase();
-            const hits = (q ? names.filter((n) => n.toLowerCase().includes(q)) : names).slice(0, 60);
-            if (!hits.length) return;
-            pop = document.createElement("div");
-            pop.style.cssText = "position:fixed;z-index:65000;background:var(--comfy-menu-bg,#2a2a2a);"
-                + "border:1px solid var(--border-color,#444);border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,.5);"
-                + "max-height:220px;overflow-y:auto;min-width:" + tagInput.getBoundingClientRect().width + "px;";
-            for (const name of hits) {
-                const opt = document.createElement("div");
-                opt.textContent = "#" + name;
-                opt.style.cssText = "padding:5px 10px;font-size:12px;color:var(--fg-color,#eee);cursor:pointer;";
-                opt.onmouseenter = () => { opt.style.background = "var(--accent-color,#4a90e2)"; };
-                opt.onmouseleave = () => { opt.style.background = "transparent"; };
-                opt.onclick = () => {
-                    tagInput.value = name;
-                    st.tag = name;
-                    closePop();
-                    fetchGallery(true);
-                };
-                pop.appendChild(opt);
-            }
-            document.body.appendChild(pop);
-            const r = tagInput.getBoundingClientRect();
-            pop.style.left = r.left + "px";
-            pop.style.top = Math.min(r.bottom + 2, window.innerHeight - (pop.offsetHeight || 100) - 8) + "px";
-        };
-        tagInput.addEventListener("focus", showPop);
-        tagInput.addEventListener("input", () => { st.tag = tagInput.value; showPop(); debouncedFetch(); });
-        tagInput.addEventListener("blur", () => setTimeout(closePop, 150)); // 延迟让选项点击先于关闭
-        document.addEventListener("click", (ev) => { if (pop && !pop.contains(ev.target) && ev.target !== tagInput) closePop(); });
+        const tagNames = () => String(st.tag || "").split(",").map((s) => s.trim()).filter(Boolean);
+        const tp = createTagPicker($("#cs-gal-tag-picker", view), {
+            names: tagNames(),
+            candidates: () => Object.keys(S.tagMap || {}),
+            onChange: (names) => {
+                st.tag = names.join(",");
+                debouncedFetch();
+            },
+        });
+        csTagPickers.add(tp);
     }
     let debBase;
     $("#cs-gal-base", view).addEventListener("input", (e) => {
@@ -2440,51 +2413,85 @@ function appendPlayBadge(cell) {
 
 // tag 多选 chips 面板:tag widget 的 value(逗号分隔名称串)是唯一真源,面板仅是交互层。
 // combo 当"添加器"(选中即追加并复位),chip 上的 ✕ 逐个移除
-function renderTagChips(node) {
-    const el = node.csTags;
-    if (!el) return;
-    el.innerHTML = "";
-    const tsW = (node.widgets || []).find((w) => w.name === "tags_selected");
-    const names = String(tsW?.value || "")
-        .split(",").map((s) => s.trim()).filter(Boolean);
-    if (!names.length) {
-        el.innerHTML = `<span style="color:#777;font-size:11px;">${esc(t("noTagsSel"))}</span>`;
-        nodeThumbsResize(node);
-        return;
-    }
-    for (const name of names) {
-        const chip = document.createElement("span");
-        chip.style.cssText = "display:inline-flex;align-items:center;gap:4px;background:rgba(74,144,226,.16);"
-            + "border:1px solid var(--accent-color,#4a90e2);border-radius:10px;padding:0 7px;"
-            + "font-size:11px;color:var(--fg-color,#eee);white-space:nowrap;";
-        chip.innerHTML = `<span>#${esc(name)}</span>`;
-        const x = document.createElement("span");
-        x.textContent = "✕";
-        x.style.cssText = "cursor:pointer;opacity:.6;";
-        x.title = S.lang === "zh" ? "移除" : "Remove";
-        x.onclick = () => setNodeTags(node, names.filter((n2) => n2 !== name));
-        chip.appendChild(x);
-        el.appendChild(chip);
-    }
-    if (names.length > 1) {
-        const clear = document.createElement("span");
-        clear.textContent = t("clearTags");
-        clear.style.cssText = "cursor:pointer;font-size:11px;color:var(--accent-color,#4a90e2);margin-left:2px;";
-        clear.onclick = () => setNodeTags(node, []);
-        el.appendChild(clear);
-    }
-    nodeThumbsResize(node);
+// 共享 tag 选择器:chips(已选,✕移除) + 下拉添加器(候选=已入库标签,实时刷新)
+// + 自由输入框(名称/数字 ID,回车或逗号追加)。节点与画廊共用。
+// opts: { names: 初值数组, candidates: ()=>候选名数组, onChange: (names)=>void, compact: 紧凑模式 }
+function createTagPicker(el, opts) {
+    const state = { names: (opts.names || []).slice() };
+    const addName = (raw) => {
+        for (let part of String(raw).split(/[,，]/).map((s) => s.trim()).filter(Boolean)) {
+            // 纯数字 ID 且映射里有名称 → 归一为名称显示;未知 ID 保留数字(查询直接用)
+            if (/^\d+$/.test(part) && S.tagMap) {
+                const hit = Object.entries(S.tagMap).find(([, id]) => String(id) === part);
+                if (hit) part = hit[0];
+            }
+            if (part && !state.names.includes(part)) state.names.push(part);
+        }
+        sync();
+    };
+    const sync = () => { rerender(); if (opts.onChange) opts.onChange(state.names.slice()); };
+    const rerender = () => {
+        el.innerHTML = "";
+        const chips = document.createElement("div");
+        chips.style.cssText = "display:flex;flex-wrap:wrap;gap:4px;align-items:center;width:100%;";
+        if (!state.names.length) {
+            chips.innerHTML = `<span style="color:#777;font-size:11px;">${esc(t("noTagsSel"))}</span>`;
+        }
+        for (const name of state.names) {
+            const chip = document.createElement("span");
+            chip.style.cssText = "display:inline-flex;align-items:center;gap:4px;background:rgba(74,144,226,.16);"
+                + "border:1px solid var(--accent-color,#4a90e2);border-radius:10px;padding:0 7px;"
+                + "font-size:11px;color:var(--fg-color,#eee);white-space:nowrap;";
+            chip.innerHTML = `<span>#${esc(name)}</span>`;
+            const x = document.createElement("span");
+            x.textContent = "✕";
+            x.style.cssText = "cursor:pointer;opacity:.6;";
+            x.title = S.lang === "zh" ? "移除" : "Remove";
+            x.onclick = () => { const i = state.names.indexOf(name); if (i >= 0) state.names.splice(i, 1); sync(); };
+            chip.appendChild(x);
+            chips.appendChild(chip);
+        }
+        if (state.names.length > 1) {
+            const clear = document.createElement("span");
+            clear.textContent = t("clearTags");
+            clear.style.cssText = "cursor:pointer;font-size:11px;color:var(--accent-color,#4a90e2);";
+            clear.onclick = () => { state.names = []; sync(); };
+            chips.appendChild(clear);
+        }
+        el.appendChild(chips);
+        // 添加行:下拉(已入库标签)+ 自由输入(名称/ID)
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex;gap:4px;width:100%;margin-top:4px;";
+        const sel = document.createElement("select");
+        sel.style.cssText = "flex:1.2;min-width:0;font-size:11px;padding:2px;";
+        const cands = (opts.candidates ? opts.candidates() : Object.keys(S.tagMap || {}))
+            .filter((c) => !state.names.includes(c));
+        sel.innerHTML = `<option value="">${esc(S.lang === "zh" ? "+ 添加标签…" : "+ Add tag…")}</option>`
+            + cands.map((c) => `<option>${esc(c)}</option>`).join("");
+        sel.onchange = () => { if (sel.value) { const v = sel.value; sel.value = ""; addName(v); } };
+        row.appendChild(sel);
+        const inp = document.createElement("input");
+        inp.type = "text";
+        inp.placeholder = S.lang === "zh" ? "输入名称/ID,回车添加" : "Name or ID, Enter to add";
+        inp.style.cssText = "flex:1;min-width:0;font-size:11px;padding:2px;";
+        inp.onkeydown = (e) => {
+            if (e.key === "Enter" && inp.value.trim()) { addName(inp.value); inp.value = ""; }
+            e.stopPropagation(); // 防触发外层快捷键
+        };
+        row.appendChild(inp);
+        el.appendChild(row);
+    };
+    rerender();
+    return {
+        set(names) { state.names = (names || []).slice(); rerender(); },
+        names: () => state.names.slice(),
+        rerender,
+    };
 }
 
-function setNodeTags(node, names) {
-    const tsW = (node.widgets || []).find((w) => w.name === "tags_selected");
-    const tagW = (node.widgets || []).find((w) => w.name === "tag");
-    node.csTagSel = names.slice();
-    if (tsW) tsW.value = names.join(",");
-    if (tagW) tagW.value = "(none)";
-    renderTagChips(node);
-    node.csSchedule?.();
-}
+// 存活 picker 注册表:标签映射更新后统一重渲染(候选实时刷新)
+const csTagPickers = new Set();
+function rerenderTagPickers() { for (const p of csTagPickers) p.rerender(); }
 
 // 顶部信息面板:左侧已选缩略图(点击放大)+ 右侧五行(ID/Pos/Neg/Lora/Model);
 // image_id widget 紧跟本面板下方(INPUT_TYPES 首位),此处只负责展示
@@ -2616,6 +2623,7 @@ function refreshTagCombos() {
             tw.options.values = ["(none)"].concat(names);
             if (cur && !tw.options.values.includes(cur)) tw.options.values.unshift(cur);
         });
+        rerenderTagPickers(); // 候选更新,所有 picker 重渲染(实时出新标签)
     }).catch(() => {});
 }
 
@@ -2895,37 +2903,29 @@ app.registerExtension({
                     node.widgets.splice(node.widgets.indexOf(infoW), 1);
                     node.widgets.unshift(infoW);
                 }
-                // tag 多选:combo = 添加器(选中追加并复位);已选集合存于 tags_selected
-                // (隐藏 STRING widget,逗号串——普通文本 widget 序列化稳定,不像 combo 会
-                // 丢弃候选之外的值);chips 面板仅交互层
+                // tag 多选:chips + 下拉添加器 + 自由输入(createTagPicker 共享组件);
+                // 已选集合存于 tags_selected(隐藏 STRING widget);tag combo 行隐藏(保留序列化兼容)
                 const tagW = widget("tag");
-                node.csTagSel = [];
-                let tsW = null;
-                if (tagW) {
+                const tsW = widget("tags_selected");
+                if (tagW && tsW) {
                     const chipsEl = document.createElement("div");
-                    chipsEl.style.cssText = "display:flex;flex-wrap:wrap;gap:4px;align-items:center;width:100%;min-height:18px;";
+                    chipsEl.style.cssText = "display:flex;flex-wrap:wrap;flex-direction:column;gap:4px;align-items:flex-start;width:100%;";
+                    const picker = createTagPicker(chipsEl, {
+                        names: String(tsW.value || "").split(",").map((s) => s.trim()).filter(Boolean),
+                        candidates: () => Object.keys(S.tagMap || {}),
+                        onChange: (names) => {
+                            tsW.value = names.join(",");
+                            node.csSig = "";
+                            debounced();
+                        },
+                    });
+                    csTagPickers.add(picker);
+                    node.csTagPicker = picker;
                     const tagsDomW = this.addDOMWidget("cs_tags", "cs_tags", chipsEl);
                     tagsDomW.serialize = false;
-                    node.csTags = chipsEl;
                     const ci = node.widgets.indexOf(tagsDomW);
                     if (ci >= 0) node.widgets.splice(ci, 1);
                     node.widgets.splice(node.widgets.indexOf(tagW) + 1, 0, tagsDomW);
-                    tsW = widget("tags_selected"); // INPUT_TYPES 真实字段,core 已按序创建
-                    // combo = 添加器:选中即追加进已选(去重)并复位
-                    const tagCb = tagW.callback;
-                    tagW.callback = function () {
-                        const r2 = tagCb?.apply(this, arguments);
-                        const val = String(tagW.value || "").trim();
-                        if (val && val !== "(none)") {
-                            if (!node.csTagSel.includes(val)) node.csTagSel.push(val);
-                            tagW.value = "(none)";
-                            if (tsW) tsW.value = node.csTagSel.join(",");
-                            renderTagChips(node);
-                            node.csSig = "";
-                            debounced();
-                        }
-                        return r2;
-                    };
                 }
 
                 const sig = () => ["base_model", "tag", "sort", "period", "nsfw", "limit"]
@@ -2939,7 +2939,7 @@ app.registerExtension({
                     if (bm && bm !== "(any)") p.set("baseModels", bm);
                     // 多选标签(node.csTagSel,逗号串存于 tag widget):名称经本地映射换 ID。
                     // 默认 OR(单请求任一命中);设置开 AND 实验后 ≥2 个标签走漏斗式逐标签求交
-                    const sel = (node.csTagSel || []).map((s) => String(s).trim()).filter(Boolean);
+                    const sel = String(widget("tags_selected")?.value || "").split(",").map((s) => s.trim()).filter(Boolean);
                     // 映射未就绪(页面刚加载,tagMap 异步填充):拉取映射并保留 csSig,下轮轮询重试
                     if (sel.length && !(S.tagMap && Object.keys(S.tagMap).length)) {
                         refreshTagCombos();
@@ -2985,16 +2985,13 @@ app.registerExtension({
                 // 轮询 sig 变化保证 tag 等改动最终一定触发刷新(csSchedule 内部去重)
                 node.csPoll = setInterval(() => {
                     node.csSchedule?.();
-                    // tag 多选状态恢复:从 tags_selected(逗号串)重建 chips 与选择集
+                    // tag 多选恢复:configure 填值后同步 picker(chips 随之重渲染)
                     if (!node.__csTagInit) {
                         node.__csTagInit = true;
                         const tv = String(widget("tags_selected")?.value || "").trim();
-                        if (tv) {
-                            node.csTagSel = tv.split(",").map((s) => s.trim()).filter(Boolean);
-                            renderTagChips(node);
-                            node.csSig = "";
-                            node.csSchedule?.();
-                        }
+                        const names = tv ? tv.split(",").map((s) => s.trim()).filter(Boolean) : [];
+                        node.csTagPicker?.set(names);
+                        if (names.length) { node.csSig = ""; node.csSchedule?.(); }
                     }
                     // image_id 手动粘贴/修改也要刷新信息面板(文本输入不触发事件)
                     const cur = widget("image_id")?.value || "";
@@ -3012,6 +3009,11 @@ app.registerExtension({
                         if (rowEl.dataset.csTsHide === undefined && (rowEl.textContent || "").trim().startsWith("tags_selected")) {
                             rowEl.style.display = "none";
                             rowEl.dataset.csTsHide = "1";
+                        }
+                        // tag combo 行同样隐藏:交互职责由 picker(下拉+输入)接管
+                        if (rowEl.dataset.csTagHide === undefined && (rowEl.textContent || "").trim() === "tag") {
+                            rowEl.style.display = "none";
+                            rowEl.dataset.csTagHide = "1";
                         }
                     }
                     // 面板布局参数或节点宽度变化 → 只重排版不重新拉取
