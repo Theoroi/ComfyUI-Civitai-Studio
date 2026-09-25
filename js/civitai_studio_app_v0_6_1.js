@@ -2910,8 +2910,8 @@ function renderNodeThumbs(node) {
     if (!strip) return;
     const keepScroll = strip.scrollTop; // 重建后保持滚动位置(加载更多不跳顶)
     const wv = (name) => { const w = (node.widgets || []).find((x) => x.name === name); return w ? w.value : undefined; };
-    // thumbs_size 映射为"目标行高":两端对齐行排版按宽高比成行,行内等高铺满整行宽
-    const rowH = { small: 128, medium: 256, large: 512 }[String(wv("thumbs_size") || "medium")] || 256;
+    // thumbs_height 值即目标行高(px):两端对齐行排版按宽高比成行,行内等高铺满整行宽
+    const rowH = Math.max(64, parseInt(wv("thumbs_height"), 10) || 256);
     const panelH = Math.max(160, parseInt(wv("panel_h"), 10) || 420);
     strip.style.maxHeight = panelH + "px";
     strip.querySelectorAll(".cs-thumb,.cs-thumb-msg,.cs-thumb-bar,.cs-thumb-more,.cs-selinfo")
@@ -2964,7 +2964,7 @@ function renderNodeThumbs(node) {
     rows.forEach((r, ri) => {
         const arSum = r.reduce((s, c) => s + c.ar, 0);
         const avail = W - (r.length - 1) * gap;
-        let h = Math.min(avail / arSum, rowH); // 统一以目标行高为上限:拖宽时行高不变、只增每行张数,与 thumbs_size 语义一致
+        let h = Math.min(avail / arSum, rowH); // 统一以目标行高为上限:拖宽时行高不变、只增每行张数,与 thumbs_height 语义一致
         if (arSum * h > avail) h *= avail / (arSum * h); // 舍入超宽回调(仅轻微缩,幅度 ≤ 一张图的宽高比误差)
         for (const c of r) {
             const cell = document.createElement("div");
@@ -3167,51 +3167,10 @@ app.registerExtension({
                 const infoEl = document.createElement("div");
                 infoEl.style.cssText = "width:100%;display:flex;flex-direction:column;gap:6px;"
                     + "background:rgba(255,255,255,.04);border:1px solid #3a3a40;border-radius:6px;padding:6px;";
-                // image_id 自由输入行:combo 候选之外也能粘贴任意图片 ID,回车/失焦即更新信息面板
-                const idRow = document.createElement("div");
-                idRow.style.cssText = "display:flex;gap:4px;align-items:center;";
-                const idInput = document.createElement("input");
-                idInput.type = "text";
-                idInput.placeholder = S.lang === "zh" ? "输入/粘贴图片 ID,回车加载" : "Image ID, Enter to load";
-                idInput.style.cssText = "flex:1;min-width:0;font-size:11px;padding:3px 6px;";
-                idInput.setAttribute("list", "cs-imgid-list-" + (node.id ?? "x"));
-                const idDl = document.createElement("datalist");
-                idDl.id = "cs-imgid-list-" + (node.id ?? "x");
-                try {
-                    idDl.innerHTML = (JSON.parse(localStorage.getItem("cs_recent_image_ids") || "[]"))
-                        .map((id2) => `<option value="${esc(id2)}"></option>`).join("");
-                } catch (e) {}
-                idRow.appendChild(idDl);
-                                idInput.onkeydown = (e) => {
-                    e.stopPropagation();
-                    if (e.key === "Enter") {
-                        const val = idInput.value.trim();
-                        const idw2 = widget("image_id");
-                        if (idw2 && val && val !== String(idw2.value)) {
-                            idw2.value = val;
-                            if (idw2.options?.values) { idw2.options.values.unshift(val); }
-                            apiPost(`/civitai_studio/remember_image/${encodeURIComponent(val)}`).catch(() => {});
-                            node.csLastId = "";
-                        }
-                        idInput.blur(); // 顺带失焦;onblur 里值已一致不会重复提交
-                    }
-                };
-                idInput.onblur = () => {
-                    const val = idInput.value.trim();
-                    const idw2 = widget("image_id");
-                    if (idw2 && val && val !== String(idw2.value)) {
-                        idw2.value = val;
-                        if (idw2.options?.values) { idw2.options.values.unshift(val); }
-                        apiPost(`/civitai_studio/remember_image/${encodeURIComponent(val)}`).catch(() => {});
-                        node.csLastId = "";
-                    }
-                };
-                idRow.appendChild(idInput);
-                infoEl.appendChild(idRow);
                 const infoBody = document.createElement("div");
                 infoBody.style.cssText = "display:flex;gap:8px;align-items:flex-start;width:100%;";
                 infoEl.appendChild(infoBody);
-                node.csInfoIdInput = idInput;
+                node.csInfo = infoBody;
                 node.csInfo = infoBody;
                 const infoW2 = this.addDOMWidget("cs_info", "cs_info", infoEl);
                 infoW2.serialize = false;
@@ -3319,7 +3278,7 @@ app.registerExtension({
                     }
                     // image_id 手动粘贴/修改也要刷新信息面板(文本输入不触发事件)
                     const cur = widget("image_id")?.value || "";
-                    if (cur !== node.csLastId) { node.csLastId = cur; renderSelInfo(node); if (node.csInfoIdInput && document.activeElement !== node.csInfoIdInput) node.csInfoIdInput.value = cur === "(index)" ? "" : cur; }
+                    if (cur !== node.csLastId) { node.csLastId = cur; renderSelInfo(node); }
                     // image_id widget 行加粗+强调色:画布与右侧参数面板都扫(行元素渲染后才存在,
                     // dataset 标记防重复设置;命中一次即止的单次标记会漏掉后渲染的面板)
                     for (const rowEl of document.querySelectorAll(".lg-node-widget")) {
@@ -3341,7 +3300,7 @@ app.registerExtension({
                         }
                     }
                     // 面板布局参数或节点宽度变化 → 只重排版不重新拉取
-                    const ss = node.size[0] + "|" + String(widget("thumbs_size")?.value || "medium") + "|" + String(widget("panel_h")?.value || "");
+                    const ss = node.size[0] + "|" + String(widget("thumbs_height")?.value || "256") + "|" + String(widget("panel_h")?.value || "");
                     if (ss !== node.csLastSizeSig) { node.csLastSizeSig = ss; renderNodeThumbs(node); }
                     // 轮询兜底:内容变化后节点高度没跟上时重新贴合(只精确贴合,
                     // 修复矮节点里 image_id 等 widget 被裁在节点外无法点选)
@@ -3375,7 +3334,7 @@ app.registerExtension({
                     let v = v0.filter((x) => x !== null); // 剔除 DOM 面板的 null 占位
                     const isNumOrIdx = (x) => /^\d+$/.test(String(x)) || String(x) === "(index)";
                     const have = new Set((this.widgets || []).map((x) => x.name));
-                    const order = ["image_id", "base_model", "nsfw", "tag", "tags_selected", "period", "sort", "limit", "index", "thumbs_size", "panel_h"]
+                    const order = ["image_id", "base_model", "nsfw", "tag", "tags_selected", "period", "sort", "limit", "index", "thumbs_height", "panel_h"]
                         .filter((n) => have.has(n));
                     const expected = order.length;
                     const startsWithImageId = isNumOrIdx(v[0]);

@@ -63,10 +63,8 @@ class CivitaiImageSearch:
     def INPUT_TYPES(cls):
         # image_id 放首位:前端把它渲染在信息面板正下方(其余参数随后)
         return {"required": {
-            # STRING:支持自由粘贴任意图片 ID;"(index)" = 按序号取图。
-            # 输入行下拉记忆由前端维护(后端 recent_image_ids.json 仍持久化成功记录)
-            "image_id": ("STRING", {"default": "(index)",
-                                    "tooltip": "图片 ID(自由粘贴);留 (index) 按序号取图"}),
+            # 隐藏字段(前端信息面板输入行承载,节点上不渲染 COMBO/文本框)
+            "image_id": ("STRING", {"default": "(index)"}),
             "base_model": (["(any)"] + sorted(_BASE_MODEL_OPTIONS, key=str.lower),),
             "nsfw": (["false", "true"],),
             # 多选标签存储:前端选择器(chips+下拉+自由输入)维护的逗号分隔名称串(隐藏)。
@@ -79,7 +77,7 @@ class CivitaiImageSearch:
         },
         # 面板布局参数:仅前端渲染使用,optional 保证旧 API 调用不因缺参被拒
         "optional": {
-            "thumbs_size": (["medium", "small", "large"],),
+            "thumbs_size": (["128", "256", "512"],),
             "panel_h": ("INT", {"default": 420, "min": 160, "max": 1600, "step": 20}),
         }}
 
@@ -91,13 +89,13 @@ class CivitaiImageSearch:
     CATEGORY = "Civitai Studio"
 
     @staticmethod
-    def VALIDATE_INPUTS(image_id, tag):
-        # image_id/tag 都是动态组合(最近浏览记录/本地标签映射,随前端操作增长),
+    def VALIDATE_INPUTS(image_id, tags_selected):
+        # image_id/tags_selected 都是动态值(最近浏览记录/本地标签映射,随前端操作增长),
         # 跳过 ComfyUI 对 COMBO 的静态"值不在列表"校验
         return True
 
     async def run(self, image_id, base_model, nsfw, tags_selected, period, sort,
-                  limit, index, thumbs_size, panel_h):
+                  limit, index, thumbs_height, panel_h):
         # 网络与下载均为阻塞调用,丢进线程池避免冻结 ComfyUI 主事件循环
         return await asyncio.to_thread(
             self._run_sync, image_id, base_model, nsfw, tags_selected, period, sort, limit, index)
