@@ -1002,11 +1002,11 @@ function openImageDetail(item, opts = {}) {
         : [[t("galleryAuthor"), item.username], ["❤", fmtNum(item.stats?.heartCount ?? item.stats?.likeCount)]];
     const kvHtml = kv.filter(([, v]) => v !== undefined && v !== null && v !== "")
         .map(([k, v]) => `<div><b>${esc(k)}</b><span>${esc(String(v))}</span></div>`).join("");
-    const resources = (meta.resources || []).map((r) =>
-        `<code class="cs-trigger">${esc(r.name || r.modelName || "?")}${r.weight != null ? " × " + esc(r.weight) : ""}</code>`).join("");
-    const modelPageUrl = (item.modelId || opts.fromModelId)
-        ? `${civitaiPage()}/models/${encodeURIComponent(String(item.modelId || opts.fromModelId))}`
-        : null;
+    const resources = (meta.resources || []).map((r, ri) =>
+        `<code class="cs-trigger" data-res-model="${esc(String(r.modelId || ""))}" data-res-idx="${ri}" title="${esc(S.lang === "zh" ? "点击查看该模型" : "Click to view model")}">${esc(r.name || r.modelName || "?")}${r.weight != null ? " × " + esc(r.weight) : ""}</code>`).join("");
+    // 资源模型的 modelId(meta.resources[].modelId / modelVersionId 也可反查,此处用已知字段)
+    const resModelIds = (meta.resources || [])
+        .map((r2) => r2.modelId || r2.model_id).filter(Boolean);
     const m = showModal(`
         <h3 class="cs-modal-title">${esc(t("genParams"))}</h3>
         ${opts.fromModelId ? `<div style="margin:-6px 0 8px"><button class="cs-btn cs-btn-mini" data-back-model>← ${esc(S.lang === "zh" ? "返回模型页" : "Back to model")}</button></div>` : ""}
@@ -1027,7 +1027,7 @@ function openImageDetail(item, opts = {}) {
             <button class="cs-btn" data-save-img>${esc(t("saveBtn"))}</button>
             <button class="cs-btn cs-btn-primary" data-use-as-output>${esc(t("useAsOutput"))}</button>
             ${hasMeta ? `<button class="cs-btn" data-apply-workflow>${esc(t("applyBtn"))}</button>` : ""}
-            ${modelPageUrl ? `<a class="cs-btn" href="${esc(modelPageUrl)}" target="_blank" rel="noopener noreferrer">${esc(S.lang === "zh" ? "View Model ↗" : "View Model ↗")}</a>` : ""}
+            ${(opts.fromModelId || item.modelId) ? `<button class="cs-btn" data-view-model>${esc(S.lang === "zh" ? "查看模型" : "View Model")}</button>` : ""}
         </div>`);
     const backBtn = $("[data-back-model]", m.box);
     if (backBtn) backBtn.onclick = () => {
@@ -1035,7 +1035,28 @@ function openImageDetail(item, opts = {}) {
         m.close();
         openBrowseFloat(mid); // 重开浏览详情浮层(大图浮层与详情浮层互斥,关闭后重建)
     };
+    const vmBtn = $("[data-view-model]", m.box);
+    if (vmBtn) vmBtn.onclick = () => {
+        const mid = item.modelId || opts.fromModelId;
+        m.close();
+        openBrowseFloat(mid); // 在悬浮窗打开模型页(不再跳官网)
+    };
     attachIdAndTags(m.box, item); // ID 行 + 标签行(插在 kv 网格之前)
+    // 用到资源:点击在悬浮窗打开对应模型页(无 modelId 时点开 Civitai 搜索)
+    $$("[data-res-model]", m.box).forEach((el) => {
+        el.title = el.title || (S.lang === "zh" ? "点击查看该模型" : "Click to view model");
+        el.onclick = () => {
+            const mid = el.dataset.resModel;
+            m.close();
+            if (mid && /^\d+$/.test(mid)) openBrowseFloat(mid);
+            else {
+                // 无 ID:按名称切到浏览页搜索
+                const name = el.textContent.split("×")[0].trim();
+                S.browse.query = name;
+                switchTab("browse");
+            }
+        };
+    });
     $$("[data-copy]", m.box).forEach((btn) => {
         btn.onclick = () => {
             const ta = $("textarea", btn.closest(".cs-meta-block"));
@@ -3070,38 +3091,48 @@ app.registerExtension({
                     const isNumOrIdx = (x) => /^\d+$/.test(String(x)) || String(x) === "(index)";
                     const have = new Set((this.widgets || []).map((x) => x.name));
                     const order = ["image_id", "base_model", "nsfw", "tag", "tags_selected", "period", "sort", "limit", "index", "thumbs_size", "panel_h"]
-                        .filter((n) => have.has(n)); // tag 已从 INPUT_TYPES 删除,旧服务端形状才有
-                    if (v.length === 11 && isNumOrIdx(v[0])) {
-                        // 新序 11 值(含 tags_selected):前端已按序消费,只需补 tags_selected 候选
-                    } else if (v.length === 11 && !isNumOrIdx(v[0])) {
-                        // 旧序 11 值(含 lora_name,已移除):重排为新序 11 值(tags_selected 置空)
-                        v = [v[7], v[0], v[1], v[2], v[3], v[4], v[5], v[6], "", v[9], v[10]];
-                    } else if (v.length === 10 && !isNumOrIdx(v[0])) {
-                        // 旧序 10 值(无 lora_name 的更早版本):重排为新序 11 值
-                        v = [v[7], v[0], v[1], v[2], v[3], v[4], v[5], v[6], "", v[8], v[9]];
-                    } else if (v.length !== 11) {
-                        return r; // 未知结构不动
+                        .filter((n) => have.has(n));
+                    const expected = order.length;
+                    const startsWithImageId = isNumOrIdx(v[0]);
+                    // 锚定:period 词表(AllTime/Month/Week/Day)在值串中的位置。
+                    // 新序 period 槽位 = order.indexOf("period");偏移 1 位 = 增删过 tag/tags_selected 槽
+                    const PERIODS = new Set(["AllTime", "Month", "Week", "Day"]);
+                    const pIdx = v.map((x, i) => (PERIODS.has(String(x)) ? i : -1)).filter((i) => i >= 0);
+                    const expP = order.indexOf("period");
+                    if (!startsWithImageId) {
+                        // 老序(首位 base_model):period 在第 3 位
+                        if (v.length === 11 && pIdx[0] === 3) {
+                            // 含 lora_name:[base,nsfw,tag,period,sort,limit,index,lora,thumbs,panel]
+                            v = [v[7], v[0], v[1], v[2], v[3], v[4], v[5], v[6], "", v[8], v[9]];
+                        } else if (v.length === 10 && pIdx[0] === 3) {
+                            // 上一代 10 值(无 lora_name):[base,nsfw,tag,period,sort,limit,index,thumbs,panel]
+                            if (have.has("tag")) v = [v[7], v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[8], v[9]];
+                            else v = [v[7], v[0], v[1], "", v[2], v[3], v[4], v[5], v[6], v[7], v[8]];
+                        } else return r; // 未知老序不动
+                    } else if (!(v.length === expected && pIdx[0] === expP)) {
+                        // image_id 在首位但 period 槽位偏移:增删过 tag 槽
+                        if (v.length === expected - 1 && pIdx[0] === expP - 1) {
+                            // 旧串带 tag 槽、widgets 无 tag:在 tags_selected 位置补空槽
+                            const tsI = order.indexOf("tags_selected");
+                            v = v.slice(0, tsI).concat([""], v.slice(tsI));
+                        } else if (v.length === expected + 1 && pIdx[0] === expP + 1) {
+                            // 新串但 widgets 有 tag(服务端未重启):丢弃 tag 槽值
+                            v = v.slice(0, 3).concat(v.slice(4));
+                        } else return r; // 未知结构不动
                     }
-                    // 前端按"可序列化 widget 顺序"消费值,顺序错位时必须按名字重新赋值;
-                    // text widget 不同步 inputEl 会被前端重绘用空值反向覆盖
-                    for (let i = 0; i < order.length && i < v.length; i++) {
-                        const w = (this.widgets || []).find((x) => x.name === order[i]);
-                        if (w) {
-                            w.value = v[i];
-                            if (w.inputEl) w.inputEl.value = v[i];
-                        }
+                    // 重排后的 v 是"全序(含 tag 槽)"语义;order 已按实际存在 widget 过滤,
+                    // 赋值时对缺失名跳过 v 槽位(占位丢弃),保证名字↔值一一对应
+                    let vi = 0;
+                    for (const name of order) {
+                        const w = (this.widgets || []).find((x) => x.name === name);
+                        const val = vi < v.length ? v[vi] : undefined;
+                        vi++;
+                        if (!w) continue; // 缺失槽位(如已删的 tag)直接丢弃其值
+                        if (val === undefined) break;
+                        w.value = val;
+                        if (w.inputEl) w.inputEl.value = val; // text widget 不同步 inputEl 会被重绘反向清空
                     }
                     this.__csValFixed = true;
-                    // 组合串同样补进 tag combo 候选,防恢复时被丢弃
-                    const tagW2 = (this.widgets || []).find((x) => x.name === "tag");
-                    if (tagW2) {
-                        const tv = String(tagW2.value || "").trim();
-                        if (tv && tv !== "(none)") {
-                            tagW2.options = tagW2.options || {};
-                            tagW2.options.values = tagW2.options.values || [];
-                            if (!tagW2.options.values.includes(tv)) tagW2.options.values.unshift(tv);
-                        }
-                    }
                 } catch (e) { /* 非常规工作流不动 */ }
                 return r;
             };
