@@ -2914,13 +2914,16 @@ app.registerExtension({
                         names: String(tsW.value || "").split(",").map((s) => s.trim()).filter(Boolean),
                         candidates: () => Object.keys(S.tagMap || {}),
                         onChange: (names) => {
-                            tsW.value = names.join(",");
+                            const str = names.join(",");
+                            tsW.value = str;
+                            if (tsW.inputEl) tsW.inputEl.value = str; // 不同步 inputEl 会被前端重绘反向清空
                             node.csSig = "";
                             debounced();
                         },
                     });
                     csTagPickers.add(picker);
                     node.csTagPicker = picker;
+                    node.csTags = chipsEl;
                     const tagsDomW = this.addDOMWidget("cs_tags", "cs_tags", chipsEl);
                     tagsDomW.serialize = false;
                     const ci = node.widgets.indexOf(tagsDomW);
@@ -2928,7 +2931,7 @@ app.registerExtension({
                     node.widgets.splice(node.widgets.indexOf(tagW) + 1, 0, tagsDomW);
                 }
 
-                const sig = () => ["base_model", "tag", "sort", "period", "nsfw", "limit"]
+                const sig = () => ["base_model", "tags_selected", "sort", "period", "nsfw", "limit"]
                     .map((n) => widget(n)?.value ?? "").join("|");
                 node.csSchedule = () => {
                     const s2 = sig();
@@ -2988,9 +2991,11 @@ app.registerExtension({
                     // tag 多选恢复:configure 填值后同步 picker(chips 随之重渲染)
                     if (!node.__csTagInit) {
                         node.__csTagInit = true;
-                        const tv = String(widget("tags_selected")?.value || "").trim();
+                        const tsW = widget("tags_selected");
+                        const tv = String(tsW?.value || "").trim();
                         const names = tv ? tv.split(",").map((s) => s.trim()).filter(Boolean) : [];
                         node.csTagPicker?.set(names);
+                        if (tsW && tsW.inputEl) tsW.inputEl.value = tv; // inputEl 与值对齐,防重绘反向清空
                         if (names.length) { node.csSig = ""; node.csSchedule?.(); }
                     }
                     // image_id 手动粘贴/修改也要刷新信息面板(文本输入不触发事件)
@@ -3062,10 +3067,14 @@ app.registerExtension({
                     } else if (v.length !== 11) {
                         return r; // 未知结构不动
                     }
-                    // 前端按"可序列化 widget 顺序"消费值,顺序错位时必须按名字重新赋值
+                    // 前端按"可序列化 widget 顺序"消费值,顺序错位时必须按名字重新赋值;
+                    // text widget 不同步 inputEl 会被前端重绘用空值反向覆盖
                     for (let i = 0; i < order.length && i < v.length; i++) {
                         const w = (this.widgets || []).find((x) => x.name === order[i]);
-                        if (w) w.value = v[i];
+                        if (w) {
+                            w.value = v[i];
+                            if (w.inputEl) w.inputEl.value = v[i];
+                        }
                     }
                     this.__csValFixed = true;
                     // 组合串同样补进 tag combo 候选,防恢复时被丢弃
