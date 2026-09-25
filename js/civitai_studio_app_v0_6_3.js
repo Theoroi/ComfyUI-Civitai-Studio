@@ -2755,6 +2755,7 @@ function renderSelInfo(node) {
                         if (it) {
                             node.csInfoCache = it;
                             if (node.csResults && !node.csResults.some((x) => String(x.id) === wanted)) node.csResults.unshift(it);
+                            rememberImage(wanted); // 拉取成功才入记忆(404/无权限不保留)
                         } else {
                             node.csInfoCache = { id: wanted, notFound: true };
                         }
@@ -3155,10 +3156,41 @@ app.registerExtension({
                 const infoEl = document.createElement("div");
                 infoEl.style.cssText = "width:100%;display:flex;flex-direction:column;gap:6px;"
                     + "background:rgba(255,255,255,.04);border:1px solid #3a3a40;border-radius:6px;padding:6px;";
+                // image_id 自由输入行(面板顶部):粘贴任意 ID 回车/失焦即加载;下拉记忆
+                // cs_recent_image_ids 由 rememberImage 统一维护(拉取成功才入,404 不保留)
+                const idRow = document.createElement("div");
+                idRow.style.cssText = "display:flex;gap:4px;align-items:center;width:100%;";
+                const idInput = document.createElement("input");
+                idInput.type = "text";
+                idInput.placeholder = S.lang === "zh" ? "输入/粘贴图片 ID,回车加载" : "Image ID, Enter to load";
+                idInput.style.cssText = "flex:1;min-width:0;font-size:11px;padding:3px 6px;";
+                idInput.setAttribute("list", "cs-imgid-list-" + (node.id ?? "x"));
+                const idDl = document.createElement("datalist");
+                idDl.id = "cs-imgid-list-" + (node.id ?? "x");
+                try {
+                    idDl.innerHTML = (JSON.parse(localStorage.getItem("cs_recent_image_ids") || "[]"))
+                        .map((id2) => `<option value="${esc(id2)}"></option>`).join("");
+                } catch (e) { /* 隐私模式等场景忽略 */ }
+                idRow.appendChild(idInput);
+                idRow.appendChild(idDl);
+                infoEl.appendChild(idRow);
+                const idCommit = () => {
+                    const val = idInput.value.trim();
+                    const idw2 = widget("image_id");
+                    if (!idw2 || !val || val === String(idw2.value)) return;
+                    idw2.value = val;
+                    if (idw2.inputEl) idw2.inputEl.value = val; // 不同步 inputEl 会被重绘反向清空
+                    node.csLastId = ""; // poll 兜底会刷;这里直接刷一次,反馈即时
+                    renderSelInfo(node);
+                };
+                idInput.onkeydown = (e) => {
+                    e.stopPropagation();
+                    if (e.key === "Enter") { idCommit(); idInput.blur(); }
+                };
+                idInput.onblur = () => { idCommit(); };
                 const infoBody = document.createElement("div");
                 infoBody.style.cssText = "display:flex;gap:8px;align-items:flex-start;width:100%;";
                 infoEl.appendChild(infoBody);
-                node.csInfo = infoBody;
                 node.csInfo = infoBody;
                 const infoW2 = this.addDOMWidget("cs_info", "cs_info", infoEl);
                 infoW2.serialize = false;
