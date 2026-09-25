@@ -929,7 +929,6 @@ function renderDetail(model, container, opts = {}) {
     box.innerHTML = `
         ${opts.offline ? `<div class="cs-banner">${esc(t("offlineBanner"))}</div>` : ""}
         <div class="cs-detail-head">
-            <button class="cs-btn" id="cs-detail-back">${esc(t("back"))}</button>
             <a class="cs-btn" href="${esc(civitaiPage())}/models/${esc(String(model.id))}" target="_blank" rel="noopener noreferrer">${esc(t("openOnCivitai"))}</a>
         </div>
         <h3 class="cs-detail-title" title="${esc(model.name)}">${esc(model.name)}</h3>
@@ -950,7 +949,6 @@ function renderDetail(model, container, opts = {}) {
         <div id="cs-version-body"></div>
         ${desc ? `<details class="cs-desc" open><summary>${esc(t("modelDesc"))}</summary><div class="cs-desc-body">${desc}</div></details>` : ""}
     `;
-    $("#cs-detail-back", box).onclick = opts._navBack || closeFloatDetail;
     rewriteDescImages(box);
     const sel = $("#cs-version-sel", box);
     const renderVer = () => {
