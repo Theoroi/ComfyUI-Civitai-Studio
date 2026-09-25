@@ -68,10 +68,8 @@ class CivitaiImageSearch:
                          {"tooltip": "选最近浏览的图片 ID 则精确取该图与参数;选 (index) 按序号取图"}),
             "base_model": (["(any)"] + sorted(_BASE_MODEL_OPTIONS, key=str.lower),),
             "nsfw": (["false", "true"],),
-            # COMBO:选项 = 本地已入库的分类标签(先在大图悬浮层点抓一次入库),(none) = 不筛选
-            "tag": (["(none)"] + sorted(_load_tag_mapping(), key=str.lower),
-                    {"tooltip": "从已入库标签中选择,可多选;多个标签为任一命中(OR 语义,Civitai API 限制);在大图详情浮层点抓标签即可扩充选项"}),
-            # 多选标签存储:前端 chips 面板维护的逗号分隔名称串(隐藏),优先于 tag 参数
+            # 多选标签存储:前端选择器(chips+下拉+自由输入)维护的逗号分隔名称串(隐藏)。
+            # 旧版单个 tag COMBO 已删除,由本字段承担全部筛选语义(OR/实验 AND)
             "tags_selected": ("STRING", {"default": ""}),
             "period": (["AllTime", "Month", "Week", "Day"],),
             "sort": (["Newest", "Most Reactions", "Most Comments"],),
@@ -97,23 +95,23 @@ class CivitaiImageSearch:
         # 跳过 ComfyUI 对 COMBO 的静态"值不在列表"校验
         return True
 
-    async def run(self, image_id, base_model, nsfw, tag, tags_selected, period, sort,
+    async def run(self, image_id, base_model, nsfw, tags_selected, period, sort,
                   limit, index, thumbs_size, panel_h):
         # 网络与下载均为阻塞调用,丢进线程池避免冻结 ComfyUI 主事件循环
         return await asyncio.to_thread(
-            self._run_sync, image_id, base_model, nsfw, tag, tags_selected, period, sort, limit, index)
+            self._run_sync, image_id, base_model, nsfw, tags_selected, period, sort, limit, index)
 
-    def _run_sync(self, image_id, base_model, nsfw, tag, tags_selected, period, sort, limit, index):
+    def _run_sync(self, image_id, base_model, nsfw, tags_selected, period, sort, limit, index):
         params = {
             "limit": str(min(100, max(10, int(limit)))),
             "nsfw": str(nsfw), "sort": sort, "period": period, "withMeta": "true",
         }
         if base_model and base_model != "(any)":
             params["baseModels"] = base_model
-        # 多选标签(tags_selected,前端 chips 维护)优先;单个 tag 参数向后兼容。
+        # 多选标签(tags_selected,前端选择器维护)。
         # 官方 /images 的 tags 只认逗号分隔的数字 Tag ID;名称经本地映射换 ID。
         # 多标签为任一命中(OR 语义,Civitai API 限制)
-        tag_expr = (tags_selected or "").strip() or (tag or "").strip()
+        tag_expr = (tags_selected or "").strip()
         if tag_expr and tag_expr != "(none)":
             tokens = [t.strip() for t in tag_expr.replace("，", ",").split(",") if t.strip()]
             ids = [t for t in tokens if t.isdigit()]

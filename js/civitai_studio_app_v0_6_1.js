@@ -978,7 +978,7 @@ async function renderVersion(version, model, box) {
         img.onclick = () => {
             const direct = img.dataset.direct || "";
             const image = images.find((i) => i.url === direct) || images[0];
-            showImageMeta(image);
+            showImageMeta(image, { fromModelId: model.id, fromVersionId: version.id });
         };
     });
     $$("[data-save-url]", body).forEach((btn) => {
@@ -1004,8 +1004,12 @@ function openImageDetail(item, opts = {}) {
         .map(([k, v]) => `<div><b>${esc(k)}</b><span>${esc(String(v))}</span></div>`).join("");
     const resources = (meta.resources || []).map((r) =>
         `<code class="cs-trigger">${esc(r.name || r.modelName || "?")}${r.weight != null ? " × " + esc(r.weight) : ""}</code>`).join("");
+    const modelPageUrl = (item.modelId || opts.fromModelId)
+        ? `${civitaiPage()}/models/${encodeURIComponent(String(item.modelId || opts.fromModelId))}`
+        : null;
     const m = showModal(`
         <h3 class="cs-modal-title">${esc(t("genParams"))}</h3>
+        ${opts.fromModelId ? `<div style="margin:-6px 0 8px"><button class="cs-btn cs-btn-mini" data-back-model>← ${esc(S.lang === "zh" ? "返回模型页" : "Back to model")}</button></div>` : ""}
         <div class="cs-media-view" style="margin-bottom:10px">${mediaViewerHtml(item)}</div>
         ${hasMeta && meta.prompt ? `
         <div class="cs-meta-block">
@@ -1023,7 +1027,14 @@ function openImageDetail(item, opts = {}) {
             <button class="cs-btn" data-save-img>${esc(t("saveBtn"))}</button>
             <button class="cs-btn cs-btn-primary" data-use-as-output>${esc(t("useAsOutput"))}</button>
             ${hasMeta ? `<button class="cs-btn" data-apply-workflow>${esc(t("applyBtn"))}</button>` : ""}
+            ${modelPageUrl ? `<a class="cs-btn" href="${esc(modelPageUrl)}" target="_blank" rel="noopener noreferrer">${esc(S.lang === "zh" ? "View Model ↗" : "View Model ↗")}</a>` : ""}
         </div>`);
+    const backBtn = $("[data-back-model]", m.box);
+    if (backBtn) backBtn.onclick = () => {
+        const mid = opts.fromModelId;
+        m.close();
+        openBrowseFloat(mid); // 重开浏览详情浮层(大图浮层与详情浮层互斥,关闭后重建)
+    };
     attachIdAndTags(m.box, item); // ID 行 + 标签行(插在 kv 网格之前)
     $$("[data-copy]", m.box).forEach((btn) => {
         btn.onclick = () => {
@@ -1060,9 +1071,9 @@ function openImageDetail(item, opts = {}) {
     };
 }
 
-// 画廊等无节点上下文的入口:详情浮层不指定目标节点
-async function showImageMeta(image) {
-    openImageDetail(image);
+// 画廊等无节点上下文的入口;opts.fromModelId/fromVersionId 用于"返回模型页"按钮
+async function showImageMeta(image, opts = {}) {
+    openImageDetail(image, opts);
 }
 
 // 把图片 ID 写进图像搜索节点的 image_id(优先显式指定,其次画布选中,最后第一个)
@@ -2684,7 +2695,9 @@ function renderNodeThumbs(node) {
     // 两端对齐行排版(相册式):按宽高比贪心成行,行内等高、铺满整行宽;
     // 末行不拉伸保持目标行高。横竖图混排不再出现固定列裁切/大块留白
     const gap = 6;
-    const W = Math.max(160, (strip.clientWidth || node.size[0] - 16) - 8); // 减去 strip 自身 padding
+    // 用节点逻辑宽度而非 strip.clientWidth:DOM 实时宽度受上一帧渲染结果(滚动条/
+    // 未完成布局)影响,拖宽瞬间会读到旧值导致"拉到放满一行又被调小"的来回抖动
+    const W = Math.max(160, node.size[0] - 24); // 12px 左右内边距
     const rows = [];
     let row = [], rowAr = 0;
     for (const it of items) {
@@ -2905,9 +2918,9 @@ app.registerExtension({
                 }
                 // tag 多选:chips + 下拉添加器 + 自由输入(createTagPicker 共享组件);
                 // 已选集合存于 tags_selected(隐藏 STRING widget);tag combo 行隐藏(保留序列化兼容)
-                const tagW = widget("tag");
+                const tagW = widget("tag"); // 旧工作流遗留 widget 可能存在;新版服务端已删除
                 const tsW = widget("tags_selected");
-                if (tagW && tsW) {
+                if (tsW) {
                     const chipsEl = document.createElement("div");
                     chipsEl.style.cssText = "display:flex;flex-wrap:wrap;flex-direction:column;gap:4px;align-items:flex-start;width:100%;";
                     const picker = createTagPicker(chipsEl, {
@@ -3055,7 +3068,9 @@ app.registerExtension({
                     // (configure 可能重建 widget 对象,丢失 DOM 面板的 serialize=false 标记)
                     let v = v0.filter((x) => x !== null); // 剔除 DOM 面板的 null 占位
                     const isNumOrIdx = (x) => /^\d+$/.test(String(x)) || String(x) === "(index)";
-                    const order = ["image_id", "base_model", "nsfw", "tag", "tags_selected", "period", "sort", "limit", "index", "thumbs_size", "panel_h"];
+                    const have = new Set((this.widgets || []).map((x) => x.name));
+                    const order = ["image_id", "base_model", "nsfw", "tag", "tags_selected", "period", "sort", "limit", "index", "thumbs_size", "panel_h"]
+                        .filter((n) => have.has(n)); // tag 已从 INPUT_TYPES 删除,旧服务端形状才有
                     if (v.length === 11 && isNumOrIdx(v[0])) {
                         // 新序 11 值(含 tags_selected):前端已按序消费,只需补 tags_selected 候选
                     } else if (v.length === 11 && !isNumOrIdx(v[0])) {
