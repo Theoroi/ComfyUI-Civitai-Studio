@@ -204,5 +204,5 @@ Registry 上带 civitai 关键字且下载量 >10k 的共 **18 个**，与本插
 
 - 内嵌浏览器用持久化分区 `persist:zcode-embedded-browser`，缓存落盘跨会话保留，`no-cache` 头不总被遵守，`reload()` 可能是空操作。
 - 排查顺序：确认服务端重启 → 开新标签页 → 换 URL/改文件名（根治）→ origin 级 `localStorage.clear()` → `fetch(url, {cache:"reload"})`。
-- 本项目的根治措施：JS 文件名带版本号（`civitai_studio_app_v0_6_7.js`），发版即换 URL。
+- 本项目的根治措施：JS 文件名带版本号（`civitai_studio_app_v0_6_8.js`），发版即换 URL。
 - 禁止删除持久分区目录（最后手段）。

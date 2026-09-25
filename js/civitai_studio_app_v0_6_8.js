@@ -517,8 +517,8 @@ function copyText(text, btn) {
 }
 
 // ---------- 通用模态框(悬浮元素:无遮罩、可拖动;✕/Esc/点画布关闭) ----------
-function showModal(innerHTML, cls) {
-    closeAllFloats(); // 单实例:同一时间只显示一个悬浮元素
+function showModal(innerHTML, cls, keepNav) {
+    if (!keepNav) closeAllFloats(); // 单实例:同一时间只显示一个悬浮元素(导航跳转时由 navPush 接管)
     const panel = document.createElement("div");
     panel.className = "cs-float cs-float-modal " + (cls || "");
     panel.innerHTML = `
@@ -544,7 +544,8 @@ function showModal(innerHTML, cls) {
         const i = (S.ui.floatModals || []).indexOf(api);
         if (i >= 0) S.ui.floatModals.splice(i, 1);
     };
-    const escHandler = (e) => { if (e.key === "Escape") close(); };
+    // Esc 走 ✕ 的现行 onclick(导航浮层被 navPush 覆写为整链关闭);隐藏保活页不响应
+    const escHandler = (e) => { if (e.key === "Escape" && panel.style.display !== "none") panel.querySelector(".cs-float-close").click(); };
     document.addEventListener("keydown", escHandler);
     panel.querySelector(".cs-float-close").onclick = close;
     const api = { overlay: panel, box: panel.querySelector(".cs-float-body"), close };
@@ -818,8 +819,8 @@ function positionFloat(panel, w) {
     panel.style.top = Math.max(10, Math.min(a.top + 72, window.innerHeight - 320)) + "px";
 }
 
-function openFloatDetail() {
-    closeAllFloats(); // 单实例:开新的浮层前关掉旧浮层
+function openFloatDetail(keepNav) {
+    if (!keepNav) closeAllFloats(); // 单实例:开新的浮层前关掉旧浮层(导航跳转由 navPush 接管)
     const panel = document.createElement("div");
     panel.className = "cs-float";
     panel.innerHTML = `
@@ -845,16 +846,73 @@ function closeFloatDetail() {
 }
 
 function closeAllFloats() {
+    // 导航栈整链销毁(含隐藏保活的祖先信息页),再兜底清残留
+    (S.ui.navStack || []).splice(0).forEach((r) => { const p = r.prev; r.prev = null; r.closeSingle(); });
     closeFloatDetail();
     (S.ui.floatModals || []).slice().forEach((m) => m.close());
 }
 
-async function openBrowseFloat(modelId) {
-    const body = openFloatDetail();
+// ---------- 浮层导航:大图/模型页互跳 ----------
+// 同一时刻只显示栈顶;跳转时来源页隐藏保活压栈,头部"返回"优先回上一页,
+// 无来路=关闭。✕/Esc/程序性 m.close()/另开无关浮层均整链销毁(不留隐藏僵尸)
+function navPush(panel, modalApi, prev) {
+    const st = S.ui.navStack || (S.ui.navStack = []);
+    if (prev && st.includes(prev)) {
+        // 保留 prev 及其祖先链,销毁其余不可达记录;来源页隐藏保活
+        const keep = new Set();
+        let r = prev;
+        while (r) { keep.add(r); r = r.prev; }
+        st.filter((x) => !keep.has(x)).forEach((x) => { const p = x.prev; x.prev = null; x.closeSingle(); });
+        S.ui.navStack = st.filter((x) => keep.has(x));
+        prev.panel.style.display = "none";
+    } else {
+        st.splice(0).forEach((x) => { const p = x.prev; x.prev = null; x.closeSingle(); });
+    }
+    const rec = { panel, modalApi, prev: prev && S.ui.navStack.includes(prev) ? prev : null };
+    const baseClose = modalApi
+        ? modalApi.close
+        : () => { panel.remove(); if (S.ui.float === panel) S.ui.float = null; };
+    rec.closeSingle = () => { // 单页销毁("返回"回退一步用;用原始 close,不触发整链)
+        const i = S.ui.navStack.indexOf(rec);
+        if (i >= 0) S.ui.navStack.splice(i, 1);
+        baseClose();
+    };
+    rec.closeChain = () => { // 整链销毁(✕/Esc/m.close()/另开无关浮层)
+        let r = rec;
+        while (r) { const p = r.prev; r.prev = null; r.closeSingle(); r = p; }
+    };
+    if (modalApi) modalApi.close = rec.closeChain; // m.close()(选为输出等)也收链
+    const x = panel.querySelector(".cs-float-close");
+    if (x) x.onclick = rec.closeChain;
+    S.ui.navStack.push(rec);
+    navAddBackButton(rec);
+    return rec;
+}
+
+function navAddBackButton(rec) {
+    const head = rec.panel.querySelector(".cs-float-head");
+    if (!head || head.querySelector(".cs-float-back")) return;
+    const btn = document.createElement("button");
+    btn.className = "cs-float-back";
+    btn.textContent = S.lang === "zh" ? "← 返回" : "← Back";
+    btn.title = rec.prev ? (S.lang === "zh" ? "返回上一信息页" : "Back to previous page") : (S.lang === "zh" ? "关闭" : "Close");
+    btn.onclick = () => {
+        if (!rec.prev) { rec.closeChain(); return; }
+        const prev = rec.prev;
+        rec.prev = null;
+        rec.closeSingle(); // 只销毁当前页
+        prev.panel.style.display = ""; // 还原隐藏保活的上一信息页(滚动/状态原样)
+    };
+    head.insertBefore(btn, head.firstChild);
+}
+
+async function openBrowseFloat(modelId, opts = {}) {
+    const body = openFloatDetail(!!opts._navFrom);
     body.innerHTML = `<div class="cs-expand-loading">${esc(t("statusLoading"))}</div>`;
     try {
         const model = await apiGet(`/civitai_studio/model/${encodeURIComponent(String(modelId))}`);
-        renderDetail(model, body);
+        const rec = navPush(S.ui.float, null, opts._navFrom || null); // 本页入导航栈(来源页隐藏保活)
+        renderDetail(model, body, { ...opts, _navBack: () => rec.closeChain(), _navRec: rec });
         const title = $(".cs-float-head .cs-float-title");
         if (title) title.textContent = model.name || "";
     } catch (e) {
@@ -892,12 +950,12 @@ function renderDetail(model, container, opts = {}) {
         <div id="cs-version-body"></div>
         ${desc ? `<details class="cs-desc" open><summary>${esc(t("modelDesc"))}</summary><div class="cs-desc-body">${desc}</div></details>` : ""}
     `;
-    $("#cs-detail-back", box).onclick = closeFloatDetail;
+    $("#cs-detail-back", box).onclick = opts._navBack || closeFloatDetail;
     rewriteDescImages(box);
     const sel = $("#cs-version-sel", box);
     const renderVer = () => {
         const idx = parseInt(sel.selectedOptions[0]?.dataset.idx || "0", 10);
-        renderVersion(versions[idx] || versions[0], model, box);
+        renderVersion(versions[idx] || versions[0], model, box, { _navRec: opts._navRec });
     };
     sel.onchange = renderVer;
     renderVer();
@@ -973,7 +1031,7 @@ async function saveImageToOutput(url, btn) {
 }
 
 let csVersionSeq = 0;
-async function renderVersion(version, model, box) {
+async function renderVersion(version, model, box, opts = {}) {
     const seq = ++csVersionSeq; // 乱序保护:慢响应不得覆盖新版本内容
     const body = box ? $("#cs-version-body", box) : null;
     if (!body || !version) return;
@@ -1034,7 +1092,7 @@ async function renderVersion(version, model, box) {
         img.onclick = () => {
             const direct = img.dataset.direct || "";
             const image = images.find((i) => i.url === direct) || images[0];
-            showImageMeta(image, { fromModelId: model.id, fromVersionId: version.id });
+            showImageMeta(image, { fromModelId: model.id, fromVersionId: version.id, _navFrom: opts._navRec });
         };
     });
     $$("[data-save-url]", body).forEach((btn) => {
@@ -1047,7 +1105,7 @@ async function renderVersion(version, model, box) {
 
 // 大图资源列表:把 meta.resources/civitaiResources/modelVersionIds 解析为可操作 chips。
 // 每个 chip:模型名+权重+[已装|未装] 标记;>4 条折叠;未装 LoRA 可一键批量下载。
-async function renderResourceList(box, item, rawRes, civRes, vids, imgHashes) {
+async function renderResourceList(box, item, rawRes, civRes, vids, imgHashes, navRec) {
     const listEl = box.querySelector("[data-res-list]");
     const summaryEl = box.querySelector("[data-res-summary]");
     if (!listEl) return;
@@ -1125,11 +1183,7 @@ async function renderResourceList(box, item, rawRes, civRes, vids, imgHashes) {
             chip.onclick = () => {
                 // 必须用 modelId(/models/{id});vid 传给 models API 会 404
                 const mid = versions[vid]?.modelId;
-                if (mid && /^\d+$/.test(String(mid))) {
-                    (S.ui.floatModals || []).slice().forEach((mm) => mm.close());
-                    closeFloatDetail();
-                    openBrowseFloat(mid);
-                }
+                if (mid && /^\d+$/.test(String(mid))) openBrowseFloat(mid, { _navFrom: navRec });
             };
             return chip;
         };
@@ -1242,7 +1296,6 @@ function openImageDetail(item, opts = {}) {
         .map((r2) => r2.modelId || r2.model_id).filter(Boolean);
     const m = showModal(`
         <h3 class="cs-modal-title">${esc(t("genParams"))}</h3>
-        ${opts.fromModelId ? `<div style="margin:-6px 0 8px"><button class="cs-btn cs-btn-mini" data-back-model>← ${esc(S.lang === "zh" ? "返回模型页" : "Back to model")}</button></div>` : ""}
         <div class="cs-media-view" style="margin-bottom:10px">${mediaViewerHtml(item)}</div>
         ${hasMeta && meta.prompt ? `
         <div class="cs-meta-block">
@@ -1264,22 +1317,17 @@ function openImageDetail(item, opts = {}) {
             <button class="cs-btn cs-btn-primary" data-use-as-output>${esc(t("useAsOutput"))}</button>
             ${hasMeta ? `<button class="cs-btn" data-apply-workflow>${esc(t("applyBtn"))}</button>` : ""}
             ${(opts.fromModelId || item.modelId) ? `<button class="cs-btn" data-view-model>${esc(S.lang === "zh" ? "查看模型" : "View Model")}</button>` : ""}
-        </div>`);
-    const backBtn = $("[data-back-model]", m.box);
-    if (backBtn) backBtn.onclick = () => {
-        const mid = opts.fromModelId;
-        m.close();
-        openBrowseFloat(mid); // 重开浏览详情浮层(大图浮层与详情浮层互斥,关闭后重建)
-    };
+        </div>`, null, !!opts._navFrom);
+    // 本页入导航栈(来源信息页隐藏保活;✕/Esc/m.close() 整链关闭)
+    const rec = navPush(m.overlay, m, opts._navFrom || null);
     const vmBtn = $("[data-view-model]", m.box);
     if (vmBtn) vmBtn.onclick = () => {
         const mid = item.modelId || opts.fromModelId;
-        m.close();
-        openBrowseFloat(mid); // 在悬浮窗打开模型页(不再跳官网)
+        openBrowseFloat(mid, { _navFrom: rec }); // 跳模型页:本页隐藏保活,顶部"返回"可回
     };
     attachIdAndTags(m.box, item); // ID 行 + 标签行(插在 kv 网格之前)
     // 资源流水线:解析(vid→模型信息) → 与 meta.hashes 前缀比对 → 本地索引匹配 → chips 渲染
-    renderResourceList(m.box, item, rawRes, civRes, [...vidSet], meta.hashes || {});
+    renderResourceList(m.box, item, rawRes, civRes, [...vidSet], meta.hashes || {}, rec);
 
     $$("[data-copy]", m.box).forEach((btn) => {
         btn.onclick = () => {
@@ -2610,6 +2658,8 @@ function injectStyles() {
 .cs-dl-hint { background:rgba(0,0,0,.2); border-radius:6px; padding:6px 8px; }
 .cs-float { position:fixed; width:460px; max-width:calc(100vw - 20px); max-height:calc(100vh - 24px); background:var(--comfy-menu-bg,#2a2a2a); border:1px solid var(--border-color,#444); border-radius:10px; box-shadow:0 12px 40px rgba(0,0,0,.55); z-index:60000; display:flex; flex-direction:column; overflow:hidden; }
 .cs-float-head { display:flex; gap:8px; align-items:center; padding:8px 10px; border-bottom:1px solid var(--border-color,#444); cursor:move; user-select:none; }
+.cs-float-back { flex:0 0 auto; background:transparent; border:1px solid var(--border-color,#444); color:var(--fg-color,#ddd); border-radius:6px; padding:2px 9px; font-size:11px; cursor:pointer; }
+.cs-float-back:hover { background:var(--border-color,#3f3f46); }
 .cs-float-title { flex:1; min-width:0; font-weight:600; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .cs-float-close { background:transparent; border:none; color:var(--fg-color,#eee); font-size:14px; cursor:pointer; padding:0 2px; }
 .cs-float-close:hover { color:#e2543f; }
