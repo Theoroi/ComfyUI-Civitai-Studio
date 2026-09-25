@@ -1322,7 +1322,7 @@ async function showImageMeta(image, opts = {}) {
 }
 
 // image_id 记忆:成功记录(点选/输入回车且 API 拉取成功)才入列表并持久化;
-// 404 的 ID 不保留。前端列表存 localStorage,datalist 提供下拉记忆
+// 404 的 ID 不保留。前端列表存 localStorage,补全弹层(attachComboComplete)实时读取
 function rememberImage(id) {
     if (!id || !/^\d+$/.test(String(id))) return;
     try {
@@ -1332,9 +1332,6 @@ function rememberImage(id) {
         if (i >= 0) list.splice(i, 1);
         list.unshift(String(id));
         localStorage.setItem(key, JSON.stringify(list.slice(0, 50)));
-        document.querySelectorAll("datalist[id^=cs-imgid-list]").forEach((dl) => {
-            dl.innerHTML = list.map((x) => `<option value="${esc(x)}"></option>`).join("");
-        });
     } catch (e) { /* 隐私模式等场景忽略 */ }
     apiPost(`/civitai_studio/remember_image/${encodeURIComponent(String(id))}`).catch(() => {});
 }
@@ -3208,26 +3205,19 @@ app.registerExtension({
                 const infoEl = document.createElement("div");
                 infoEl.style.cssText = "width:100%;display:flex;flex-direction:column;gap:6px;"
                     + "background:rgba(255,255,255,.04);border:1px solid #3a3a40;border-radius:6px;padding:6px;";
-                // image_id 自由输入行(面板顶部):粘贴任意 ID 回车/失焦即加载;下拉记忆
-                // cs_recent_image_ids 由 rememberImage 统一维护(拉取成功才入,404 不保留)
+                // image_id 自由输入行(面板顶部):粘贴任意 ID 回车/失焦即加载;补全弹层
+                // 与底模共用 attachComboComplete(候选=最近成功记忆 cs_recent_image_ids,
+                // rememberImage 拉取成功才写入,404 不保留),不用 datalist 私样式
                 const idRow = document.createElement("div");
                 idRow.style.cssText = "display:flex;gap:4px;align-items:center;width:100%;";
                 const idInput = document.createElement("input");
                 idInput.type = "text";
                 idInput.placeholder = S.lang === "zh" ? "输入/粘贴图片 ID,回车加载" : "Image ID, Enter to load";
                 idInput.style.cssText = "flex:1;min-width:0;font-size:11px;padding:3px 6px;";
-                idInput.setAttribute("list", "cs-imgid-list-" + (node.id ?? "x"));
-                const idDl = document.createElement("datalist");
-                idDl.id = "cs-imgid-list-" + (node.id ?? "x");
-                try {
-                    idDl.innerHTML = (JSON.parse(localStorage.getItem("cs_recent_image_ids") || "[]"))
-                        .map((id2) => `<option value="${esc(id2)}"></option>`).join("");
-                } catch (e) { /* 隐私模式等场景忽略 */ }
                 idRow.appendChild(idInput);
-                idRow.appendChild(idDl);
                 infoEl.appendChild(idRow);
-                const idCommit = () => {
-                    const val = idInput.value.trim();
+                const idCommit = (val) => {
+                    val = String(val || "").trim();
                     const idw2 = widget("image_id");
                     if (!idw2 || !val || val === String(idw2.value)) return;
                     idw2.value = val;
@@ -3235,11 +3225,10 @@ app.registerExtension({
                     node.csLastId = ""; // poll 兜底会刷;这里直接刷一次,反馈即时
                     renderSelInfo(node);
                 };
-                idInput.onkeydown = (e) => {
-                    e.stopPropagation();
-                    if (e.key === "Enter") { idCommit(); idInput.blur(); }
-                };
-                idInput.onblur = () => { idCommit(); };
+                attachComboComplete(idInput,
+                    () => { try { return JSON.parse(localStorage.getItem("cs_recent_image_ids") || "[]"); } catch (e) { return []; } },
+                    idCommit);
+                idInput.onblur = () => idCommit(idInput.value);
                 const infoBody = document.createElement("div");
                 infoBody.style.cssText = "display:flex;gap:8px;align-items:flex-start;width:100%;";
                 infoEl.appendChild(infoBody);
