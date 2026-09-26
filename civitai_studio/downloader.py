@@ -9,6 +9,7 @@
 
 import asyncio
 import hashlib
+import json
 import os
 import re
 import time
@@ -16,6 +17,7 @@ import urllib.parse
 import uuid
 
 import aiohttp
+import folder_paths
 
 from . import civitai_client, config, local_index
 
@@ -86,6 +88,58 @@ def _active_same_task(version_id, file_index):
     )
 
 
+def _state_path():
+    """队列持久化文件(用户目录):重启后任务列表可恢复,.part 断点本就在磁盘."""
+    try:
+        return os.path.join(folder_paths.get_user_directory(), "civitai_studio", "download_jobs.json")
+    except Exception:
+        return None
+
+
+def _persist():
+    path = _state_path()
+    if not path:
+        return
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        snap = []
+        for j in _jobs.values():
+            rec = {k: j.get(k) for k in JOB_PUBLIC_FIELDS}
+            rec["payload"] = j.get("payload") or {}  # retry 重新入队需要原始载荷
+            snap.append(rec)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(snap, f, ensure_ascii=False)
+        os.replace(tmp, path)
+    except OSError:
+        pass  # 磁盘异常不打断下载主流程
+
+
+def _load_persisted():
+    path = _state_path()
+    if not path or not os.path.exists(path):
+        return
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            snap = json.load(f)
+    except (OSError, ValueError):
+        return
+    for rec in snap or []:
+        if not isinstance(rec, dict) or not rec.get("id"):
+            continue
+        job = dict(rec)
+        if job.get("status") in ACTIVE_STATUSES:
+            # 上次退出时仍在进行:标记中断(不自动重排队,避免启动即抢带宽);
+            # .part 断点仍在,点"重试(续传)"即可接着下
+            job["status"] = "error"
+            job["error"] = "服务器重启导致下载中断,点击重试可从断点续传"
+            job["finished"] = time.time()
+        _jobs[str(job["id"])] = job
+
+
+_load_persisted()
+
+
 def get_state():
     return [{k: j.get(k) for k in JOB_PUBLIC_FIELDS} for j in _jobs.values()]
 
@@ -143,6 +197,7 @@ def enqueue(payload):
     _queue.put_nowait(job["id"])
     _ensure_workers()
     _trim_finished()
+    _persist()
     return {k: job.get(k) for k in JOB_PUBLIC_FIELDS}
 
 
@@ -194,6 +249,7 @@ async def _worker():
             if job["status"] == "cancelled":
                 _cancel_flags.discard(job_id)
                 job["finished"] = time.time()
+                _persist()
                 continue
             job["status"] = "downloading"
             try:
@@ -212,6 +268,7 @@ async def _worker():
             finally:
                 _cancel_flags.discard(job_id)
                 job["finished"] = time.time()
+                _persist()
 
 
 def _sha256_file(path):
@@ -474,9 +531,11 @@ def retry(job_id):
         }
     public = enqueue(payload)
     _jobs.pop(job_id, None)  # 原任务让位,列表不出现两条同义记录
+    _persist()
     return public
 
 
 def clear_finished():
     for jid in [jid for jid, j in _jobs.items() if j["status"] in ("done", "error", "cancelled")]:
         _jobs.pop(jid, None)
+    _persist()

@@ -2946,7 +2946,9 @@ function appendMissingMarks(cell, item) {
         dot.textContent = "!";
         b.appendChild(dot);
     }
-    b.title = S.lang === "zh" ? "缺少生成参数(红:提示词 黄:Lora 绿:底模)" : "Missing (red: prompt, yellow: lora, green: model)";
+    b.title = (S.lang === "zh"
+        ? "缺少生成参数(红:提示词 黄:Lora 绿:底模)· 仅检测常见字段,缺失≠真缺"
+        : "Missing (red: prompt, yellow: lora, green: model) · common fields only; missing here ≠ truly missing");
     cell.appendChild(b);
 }
 

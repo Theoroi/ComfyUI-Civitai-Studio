@@ -86,7 +86,7 @@ class CivitaiImageSearch:
     # base_model 用 COMBO:加载器(UNET/Checkpoint)的模型字段 widget 转成输入口后
     # 类型是 COMBO,前端实测拒绝 STRING→COMBO 连线、放行 COMBO→COMBO
     RETURN_TYPES = ("STRING", "STRING", "STRING", "COMBO", "IMAGE")
-    RETURN_NAMES = ("positive", "negative", "trigger_words", "base_model", "image")
+    RETURN_NAMES = ("positive", "negative", "trigger_words", "local_checkpoint", "image")
     FUNCTION = "run"
     CATEGORY = "Civitai Studio"
 
@@ -160,10 +160,23 @@ class CivitaiImageSearch:
         neg = meta.get("negativePrompt") or ""
         # 触发词:资源里的 LoRA 若在本地库中已关联,取其触发词
         trigger = ", ".join(vdata.get("trainedWords") or [])
-        # base_model 输出:选了具体底模时以输入为准,(any) 时用图片实际底模
+        # base_model 输入仍按 Civitai 底模筛选;/images 结果的底模名兜底
         base = base_model if base_model != "(any)" else (vdata.get("baseModel") or base_model)
+        # 底模输出(曾为诱饵连线:直接输出 Civitai 底模名,连加载器必报"值不在列表")。
+        # 现改为解析本地已安装的 checkpoint 文件名:按 sidecar 的 base_model 匹配本地索引,
+        # 命中即可直连 CheckpointLoader 的 ckpt_name;未命中输出 "(none)"
+        local_ckpt = "(none)"
+        try:
+            for m in local_index.scan()["models"]:
+                if m.get("category") not in ("checkpoints", "diffusion_models", "unet"):
+                    continue
+                if ((m.get("civitai") or {}).get("base_model") or "") == base:
+                    local_ckpt = m.get("rel") or m.get("name") or "(none)"  # 子目录模型用相对路径
+                    break
+        except Exception:
+            pass
         img_bytes = _sync_download(chosen.get("url"))
-        return (pos, neg, trigger, base, _bytes_to_tensor(img_bytes))
+        return (pos, neg, trigger, local_ckpt, _bytes_to_tensor(img_bytes))
 
 
 class CivitaiLoraRecipe:
