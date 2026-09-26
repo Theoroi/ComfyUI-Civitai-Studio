@@ -17,6 +17,7 @@
 - 下载队列持久化文件迁至 `user/civitai_studio/cache/download_jobs.json`（旧位置文件只读兜底，升级首启自动读取）
 - sidecar 写入（关联/刷新元数据）后自动作废对应指纹，下次扫描强制重读
 - 共享后台线程池抽为 `bg.py`（2→4 线程，sqlite 缓存 IO 与扫描/哈希共用）；`prime_model_cache` 回填同时落磁盘缓存
+- 「清空缓存」改为穿透全部层（内存缓存 + sqlite kv/指纹 + 重建索引）；磁盘 SWR 语义提示：数据过期后先回旧值（最长 7 天窗口）并后台刷新，模型名/版本信息的服务端改动最迟数小时内在后台生效，「刷新元数据」按钮始终绕缓存取最新
 - 「Civitai 保存图片」节点显示名改为「Export with A1111 geninfo」,并补充搜索别名
 - **BREAKING**:全部节点注册键迁移到 `CivitaiStudio_` 前缀(`CivitaiStudio_ImageSearch / _LoraRecipe / _ShowText / _SaveImage`)——**旧工作流里的节点会显示缺失,需重新摆放节点**;显示名不变
 - API key 读取统一走 `civitai_client.api_key()`（设置页优先 → 环境变量兜底），涉及请求头/下载 token/401 提示三处

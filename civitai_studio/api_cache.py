@@ -19,8 +19,21 @@ from . import bg, cache_store
 _MEM = {}  # key -> (ts, data)
 _MEM_MAX = 200
 _SWR_CAP = 7 * 86400.0  # 磁盘旧值最多还能当 SWR 底牌 7 天
-_inflight = {}  # (id(loop), key) -> Task
+_inflight = {}  # (id(loop), key) -> Task(当前全插件单主事件循环;loop 死亡残留属理论场景)
 _refreshing = set()  # SWR 后台刷新在途的 key
+_tasks = set()  # fire-and-forget 任务持强引用,防 GC 掉任务后 finally 不执行、_refreshing 卡死
+
+
+def _spawn(coro):
+    task = asyncio.ensure_future(coro)
+    _tasks.add(task)
+    task.add_done_callback(_tasks.discard)
+    return task
+
+
+def clear_mem():
+    """「清空缓存」用:bypass 内存层(设计:强制刷新穿透全部层)."""
+    _MEM.clear()
 
 
 def _mem_put(key, data):
@@ -36,11 +49,12 @@ async def _singleflight(key, fetch):
     sk = (id(loop), key)
     fut = _inflight.get(sk)
     if fut is not None:
-        return await asyncio.shield(fut)  # 共享领导者的结果;取消等待者不打断回源
+        return await asyncio.shield(fut)  # 共享领导者的结果
     fut = loop.create_task(fetch())
     _inflight[sk] = fut
     try:
-        return await fut
+        # 领导者也 shield:自己被取消(客户端断连/批量超时)不打断共享中的回源
+        return await asyncio.shield(fut)
     finally:
         _inflight.pop(sk, None)
 
@@ -61,7 +75,7 @@ def _kick_refresh(key, fetch, ttl_disk):
             _refreshing.discard(key)
 
     _refreshing.add(key)
-    asyncio.ensure_future(_run())
+    _spawn(_run())
 
 
 async def cached_json(key, fetch, ttl_mem=0.0, ttl_disk=None, swr=True):
@@ -84,14 +98,17 @@ async def cached_json(key, fetch, ttl_mem=0.0, ttl_disk=None, swr=True):
         age = now - rec["ts"]
         data = rec["data"]
         if age < ttl_disk:
-            _mem_put(key, data)
+            if ttl_mem > 0:
+                _mem_put(key, data)
             return data
         if swr and age < _SWR_CAP:
-            _mem_put(key, data)
+            if ttl_mem > 0:
+                _mem_put(key, data)
             _kick_refresh(key, fetch, ttl_disk)
             return data
     data = await _singleflight(key, fetch)
-    _mem_put(key, data)
+    if ttl_mem > 0:  # ttl_mem=0 表示调用方自管内存层(如 _model_cache),别双份驻留
+        _mem_put(key, data)
     if ttl_disk:
         try:
             await bg.run_bg(cache_store.kv_put, disk_key,
@@ -112,10 +129,4 @@ def prime(key, data, ttl_disk=None):
     except RuntimeError:
         cache_store.kv_put("api:" + key, payload, ttl_disk + _SWR_CAP)
         return
-    loop.create_task(bg.run_bg(cache_store.kv_put, "api:" + key, payload, ttl_disk + _SWR_CAP))
-
-
-def cached_peek(key):
-    """失败兜底用:拿内存里的旧值(没有则 None),不回源不刷新."""
-    hit = _MEM.get(key)
-    return hit[1] if hit else None
+    _spawn(bg.run_bg(cache_store.kv_put, "api:" + key, payload, ttl_disk + _SWR_CAP))

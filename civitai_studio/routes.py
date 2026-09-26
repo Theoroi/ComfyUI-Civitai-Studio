@@ -18,7 +18,7 @@ import folder_paths
 from aiohttp import web
 from yarl import URL
 
-from . import cache_store, civitai_client, config, downloader, local_index
+from . import api_cache, cache_store, civitai_client, config, downloader, local_index
 from .version import VERSION, build
 
 _enums_cache = {"data": None, "ts": 0.0}
@@ -672,8 +672,13 @@ async def cache_usage(request):
 
 @_post("/civitai_studio/cache_clear")
 async def cache_clear(request):
-    """清空缓存(kv 表 + 指纹表)后立即全量重建索引,避免空索引窗口."""
+    """清空缓存(内存层 + kv 表 + 指纹表,穿透全部层)后立即全量重建索引."""
     await local_index.run_bg(cache_store.clear_cache)  # checkpoint 别堵事件循环
+    api_cache.clear_mem()
+    civitai_client._model_cache.clear()
+    global _enums_cache
+    _enums_cache = {"data": None, "ts": 0.0}
+    _VERSION_CACHE.clear()
     await _scan_async(True, True)
     cfg = config.load()
     return web.json_response({
