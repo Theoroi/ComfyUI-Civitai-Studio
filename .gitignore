@@ -1,15 +1,14 @@
-# Python
-__pycache__/
-*.py[cod]
-
-# 下载临时文件 / 运行产物
-*.part
-user/
-
-# 内部评审留痕(不入库,防公开仓库带出本机路径等信息)
-refine/
 
 # IDE / 系统
+# Python
+# 下载临时文件 / 运行产物
+# 内部评审留痕(不入库,防公开仓库带出本机路径等信息)
+*.part
+*.py[cod]
 .idea/
 .vscode/
 Thumbs.db
+__pycache__/
+docs/
+refine/
+user/
