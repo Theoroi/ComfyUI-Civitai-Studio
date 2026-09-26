@@ -9,18 +9,11 @@ import json
 import os
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 
 import folder_paths
 
 from . import cache_store
-
-# 专用线程池:scan/sha256 等重活不挤占 ComfyUI 共享默认线程池
-_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="civitai-studio")
-
-
-def run_bg(fn, *args):
-    return asyncio.get_running_loop().run_in_executor(_EXECUTOR, fn, *args)
+from .bg import _EXECUTOR, run_bg  # 包级共享池(downloader 直接引用 _EXECUTOR 做 hash)
 
 # Civitai 模型类型 -> ComfyUI 模型目录 key(按优先级排列)
 TYPE_TO_FOLDERS = {

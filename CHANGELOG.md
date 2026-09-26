@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 ### 新增
+- 存储系统阶段 2（API 缓存层）：同 key 并发回源只打一次（singleflight）；模型详情与版本数据加磁盘 SWR——重启后 6h 内免回源直接可用，过期先回旧值再后台刷新；images 搜索页 60s 内存缓存（不落盘）；站方枚举磁盘缓存 24h；本地更新检查与下载元数据解析统一走缓存（面板二次打开零回源，API 回源次数大幅下降）
 - 存储系统阶段 1（设计见 docs/cache-design.md）：统一磁盘缓存层 `cache_store`（sqlite/WAL，user 目录 `cache/cache.sqlite`，损坏自动重建）；本地索引 mtime/size 指纹增量化——未变文件不再重读 sidecar，重启后索引立即可用，二次扫描从全盘读文件降为目录列表
 - 设置页：磁盘缓存上限（50-2000MB，默认 500）、缓存占用实时显示、「清空缓存」（kv+指纹清空后立即重建索引）与「深度重扫」（手动改过 sidecar 后的全量兜底）
 - 管理端点：`GET /civitai_studio/cache_usage`、`POST /civitai_studio/cache_clear`、`POST /civitai_studio/local/deep_rescan`；`/local/models` 响应新增 `scan_stats`（total/reused/read/dur）
@@ -15,6 +16,7 @@
 ### 变更
 - 下载队列持久化文件迁至 `user/civitai_studio/cache/download_jobs.json`（旧位置文件只读兜底，升级首启自动读取）
 - sidecar 写入（关联/刷新元数据）后自动作废对应指纹，下次扫描强制重读
+- 共享后台线程池抽为 `bg.py`（2→4 线程，sqlite 缓存 IO 与扫描/哈希共用）；`prime_model_cache` 回填同时落磁盘缓存
 - 「Civitai 保存图片」节点显示名改为「Export with A1111 geninfo」,并补充搜索别名
 - **BREAKING**:全部节点注册键迁移到 `CivitaiStudio_` 前缀(`CivitaiStudio_ImageSearch / _LoraRecipe / _ShowText / _SaveImage`)——**旧工作流里的节点会显示缺失,需重新摆放节点**;显示名不变
 - API key 读取统一走 `civitai_client.api_key()`（设置页优先 → 环境变量兜底），涉及请求头/下载 token/401 提示三处

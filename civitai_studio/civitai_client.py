@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 
 import aiohttp
 
-from . import config
+from . import api_cache, config
 
 # 主站用 civitai.red(与 docs/civitai/civitai_pull.py 实测一致):
 # API 与下载端点齐全,且不被 Cloudflare 盯;civitai.com 对代理出口 IP 经常弹网页挑战
@@ -274,33 +274,37 @@ async def open_isolated_stream(url, extra_headers=None, timeout=None):
 _RETRYABLE_STATUS = (429, 500, 502, 503, 504)
 
 # 模型详情缓存:LRU+TTL,本地库展开详情/说明落盘复用,避免重复打 API
+# (磁盘 SWR 层见 api_cache — 重启后 6h 内免回源,旧值先回再后台刷)
 _model_cache = {}
 _MODEL_TTL = 600.0
 _MODEL_CACHE_MAX = 50
+_MODEL_DISK_TTL = 6 * 3600.0
+_VERSION_DISK_TTL = 6 * 3600.0
 
 
-async def get_model_cached(mid):
-    """按 id 取模型详情,带 10 分钟 LRU 缓存(上限 50 条).
-
-    优先 /models?ids= 查询端点(与网页版同源,部分文件名可读:量化后缀而非文件ID段);
-    镜像不支持该参数或返回空 items 时回退 /models/{id}。"""
-    key = str(mid)
-    hit = _model_cache.get(key)
-    now = time.time()
-    if hit and now - hit[0] < _MODEL_TTL:
-        return hit[1]
-    data = None
+async def _fetch_model(key):
+    """/models?ids= 优先(与网页版同源,文件名可读),镜像不支持或身份不符回退 by-id."""
     try:
         q = await get_json(f"/models?ids={key}")
         items = q.get("items") if isinstance(q, dict) else None
         # 身份校验:端点若忽略 ids 参数返回默认列表,绝不能把错模型写进缓存/sidecar
         if items and str((items[0] or {}).get("id") or "") == key:
-            data = items[0]
+            return items[0]
     except (CivitaiError, asyncio.TimeoutError, aiohttp.ClientError) as e:
         print(f"[Civitai-Studio] ?ids= 查询失败,回退 by-id: {e}")
-        data = None
-    if data is None:
-        data = await get_json(f"/models/{key}")
+    return await get_json(f"/models/{key}")
+
+
+async def get_model_cached(mid):
+    """按 id 取模型详情:内存 10min LRU(上限50) → 磁盘 6h SWR → 回源."""
+    key = str(mid)
+    hit = _model_cache.get(key)
+    now = time.time()
+    if hit and now - hit[0] < _MODEL_TTL:
+        return hit[1]
+    data = await api_cache.cached_json(
+        "model:" + key, lambda: _fetch_model(key),
+        ttl_mem=0, ttl_disk=_MODEL_DISK_TTL, swr=True)
     if len(_model_cache) >= _MODEL_CACHE_MAX:
         oldest = min(_model_cache, key=lambda k: _model_cache[k][0])
         _model_cache.pop(oldest, None)
@@ -308,9 +312,34 @@ async def get_model_cached(mid):
     return data
 
 
+async def get_version_cached(vid):
+    """按 id 取版本数据(/model-versions/{id}):内存 10min → 磁盘 6h SWR → 回源."""
+    vid = str(vid)
+    return await api_cache.cached_json(
+        "ver:" + vid, lambda: get_json(f"/model-versions/{vid}"),
+        ttl_mem=_MODEL_TTL, ttl_disk=_VERSION_DISK_TTL, swr=True)
+
+
+async def get_images_page(params):
+    """images 搜索页:60s 内存缓存 + 单飞(结果随筛选变,不落盘 — 设计 TTL 表)."""
+    canon = urllib.parse.urlencode(sorted((_clean_params(params) or {}).items()))
+    return await api_cache.cached_json(
+        "images:" + canon, lambda: get_json("/images", params=params),
+        ttl_mem=60.0, ttl_disk=None)
+
+
+async def get_enums_cached():
+    """站方枚举:内存 6h → 磁盘 24h SWR(冷启动免回源)."""
+    return await api_cache.cached_json(
+        "enums",
+        lambda: get_json("/enums", timeout=aiohttp.ClientTimeout(total=20, connect=10)),
+        ttl_mem=6 * 3600.0, ttl_disk=24 * 3600.0, swr=True)
+
+
 def prime_model_cache(mid, data):
-    """外部刷新数据后回填缓存,让后续 /model/{id} 读取拿到新内容."""
+    """外部刷新数据后回填缓存,让后续 /model/{id} 读取拿到新内容(内存+磁盘)."""
     _model_cache[str(mid)] = (time.time(), data)
+    api_cache.prime("model:" + str(mid), data, ttl_disk=_MODEL_DISK_TTL)
 
 
 async def get_json(path, params=None, timeout=None):
