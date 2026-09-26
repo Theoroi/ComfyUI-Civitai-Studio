@@ -698,7 +698,7 @@ async def embedded_meta(request):
     """读本地图片/视频的内嵌生成数据(PNG tEXt/iTXt、MP4 mdta;结果随 mtime 缓存).
 
     body {path}:须位于 output/input/temp 或已注册模型根之下。
-    meta 形状:{prompt|workflow: dict|str, parameters: str} 或 null(无内嵌数据)。
+    meta 形状:{prompt|workflow: dict|str, parameters|encoder: str} 或 null(无内嵌数据)。
     """
     body = await _read_json_dict(request)
     if body is None:
@@ -709,7 +709,9 @@ async def embedded_meta(request):
     if not os.path.isfile(raw):
         return _json_error("文件不存在", 404)
     real = os.path.realpath(raw)
-    if not any(real == r or real.startswith(r + os.sep) for r in _meta_roots()):
+    # 大小写不敏感比对(与 local/reveal 的约定一致;大小写不敏感卷上防误 403)
+    real_l, roots_l = real.lower(), [r.lower() for r in _meta_roots()]
+    if not any(real_l == r or real_l.startswith(r + os.sep) for r in roots_l):
         return _json_error("路径不在允许目录内(output/input/temp/模型目录)", 403)
     meta = await local_index.run_bg(media_meta.get_embedded, real)
     return _ok(meta=meta)
