@@ -5,6 +5,9 @@
 ## [Unreleased]
 
 ### 新增
+- 阶段 3 补全·缩略图 blob 缓存（IndexedDB）：画廊与节点缩略图命中本地 blob 免 CDN 拉取（objectURL 会话内复用防泄漏，800 张容量上限按键序近似裁剪；拉取失败自动回退原路径）
+- 分组上行：本地分组同步时接入 Civitai 集合——已绑定集合改名走 `collection.upsert`，本地新建组在首条条目推送时按条目类型（Image/Model）建集，组内条目走 `collection.saveItem` 并以 gpushed 标记防重推（需 Key 勾选 CollectionsWrite 作用域，缺失时同步结果提示）
+- 冒烟测试入库 `tests/smoke/`（8 个离线用例：存储/索引增量化/损坏自愈/媒体缓存/API 单飞 SWR/内嵌元数据/旧库迁移/资产命名去重/收藏数据面，自带 folder_paths 桩，无需运行中的 ComfyUI）
 - 【导入为资产】：大图浮层一键把原始图片下载到 `input/civitai_import/`（LoadImage 可直接选用，文件内嵌的工作流随文件可用），命名 `civitai_<id>`；重复导入按 SHA256 幂等跳过，同 id 内容不同自动递增 `civitai_<id>_x`
 - 【提取工作流】：大图浮层一键解析原文件内嵌的 ComfyUI 工作流（PNG tEXt/iTXt、MP4 mdta），存为用户工作流 `workflows/civitai_studio/extract_<id>.json`。防泛滥：提取进子目录（模板浏览器的列表是非递归 glob，实测不会涌入模板列表）、按图片 id 幂等覆盖不膨胀、收藏夹 tab 内「提取管理」面板（列表/删除）、超 300 个提醒清理
 - 完整收藏系统：收藏夹独立 tab（顶栏★，内分「资产」「模型」两类；分组/未分组过滤、逐条分组分配、搜索；同步/导入/导出按钮）。与 Civitai 账号收藏**双向同步**——图片收藏走 REST 读取（`?favorites=true`），模型收藏读写双向（写走 tRPC `user.toggleFavorite`，**需 API Key 勾选 SocialWrite 作用域**，缺失时同步结果内提示），Civitai 集合 ↔ 本地分组对齐（tRPC collection.*）；冲突按**最新修改时间覆盖**（本地未同步改动优先；本地取消为永久否决——网页端重新收藏不会自动回到本地，须本地重新 ★）；设置页可开「自动同步」（打开收藏夹时触发，30 分钟节流）。图片收藏的本地→远端方向官方无端点，暂只支持远端→本地

@@ -2173,38 +2173,92 @@ async function runUpdateCheck(items) {
     }
 }
 
-// ---------- IndexedDB(画廊快照 — 页面重载/重启后画廊秒开;存储系统阶段3 L1) ----------
+// ---------- IndexedDB(画廊快照 + 缩略图 blob — 页面重载/重启后秒开;存储系统阶段3 L1) ----------
 let _idbPromise = null;
 function idb() {
     if (_idbPromise) return _idbPromise;
     _idbPromise = new Promise((res) => {
         try {
-            const rq = indexedDB.open("civitai-studio", 1);
-            rq.onupgradeneeded = () => { rq.result.createObjectStore("kv"); };
+            const rq = indexedDB.open("civitai-studio", 2);
+            rq.onupgradeneeded = () => {
+                const db = rq.result;
+                if (!db.objectStoreNames.contains("kv")) db.createObjectStore("kv");
+                if (!db.objectStoreNames.contains("thumbs")) db.createObjectStore("thumbs");
+            };
             rq.onsuccess = () => res(rq.result);
-            rq.onerror = () => res(null); // 无 IDB(隐私模式等):降级为无快照
+            rq.onerror = () => res(null); // 无 IDB(隐私模式等):降级为无快照/无 blob 缓存
             rq.onblocked = () => res(null);
         } catch { res(null); }
     });
     return _idbPromise;
 }
-async function idbGet(key) {
+async function idbGet(store, key) {
     const db = await idb();
     if (!db) return undefined;
     return new Promise((res) => {
         try {
-            const rq = db.transaction("kv").objectStore("kv").get(key);
+            const rq = db.transaction(store).objectStore(store).get(key);
             rq.onsuccess = () => res(rq.result);
             rq.onerror = () => res(undefined);
         } catch { res(undefined); }
     });
 }
-async function idbSet(key, val) {
+async function idbSet(store, key, val) {
     const db = await idb();
     if (!db) return;
     try {
-        db.transaction("kv", "readwrite").objectStore("kv").put(val, key);
+        db.transaction(store, "readwrite").objectStore(store).put(val, key);
     } catch {}
+}
+
+// 缩略图 blob 缓存:命中免 CDN;objectURL 按 url 复用防会话内泄漏;容量上限按键序近似裁剪
+const THUMB_CAP = 800;
+const _thumbObjUrls = new Map();
+let _thumbPuts = 0;
+async function attachThumbBlob(imgEl, url) {
+    if (!url) return;
+    const cached = _thumbObjUrls.get(url);
+    if (cached) { imgEl.src = cached; return; }
+    try {
+        let blob = (await idbGet("thumbs", url))?.blob;
+        if (!blob) {
+            const resp = await fetch(url);
+            if (!resp.ok) return; // 拉取失败:保持原 src(HTTP 缓存兜底)
+            blob = await resp.blob();
+            idbSet("thumbs", url, { blob, ts: Date.now() }).then(() => {
+                if (++_thumbPuts % 25 === 0) idbTrimThumbs(THUMB_CAP);
+            }).catch(() => {});
+        }
+        const obj = URL.createObjectURL(blob);
+        _thumbObjUrls.set(url, obj);
+        imgEl.src = obj;
+    } catch { /* 保持原 src */ }
+}
+async function idbTrimThumbs(cap) {
+    // 淘汰顺序为键序近似(非严格 LRU),只控容量;被裁掉的缩略图会按需重新缓存
+    const db = await idb();
+    if (!db) return;
+    await new Promise((res) => {
+        try {
+            const tx = db.transaction("thumbs", "readwrite");
+            const st = tx.objectStore("thumbs");
+            const cntReq = st.count();
+            cntReq.onsuccess = () => {
+                let over = cntReq.result - cap;
+                if (over <= 0) { res(); return; }
+                const cur = st.openCursor();
+                cur.onsuccess = () => {
+                    const c = cur.result;
+                    if (!c || over <= 0) { res(); return; }
+                    over -= 1;
+                    c.delete();
+                    c.continue();
+                };
+                cur.onerror = () => res();
+            };
+            cntReq.onerror = () => res();
+        } catch { res(); }
+    });
 }
 
 const GAL_SNAPSHOT_KEY = "gal_snapshot";
@@ -2215,7 +2269,7 @@ async function saveGallerySnapshot() {
     const st = S.gal;
     if (!st.items.length) return;
     const truncated = st.items.length > 240; // 截断时丢弃游标:防恢复后滚动加载跳过中段
-    await idbSet(GAL_SNAPSHOT_KEY, {
+    await idbSet("kv", GAL_SNAPSHOT_KEY, {
         items: st.items.slice(0, 240), // 上限防快照无限膨胀
         next: truncated ? [] : (st.next || []),
         filters: galleryFilters(st),
@@ -2225,7 +2279,7 @@ async function saveGallerySnapshot() {
 async function restoreGallerySnapshot(view) {
     const st = S.gal;
     if (st.items.length || st.loading) return;
-    const snap = await idbGet(GAL_SNAPSHOT_KEY);
+    const snap = await idbGet("kv", GAL_SNAPSHOT_KEY);
     if (!view.isConnected || st.items.length || st.loading) return; // 等待期间用户已手动刷新
     if (!snap || !Array.isArray(snap.items) || !snap.items.length) return;
     if (snap.ts && Date.now() - snap.ts > 30 * 86400 * 1000) return; // 快照超龄作废
@@ -2355,6 +2409,7 @@ function renderGallery(reset) {
                     onerror="this.style.display='none'"/>`;
         }
         const mediaEl = item.querySelector("img,video");
+        if (mediaEl && mediaEl.tagName === "IMG") attachThumbBlob(mediaEl, mediaEl.src); // blob 命中免 CDN
         if (mediaEl) mediaEl.onclick = () => showImageMeta(img);
         if (isVideoItem(img)) appendPlayBadge(item); // 半透明播放三角标
         appendMissingMarks(item, img); // 缺失生成参数的三色感叹号(与节点条共用)
@@ -3813,6 +3868,7 @@ function renderNodeThumbs(node) {
             im.onerror = () => { if (!im.dataset.retried) { im.dataset.retried = "1"; im.src = altSrc(thumb); } };
             im.src = imgSrc(thumb);
             cell.appendChild(im);
+            attachThumbBlob(im, im.src); // blob 命中免 CDN
         }
         if (idw?.value && String(idw.value) === String(c.it.id)) cell.style.borderColor = "#4a90e2";
         appendMissingMarks(cell, c.it);
