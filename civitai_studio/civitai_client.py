@@ -282,7 +282,9 @@ async def get_model_cached(mid):
         return hit[1]
     data = None
     try:
-        q = await get_json(f"/models?ids={key}")
+        # _:缓存穿透参数——REST 端点的 CDN 缓存会滞后于站方改名(Qwen 2.1 实测),
+        # 带时间戳强制回源拿最新文件记录;本函数自带 10 分钟 LRU,不会高频回源
+        q = await get_json(f"/models?ids={key}&_={int(now)}")
         items = q.get("items") if isinstance(q, dict) else None
         if items:
             data = items[0]
