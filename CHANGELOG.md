@@ -2,7 +2,7 @@
 
 格式参照 Keep a Changelog;项目版本号见 `pyproject.toml` 与 `civitai_studio/version.py`。
 
-## [Unreleased]
+## [0.7.0] - 2026-09-26
 
 ### 新增
 - 下载:失败/已取消任务可「重试(续传)」,断点 .part 自动命中续传;队列持久化到用户目录,重启后恢复任务列表,中断任务标记原因并支持断点重试

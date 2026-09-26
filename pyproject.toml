@@ -1,13 +1,13 @@
 [project]
 name = "comfyui-civitai-studio"
 description = "Civitai browser + local model manager for ComfyUI — search & download models into ComfyUI model folders, track installed versions, check updates. (Civitai 模型浏览器与本地管理器:搜索下载、版本跟踪、更新检查)"
-version = "0.6.1"
+version = "0.7.0"
 license = {file = "LICENSE"}
 requires-python = ">=3.10"
 dependencies = ["aiohttp-socks>=0.8.4"]
 
-# 发布到 ComfyUI Registry 前需填入在 registry.comfy.org 注册的发布者 ID
+# 发布到 ComfyUI Registry:需先在 registry.comfy.org 注册发布者,把 PublisherId 填到下面并取消注释,
+# 然后 COMFY_REGISTRY_KEY=$(cat <key文件>) comfy node publish(发版需用户确认,见 AGENTS.md)
 # [tool.comfy]
 # PublisherId = ""
 # DisplayName = "Civitai Studio"
-# Icon = ""

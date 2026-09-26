@@ -10,3 +10,11 @@
   3. 或直接让用户开新标签页打开 ComfyUI。
   背景与原理见 `docs/civitai-benchmark.md` 附二的 ZCode 内嵌浏览器缓存备忘(`persist:zcode-embedded-browser` 分区缓存、无用户开关)。
 - 后端(`civitai_studio/*.py`)改动需要重启 ComfyUI 才生效,这一点不受本约定影响,照常提醒用户。
+
+## 版本 bump 与发版必须经用户确认
+
+- 以下动作每一项都要用户明确确认后才执行(平时只准备材料、给建议,不实际执行):
+  1. 修改版本号(`pyproject.toml` / `civitai_studio/version.py` / JS 里的 `JS_VERSION`);
+  2. 推送 `v*` tag(会触发 release.yml 自动打包并发布 GitHub Release);
+  3. `comfy node publish` 上架 ComfyUI Registry(registry API key 在 `C:\Users\Ex_SL\.zcode\secrets\comfy_org_registry_api_key`)。
+- 收到"发版/bump/确认"等明确指令后按当时流程执行,发版前核对 CHANGELOG 与版本号三处一致。

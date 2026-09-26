@@ -30,7 +30,7 @@ const SORTS = ["Most Downloaded", "Highest Rated", "Newest"];
 const PERIODS = ["AllTime", "Month", "Week", "Day"];
 const NSFW_LEVELS = [0, 1, 2];
 
-const JS_VERSION = "0.6.1";
+const JS_VERSION = "0.7.0";
 
 // ---------- i18n ----------
 const STR = {
@@ -293,8 +293,14 @@ function sortEnumNames(list) {
 // (深色圆角面板/悬停高亮,走 ComfyUI 主题变量),替代浏览器 datalist 私样式。
 // input:文本框;getCands():候选数组(枚举刷新后整体替换);onCommit(val):回车/点选提交
 const _comboPickers = new Set();
-function destroyComboPickers() {
-    for (const api of [..._comboPickers]) api.destroy?.();
+function destroyComboPickers(container) {
+    // 只销毁"输入框已断连"或"输入框在 container 内"的补全层;
+    // 避免侧栏重建误杀画布节点侧(不在侧栏内且仍连着)的补全弹层
+    for (const api of [..._comboPickers]) {
+        const el = api.input;
+        const owned = !el || !el.isConnected || (container ? container.contains(el) : false);
+        if (owned) api.destroy?.();
+    }
 }
 function attachComboComplete(input, getCands, onCommit) {
     const pop = document.createElement("div");
@@ -352,6 +358,7 @@ function attachComboComplete(input, getCands, onCommit) {
     window.addEventListener("scroll", onScroll, { capture: true });
     if (!pop.isConnected) document.body.appendChild(pop);
     const api = {
+        input, // 供 destroyComboPickers(container) 判定归属:只清断连/容器内的
         destroy() { // 节点删除/视图重建时调用,防 scroll 监听与弹层 DOM 泄漏
             window.removeEventListener("scroll", onScroll, { capture: true });
             pop.remove();
@@ -571,8 +578,14 @@ function showModal(innerHTML, cls, keepNav) {
         const i = (S.ui.floatModals || []).indexOf(api);
         if (i >= 0) S.ui.floatModals.splice(i, 1);
     };
-    // Esc 走 ✕ 的现行 onclick(导航浮层被 navPush 覆写为整链关闭);隐藏保活页不响应
-    const escHandler = (e) => { if (e.key === "Escape" && panel.style.display !== "none") panel.querySelector(".cs-float-close").click(); };
+    // Esc 走 ✕ 的现行 onclick(导航浮层被 navPush 覆写为整链关闭);只让最顶层
+    // modal 响应(子选择器打开时按一次 Esc 只关最上层);隐藏保活页不响应
+    const escHandler = (e) => {
+        if (e.key !== "Escape" || panel.style.display === "none") return;
+        const ms = S.ui.floatModals || [];
+        if (ms.length && ms[ms.length - 1] !== api) return;
+        panel.querySelector(".cs-float-close").click();
+    };
     document.addEventListener("keydown", escHandler);
     panel.querySelector(".cs-float-close").onclick = close;
     // 所有悬浮窗统一左上角"返回":无导航上下文时等价关闭;导航浮层由 navPush 改绑
@@ -2586,7 +2599,7 @@ async function openSubdirPicker(getRoot, onPick) {
         <div style="max-height:300px;overflow-y:auto;display:flex;flex-direction:column;gap:3px;">
             <button class="cs-btn" data-p="">${esc(t("subdirRoot"))}</button>
             ${dirs.map((d2) => `<button class="cs-btn" data-p="${esc(d2)}">${esc(d2)}</button>`).join("")}
-        </div>`);
+        </div>`, null, true); // keepNav:这是父对话框(下载/移动)之上的子选择器,绝不能清掉父层
     $$("[data-p]", m2.box).forEach((b) => {
         b.onclick = () => { onPick(b.dataset.p); m2.close(); };
     });
@@ -2717,6 +2730,7 @@ function buildDownloadsView(root) {
 }
 
 function buildRoot(el) {
+    destroyComboPickers(el); // 侧栏重建:旧的补全弹层与 scroll 监听一并清理(节点侧不受影响)
     el.innerHTML = "";
     const root = document.createElement("div");
     root.className = "cs-root";

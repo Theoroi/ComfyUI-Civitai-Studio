@@ -325,18 +325,26 @@ class CivitaiSaveImage:
     @staticmethod
     def _resolve_hashes(prompt):
         """从 API prompt 抽 ckpt/lora 文件名,经本地索引 sidecar 查 SHA256.
-        返回 (model_hash, model_name, lora_pairs, missing_list)。"""
+        返回 (model_hash, model_name, lora_pairs, missing_list)。同名多文件视为歧义。"""
         unknown = "(hash unknown)"
         idx = local_index.scan()
-        by_name, by_rel = {}, {}
+        by_rel, by_name = {}, {}
         for m in idx["models"]:
-            by_name[m["name"].lower()] = m
             by_rel[(m.get("rel") or "").lower()] = m
+            by_name.setdefault(m["name"].lower(), []).append(m)
 
         def sha_of(fname):
-            item = by_rel.get(str(fname).lower()) or by_name.get(os.path.basename(str(fname)).lower())
+            # ComfyUI 下发路径可能是反斜杠;by_rel 键是正斜杠 rel,先归一再查
+            norm = str(fname).replace("\\", "/").lower()
+            item = by_rel.get(norm)
+            ambiguous = False
+            if item is None:
+                hits = by_name.get(os.path.basename(norm)) or []
+                if len(hits) > 1:
+                    return None, None, False, True  # 不同子目录同名:歧义,宁缺勿错
+                item = hits[0] if hits else None
             side = (item or {}).get("civitai") or {}
-            return side.get("sha256"), item, bool(side.get("sha256"))
+            return side.get("sha256"), item, bool(side.get("sha256")), ambiguous
 
         model_hash, model_name, lora_pairs, missing = unknown, "", [], []
         for node in (prompt or {}).values():
@@ -344,18 +352,18 @@ class CivitaiSaveImage:
             inputs = node.get("inputs") or {}
             if "CheckpointLoader" in ct and inputs.get("ckpt_name"):
                 name = str(inputs["ckpt_name"])
-                sha, item, ok = sha_of(name)
+                sha, item, ok, amb = sha_of(name)
                 model_hash = sha if ok else unknown
                 model_name = ((item or {}).get("civitai") or {}).get("model_name") or os.path.basename(name)
                 if not ok:
-                    missing.append(f"{name}(无 SHA256:本地库未关联或非本插件下载)")
-            elif ct == "LoraLoader" and inputs.get("lora_name"):
+                    missing.append(f"{name}({'同名歧义,建议用完整相对路径' if amb else '无 SHA256:本地库未关联或非本插件下载'})")
+            elif "LoraLoader" in ct and inputs.get("lora_name"):  # 含 LoraLoaderModelOnly 等变体
                 name = str(inputs["lora_name"])
-                sha, item, ok = sha_of(name)
+                sha, item, ok, amb = sha_of(name)
                 disp = ((item or {}).get("civitai") or {}).get("model_name") or os.path.basename(name)
                 lora_pairs.append((disp, sha if ok else unknown))
                 if not ok:
-                    missing.append(f"{name}(无 SHA256)")
+                    missing.append(f"{name}({'同名歧义' if amb else '无 SHA256'})")
         return model_hash, model_name, lora_pairs, missing
 
     def run(self, images, filename_prefix="civitai_studio/ComfyStudio", write_metadata="true",
@@ -365,8 +373,9 @@ class CivitaiSaveImage:
         from PIL.PngImagePlugin import PngInfo
 
         output_dir = folder_paths.get_output_directory()
+        # 官方 SaveImage 同款调用(签名只有 4 参):W=shape[1], H=shape[0]
         full_output_folder, filename, counter, subfolder, _ = folder_paths.get_save_image_path(
-            filename_prefix, output_dir, images.shape[1], images.shape[0], images.shape[1] if images.ndim < 4 else 3)
+            filename_prefix, output_dir, images[0].shape[1], images[0].shape[0])
 
         pnginfo = None
         if write_metadata == "true":
