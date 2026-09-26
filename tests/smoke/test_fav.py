@@ -169,8 +169,22 @@ for s in ("", "-wal", "-shm"):
     except OSError:
         pass
 cache_store._CONN = None
-cache_store._gpushed_checked = False
+import civitai_studio.favorites_store as _fs_mod
+_fs_mod._gpushed_checked = False
 cache_store.init()
 assert fs.toggle(fs.KIND_ASSET, "9999", {"name": "post-heal"}) is True, "重建库缺 gpushed 列"
 assert fs.is_active(fs.KIND_ASSET, "9999")
 print("自愈后 gpushed 列 OK")
+
+# ===== 守卫仅限下行路径:本地改名(civitai_id=None)不被 dirty 守卫吞掉 =====
+g5 = fs.upsert_group("G1", dirty=1)
+g5b = fs.upsert_group("G2", gid=g5["gid"], dirty=1)  # 本地改名(routes 语义:dirty=1)
+assert g5b["name"] == "G2" and g5b["dirty"] == 1, g5b
+# 下行落地远端组(带 civitai_id):dirty 行只补绑,不改名
+g5c = fs.upsert_group("RemoteName", gid=g5["gid"], civitai_id=777, updated_at=time.time())
+assert g5c["name"] == "G2" and g5c["civitai_id"] == 777 and g5c["dirty"] == 1, g5c
+# dirty=0 后下行正常写名
+fs.mark_group_synced(g5["gid"], 777)
+g5d = fs.upsert_group("RemoteName2", gid=g5["gid"], civitai_id=777, updated_at=time.time())
+assert g5d["name"] == "RemoteName2" and g5d["dirty"] == 0, g5d
+print("改名守卫分流 OK")

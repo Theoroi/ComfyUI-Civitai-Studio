@@ -208,7 +208,7 @@ async def sync_now():
     token = os.urandom(8).hex()
     if cache_store.kv_get(_SYNC_LOCK_KEY):
         return {"status": "busy"}
-    cache_store.kv_put(_SYNC_LOCK_KEY, token, ttl=300)  # 防重入;finally 校验 token 再清
+    cache_store.kv_put(_SYNC_LOCK_KEY, token, ttl=1800)  # 防重入;存量首推带 0.5s/条限速,最坏可达 30 分钟,finally 校验 token 再清
     result = {"assets_down": 0, "models_down": 0, "groups_down": 0, "groups_up": 0,
               "items_up": 0, "upsynced": 0, "upsync_failed": 0, "scope_hint": "",
               "truncated": False, "errors": [], "at": time.time()}

@@ -293,9 +293,9 @@ def upsert_group(name, gid=None, civitai_id=None, dirty=0, updated_at=None):
                 r = conn.execute("SELECT civitai_id, dirty, name FROM fav_groups WHERE gid=?", (gid,)).fetchone()
                 if r and civitai_id is None:
                     civitai_id = r[0]
-                if r and r[1] == 1:
-                    # 本地未同步的改名不被下行远端名覆盖(items 侧"dirty 让位"同款):
-                    # 只补绑 civitai_id,名字留给上行推
+                if r and r[1] == 1 and civitai_id is not None:
+                    # 守卫仅限下行落地路径(civitai_id 非空):本地改名(civitai_id=None)一律写新名,
+                    # 否则"建组(即 dirty)后未同步前改名"会被旧名吞掉
                     new_cid = int(civitai_id) if civitai_id else r[0]
                     conn.execute(
                         "UPDATE fav_groups SET civitai_id=?, updated_at=? WHERE gid=?",
