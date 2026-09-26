@@ -2142,9 +2142,10 @@ function galleryFilters(st) {
 async function saveGallerySnapshot() {
     const st = S.gal;
     if (!st.items.length) return;
+    const truncated = st.items.length > 240; // 截断时丢弃游标:防恢复后滚动加载跳过中段
     await idbSet(GAL_SNAPSHOT_KEY, {
         items: st.items.slice(0, 240), // 上限防快照无限膨胀
-        next: st.next || [],
+        next: truncated ? [] : (st.next || []),
         filters: galleryFilters(st),
         ts: Date.now(),
     });
@@ -2155,6 +2156,7 @@ async function restoreGallerySnapshot(view) {
     const snap = await idbGet(GAL_SNAPSHOT_KEY);
     if (!view.isConnected || st.items.length || st.loading) return; // 等待期间用户已手动刷新
     if (!snap || !Array.isArray(snap.items) || !snap.items.length) return;
+    if (snap.ts && Date.now() - snap.ts > 30 * 86400 * 1000) return; // 快照超龄作废
     const f = snap.filters || {};
     st.sort = f.sort || st.sort;
     st.period = f.period || st.period;
@@ -2182,7 +2184,8 @@ async function fetchGallery(reset, opts = {}) {
     if (st.loading) { if (!silent) st.pending = true; return; }
     if (!reset && !(st.next && st.next.length)) return; // 没有下一页
     const sig0 = st.items.map((x) => x.id).join(",");
-    if (!silent) { st.loading = true; renderGallery(); }
+    st.loading = true; // 静默同样置位:滚动加载/筛选刷新的互斥只认这一个判据
+    if (!silent) renderGallery();
     try {
         const p = new URLSearchParams({ limit: "24", sort: st.sort, period: st.period });
         p.set("nsfw", st.nsfwLevel > 0 ? "true" : "false");
@@ -2195,6 +2198,8 @@ async function fetchGallery(reset, opts = {}) {
                 .map((x) => (/^\d+$/.test(x) ? x : (S.tagMap && S.tagMap[x]) || null))
                 .filter(Boolean);
             if (!ids.length) {
+                // 静默刷新时 tagMap 可能还没异步就绪:保住现有画面,等下次刷新
+                if (silent) { st.loading = false; return; }
                 // 填了 tag 但一个有效 ID 都解析不出来:直接显示空结果
                 st.items = []; st.next = []; st.error = "";
                 st.loading = false;

@@ -505,7 +505,8 @@ async def image_proxy(request):
                 body = await resp.content.read(20 * 1024 * 1024 + 1)
                 if len(body) > 20 * 1024 * 1024:
                     return _json_error("图片超过 20MB 上限", 502)
-                bg_spawn(local_index.run_bg(cache_store.media_store, current, ctype, body))
+                # 键用原始 url(与 media_lookup 对齐;302 终点的 ctype/内容才是实际下发的)
+                bg_spawn(local_index.run_bg(cache_store.media_store, url, ctype, body))
                 return web.Response(body=body, content_type=ctype,
                                     headers={"Cache-Control": "public, max-age=86400"})
         return _json_error("图片重定向次数过多", 502)

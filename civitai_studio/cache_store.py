@@ -355,13 +355,17 @@ def clear_fingerprints():
 # ---------- 设置页:占用与清空 ----------
 
 def usage():
-    """cache 目录字节总数(不含 download_jobs.json — 那是队列状态,不算缓存)."""
+    """cache 目录字节总数(递归含 media/ 子目录;不含 download_jobs.json — 队列状态不算缓存)."""
     total = 0
     try:
-        for name in os.listdir(cache_dir()):
-            p = os.path.join(cache_dir(), name)
-            if os.path.isfile(p) and name != "download_jobs.json":
-                total += os.path.getsize(p)
+        for dirpath, _dirnames, filenames in os.walk(cache_dir()):
+            for name in filenames:
+                if name == "download_jobs.json":
+                    continue
+                try:
+                    total += os.path.getsize(os.path.join(dirpath, name))
+                except OSError:
+                    pass
     except OSError:
         pass
     return total
@@ -413,7 +417,8 @@ def media_store(url, ctype, data):
         os.makedirs(media_dir(), exist_ok=True)
         h = hashlib.sha1(url.encode("utf-8")).hexdigest()
         p = os.path.join(media_dir(), h + ".bin")
-        tmp = p + ".tmp"
+        # tmp 名带 pid+tid:并发同键写不共享 tmp,防混合字节经 os.replace 变成"合法坏文件"
+        tmp = "%s.%d.%d.tmp" % (p, os.getpid(), threading.get_ident())
         with open(tmp, "wb") as f:
             f.write(data)
         os.replace(tmp, p)
