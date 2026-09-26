@@ -9,6 +9,7 @@ CivitaiImageSearch.run 为 async:网络耗时部分经 asyncio.to_thread 进入
 import asyncio
 import io
 import json
+import os
 import re
 import urllib.parse
 import urllib.request
@@ -268,14 +269,164 @@ class CivitaiShowText:
         return {"ui": {"text": [text]}, "result": (text,)}
 
 
+class CivitaiSaveImage:
+    """保存 PNG 并写入 Civitai 兼容元数据:ComfyUI prompt/workflow + A1111 parameters 行
+    (含模型/LoRA 的 SHA256,经本地索引 sidecar 解析)。hash 拿不到时显式标注
+    "hash unknown" 并打印警告,不静默。上传 Civitai 可自动挂接全部资源。"""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "images": ("IMAGE",),
+                "filename_prefix": ("STRING", {"default": "civitai_studio/ComfyStudio"}),
+                "write_metadata": (["true", "false"],),
+            },
+            "optional": {
+                # 可连 图像搜索 的 positive/negative;不连时从工作流节点尽力提取
+                "positive": ("STRING", {"forceInput": True}),
+                "negative": ("STRING", {"forceInput": True}),
+            },
+            "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
+        }
+
+    RETURN_TYPES = ()
+    FUNCTION = "run"
+    CATEGORY = "Civitai Studio"
+    OUTPUT_NODE = True
+
+    # ---- 工作流解析(尽力而为,失败留空不抛错) ----
+    @staticmethod
+    def _find_sampler(prompt):
+        for node in (prompt or {}).values():
+            ct = str(node.get("class_type") or "")
+            if "KSampler" in ct or "SamplerCustom" in ct:
+                return node.get("inputs") or {}
+        return {}
+
+    @classmethod
+    def _extract_texts(cls, prompt):
+        """沿 KSampler 的 positive/negative 连线取 CLIPTextEncode 的 text."""
+        inputs = cls._find_sampler(prompt)
+
+        def text_of(ref):
+            if not isinstance(ref, list) or len(ref) < 2:
+                return str(ref or "")
+            node = (prompt or {}).get(str(ref[0])) or {}
+            return str((node.get("inputs") or {}).get("text") or "")
+
+        return text_of(inputs.get("positive")), text_of(inputs.get("negative"))
+
+    @staticmethod
+    def _resolve_hashes(prompt):
+        """从 API prompt 抽 ckpt/lora 文件名,经本地索引 sidecar 查 SHA256.
+        返回 (model_hash, model_name, lora_pairs, missing_list)。"""
+        unknown = "(hash unknown)"
+        idx = local_index.scan()
+        by_name, by_rel = {}, {}
+        for m in idx["models"]:
+            by_name[m["name"].lower()] = m
+            by_rel[(m.get("rel") or "").lower()] = m
+
+        def sha_of(fname):
+            item = by_rel.get(str(fname).lower()) or by_name.get(os.path.basename(str(fname)).lower())
+            side = (item or {}).get("civitai") or {}
+            return side.get("sha256"), item, bool(side.get("sha256"))
+
+        model_hash, model_name, lora_pairs, missing = unknown, "", [], []
+        for node in (prompt or {}).values():
+            ct = str(node.get("class_type") or "")
+            inputs = node.get("inputs") or {}
+            if "CheckpointLoader" in ct and inputs.get("ckpt_name"):
+                name = str(inputs["ckpt_name"])
+                sha, item, ok = sha_of(name)
+                model_hash = sha if ok else unknown
+                model_name = ((item or {}).get("civitai") or {}).get("model_name") or os.path.basename(name)
+                if not ok:
+                    missing.append(f"{name}(无 SHA256:本地库未关联或非本插件下载)")
+            elif ct == "LoraLoader" and inputs.get("lora_name"):
+                name = str(inputs["lora_name"])
+                sha, item, ok = sha_of(name)
+                disp = ((item or {}).get("civitai") or {}).get("model_name") or os.path.basename(name)
+                lora_pairs.append((disp, sha if ok else unknown))
+                if not ok:
+                    missing.append(f"{name}(无 SHA256)")
+        return model_hash, model_name, lora_pairs, missing
+
+    def run(self, images, filename_prefix="civitai_studio/ComfyStudio", write_metadata="true",
+            positive=None, negative=None, prompt=None, extra_pnginfo=None):
+        import numpy as np
+        from PIL import Image
+        from PIL.PngImagePlugin import PngInfo
+
+        output_dir = folder_paths.get_output_directory()
+        full_output_folder, filename, counter, subfolder, _ = folder_paths.get_save_image_path(
+            filename_prefix, output_dir, images.shape[1], images.shape[0], images.shape[1] if images.ndim < 4 else 3)
+
+        pnginfo = None
+        if write_metadata == "true":
+            pos_api, neg_api = self._extract_texts(prompt)
+            pos = (positive or "").strip() or pos_api
+            neg = (negative or "").strip() or neg_api
+            model_hash, model_name, lora_pairs, missing = self._resolve_hashes(prompt)
+            inp = self._find_sampler(prompt)
+            bits = []
+            try:
+                bits.append(f"Steps: {int(inp.get('steps'))}")
+            except (TypeError, ValueError):
+                pass
+            if inp.get("sampler_name"):
+                bits.append(f"Sampler: {inp.get('sampler_name')}")
+            try:
+                bits.append(f"CFG scale: {float(inp.get('cfg'))}")
+            except (TypeError, ValueError):
+                pass
+            seed = inp.get("seed", inp.get("noise_seed"))
+            if seed is not None:
+                bits.append(f"Seed: {seed}")
+            bits.append(f"Model hash: {model_hash}")
+            if model_name:
+                bits.append(f"Model: {model_name}")
+            if lora_pairs:
+                bits.append("Lora hashes: " + ", ".join(f'"{n}: {h}"' for n, h in lora_pairs))
+            params = pos
+            if neg:
+                params = (params + "\n" if params else "") + "Negative prompt: " + neg
+            if bits:
+                params = (params + ", " if params else "") + ", ".join(bits)
+            if missing:
+                print("[Civitai-Studio] 保存警告(元数据 hash 缺失): " + "; ".join(missing))
+
+            pnginfo = PngInfo()
+            if params:
+                pnginfo.add_text("parameters", params)
+            if prompt is not None:
+                pnginfo.add_text("prompt", json.dumps(prompt))
+            if extra_pnginfo:
+                for k, v in extra_pnginfo.items():
+                    pnginfo.add_text(k, v if isinstance(v, str) else json.dumps(v))
+            if missing:
+                pnginfo.add_text("cs_hash_warnings", "; ".join(missing))
+
+        results = []
+        for i in range(images.shape[0]):
+            arr = (images[i].cpu().numpy() * 255.0).clip(0, 255).astype("uint8")
+            file = f"{filename}_{counter + i:05}_.png"
+            Image.fromarray(arr).save(os.path.join(full_output_folder, file), pnginfo=pnginfo, compress_level=4)
+            results.append({"filename": file, "subfolder": subfolder, "type": "output"})
+        return {"ui": {"images": results}, "result": ()}
+
+
 NODE_CLASS_MAPPINGS = {
     "CivitaiImageSearch": CivitaiImageSearch,
     "CivitaiLoraRecipe": CivitaiLoraRecipe,
     "CivitaiShowText": CivitaiShowText,
+    "CivitaiSaveImage": CivitaiSaveImage,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "CivitaiImageSearch": "Civitai 图片搜索 (Image Search)",
     "CivitaiLoraRecipe": "Civitai LoRA 配方 (LoRA Recipe)",
     "CivitaiShowText": "Civitai 显示文本 (Show Text)",
+    "CivitaiSaveImage": "Civitai 保存图片 (Save · meta+hash)",
 }

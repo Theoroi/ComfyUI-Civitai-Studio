@@ -59,6 +59,11 @@ def _save_locked(cfg):
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
     os.replace(tmp, _CONFIG_FILE)
+    try:
+        # key 明文落盘,收紧文件权限(POSIX 生效;Windows 仅去全局读,聊胜于无)
+        os.chmod(_CONFIG_FILE, 0o600)
+    except OSError:
+        pass
     _CACHE = cfg
 
 
