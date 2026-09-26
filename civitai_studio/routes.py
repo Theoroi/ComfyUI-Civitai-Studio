@@ -18,7 +18,7 @@ import folder_paths
 from aiohttp import web
 from yarl import URL
 
-from . import civitai_client, config, downloader, local_index
+from . import cache_store, civitai_client, config, downloader, local_index
 from .version import VERSION, build
 
 _enums_cache = {"data": None, "ts": 0.0}
@@ -93,8 +93,8 @@ async def _read_json_dict(request):
     return body if isinstance(body, dict) else None
 
 
-async def _scan_async(force=False):
-    return await local_index.run_bg(local_index.scan, force)
+async def _scan_async(force=False, deep=False):
+    return await local_index.run_bg(local_index.scan, force, deep)
 
 
 @_get("/civitai_studio/version")
@@ -346,6 +346,7 @@ async def get_config(request):
         "persist_description": cfg.get("persist_description", False),
         "tag_scrape": cfg.get("tag_scrape", True),
         "tag_and_mode": cfg.get("tag_and_mode", False),
+        "cache_max_mb": cfg.get("cache_max_mb", 500),
     })
 
 
@@ -360,7 +361,8 @@ async def set_config(request):
             partial[key] = str(body.get(key) or "").strip()
     if "api_key" in body:
         partial["api_key"] = str(body.get("api_key") or "").strip()
-    for key, (lo, hi) in (("nsfw", (0, 2)), ("max_concurrent", (1, 4))):
+    for key, (lo, hi) in (("nsfw", (0, 2)), ("max_concurrent", (1, 4)),
+                          ("cache_max_mb", (50, 2000))):
         if key in body:
             try:
                 value = int(body.get(key))
@@ -647,7 +649,33 @@ async def local_models(request):
         "models": slim,
         "truncated": index.get("truncated", False),
         "scanned_at": index["ts"],
+        "scan_stats": index.get("stats"),
     })
+
+
+@_post("/civitai_studio/local/deep_rescan")
+async def local_deep_rescan(request):
+    """清指纹表全量重扫:手动改过 sidecar 后的兜底入口(设置页按钮)."""
+    index = await _scan_async(True, True)
+    return web.json_response({"status": "ok", "scan_stats": index.get("stats")})
+
+
+@_get("/civitai_studio/cache_usage")
+async def cache_usage(request):
+    cfg = config.load()
+    return web.json_response({
+        "status": "ok",
+        "used_bytes": cache_store.usage(),
+        "max_mb": cfg.get("cache_max_mb", 500),
+    })
+
+
+@_post("/civitai_studio/cache_clear")
+async def cache_clear(request):
+    """清空缓存(kv 表 + 指纹表)后立即全量重建索引,避免空索引窗口."""
+    cache_store.clear_cache()
+    await _scan_async(True, True)
+    return web.json_response({"status": "ok", "used_bytes": cache_store.usage()})
 
 
 @_post("/civitai_studio/local/delete")

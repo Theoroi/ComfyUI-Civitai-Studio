@@ -23,7 +23,25 @@ DEFAULTS = {
     "persist_description": False,  # 说明/标签/封面落盘到 .civitai.json(默认关)
     "tag_scrape": True,     # 是否读取非公开 API 抓取图片分类标签
     "tag_and_mode": False,  # 实验选项:多标签筛选改漏斗式 AND(默认 OR,API 原生语义)
+    "cache_max_mb": 500,    # 磁盘缓存上限 MB(50~2000),见 docs/cache-design.md
 }
+
+
+def _normalize_locked(cfg):
+    """数值字段统一钳制(读盘与 update 合并后都走这里)."""
+    try:
+        cfg["nsfw"] = int(cfg.get("nsfw", 1))
+    except (TypeError, ValueError):
+        cfg["nsfw"] = 1
+    try:
+        cfg["max_concurrent"] = max(1, min(4, int(cfg.get("max_concurrent", 1))))
+    except (TypeError, ValueError):
+        cfg["max_concurrent"] = 1
+    try:
+        cfg["cache_max_mb"] = max(50, min(2000, int(cfg.get("cache_max_mb", 500))))
+    except (TypeError, ValueError):
+        cfg["cache_max_mb"] = 500
+    return cfg
 
 
 def _load_locked():
@@ -40,16 +58,8 @@ def _load_locked():
                     cfg[key] = stored[key]
     except (OSError, ValueError):
         pass
-    try:
-        cfg["nsfw"] = int(cfg.get("nsfw", 1))
-    except (TypeError, ValueError):
-        cfg["nsfw"] = 1
-    try:
-        cfg["max_concurrent"] = max(1, min(4, int(cfg.get("max_concurrent", 1))))
-    except (TypeError, ValueError):
-        cfg["max_concurrent"] = 1
-    _CACHE = cfg
-    return cfg
+    _CACHE = _normalize_locked(cfg)
+    return _CACHE
 
 
 def _save_locked(cfg):
@@ -82,5 +92,6 @@ def update(partial):
                 cfg[key] = value
                 changed = True
         if changed:
+            _normalize_locked(cfg)
             _save_locked(cfg)
         return cfg

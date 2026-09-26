@@ -89,7 +89,15 @@ def _active_same_task(version_id, file_index):
 
 
 def _state_path():
-    """队列持久化文件(用户目录):重启后任务列表可恢复,.part 断点本就在磁盘."""
+    """队列持久化文件(user 目录 cache/):重启后任务列表可恢复,.part 断点本就在磁盘."""
+    try:
+        return os.path.join(folder_paths.get_user_directory(), "civitai_studio", "cache", "download_jobs.json")
+    except Exception:
+        return None
+
+
+def _legacy_state_path():
+    """0.7.x 旧位置:只读兜底,设计约定旧文件保留不删."""
     try:
         return os.path.join(folder_paths.get_user_directory(), "civitai_studio", "download_jobs.json")
     except Exception:
@@ -121,6 +129,8 @@ def _persist():
 
 def _load_persisted():
     path = _state_path()
+    if not path or not os.path.exists(path):
+        path = _legacy_state_path()  # 升级首启:新位置还没有文件,读旧位置
     if not path or not os.path.exists(path):
         return
     try:
