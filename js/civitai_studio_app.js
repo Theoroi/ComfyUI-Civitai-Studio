@@ -132,6 +132,14 @@ const STR = {
         cacheCleared: "缓存已清空,索引已重建",
         deepScanDone: "重扫完成:共 {total} 项,复用 {reused},重读 {read},耗时 {dur}s",
         deepScanFailed: "深度重扫失败",
+        favTabTitle: "收藏夹", favKindAsset: "资产", favKindModel: "模型",
+        favGroupAll: "全部分组", favGroupNone: "未分组", favGroupLabel: "分组",
+        favSync: "同步 Civitai", favSyncing: "同步中…",
+        favSyncDone: "同步完成:资产 +{assets_down},模型 +{models_down},集合条目 +{groups_down},上推 {upsynced}(失败 {upsync_failed})",
+        favImport: "导入", favExport: "导出", favImported: "已导入 {items} 条 / {groups} 个分组",
+        favImportFailed: "导入失败", favEmpty: "还没有收藏 — 在画廊、节点缩略图或大图浮层里点 ★",
+        favAutoSync: "收藏自动同步(打开收藏夹时,冲突按最新修改时间覆盖;模型上推需 key 勾选 SocialWrite)",
+        favRemoveTitle: "取消收藏", favSearchPh: "在收藏里搜索…",
         pimgLabel: "预览图经服务端中转(直连打不开图片时开启)",
         hashLabel: "下载完成后校验 SHA256",
         pdescLabel: "说明落盘:把 Civitai 说明/标签/封面写进 .civitai.json(离线可看,默认关)",
@@ -253,6 +261,14 @@ const STR = {
         cacheCleared: "Cache cleared, index rebuilt",
         deepScanDone: "Rescan done: {total} items, {reused} reused, {read} re-read, {dur}s",
         deepScanFailed: "Deep rescan failed",
+        favTabTitle: "Favorites", favKindAsset: "Assets", favKindModel: "Models",
+        favGroupAll: "All groups", favGroupNone: "Ungrouped", favGroupLabel: "Group",
+        favSync: "Sync Civitai", favSyncing: "Syncing…",
+        favSyncDone: "Synced: assets +{assets_down}, models +{models_down}, collection items +{groups_down}, pushed {upsynced} (failed {upsync_failed})",
+        favImport: "Import", favExport: "Export", favImported: "Imported {items} items / {groups} groups",
+        favImportFailed: "Import failed", favEmpty: "No favorites yet — tap ★ in the gallery, node thumbnails or the image overlay",
+        favAutoSync: "Auto-sync favorites with Civitai (on Favorites tab open; conflicts resolved by newest timestamp; model push requires the SocialWrite key scope)",
+        favRemoveTitle: "Unfavorite", favSearchPh: "Search favorites…",
         pimgLabel: "Route preview images through the backend (enable if direct loading fails)",
         hashLabel: "Verify SHA256 after download",
         pdescLabel: "Persist description: write Civitai description/tags/cover into .civitai.json (offline viewing, default off)",
@@ -1385,6 +1401,7 @@ function openImageDetail(item, opts = {}) {
             <div data-res-list style="display:flex;flex-wrap:wrap;gap:4px;"></div>
         </div>
         <div class="cs-modal-actions">
+            <button class="cs-btn" data-fav-big title="${esc(t("favBtnTitle"))}">★ ${esc(t("favBtnTitle"))}</button>
             <button class="cs-btn" data-save-img>${esc(t("saveBtn"))}</button>
             <button class="cs-btn cs-btn-primary" data-use-as-output>${esc(t("useAsOutput"))}</button>
             ${hasMeta ? `<button class="cs-btn" data-apply-workflow>${esc(t("applyBtn"))}</button>` : ""}
@@ -1392,6 +1409,18 @@ function openImageDetail(item, opts = {}) {
         </div>`, null, !!opts._navFrom);
     // 本页入导航栈(来源信息页隐藏保活;✕/Esc/m.close() 整链关闭)
     const rec = navPush(m.overlay, m, opts._navFrom || null);
+    // 大图浮层收藏入口
+    const favBig = $("[data-fav-big]", m.box);
+    if (favBig && item.id != null) {
+        const oid = String(item.id);
+        const syncFav = (on) => { favBig.style.color = on ? "#ffd75e" : ""; };
+        syncFav(S.favs?.has(oid));
+        favBig.onclick = async () => {
+            try {
+                syncFav(await toggleFav("asset", oid, { name: item.username || "", cover: item.url }));
+            } catch (e) { toast("error", t("favFailed"), e.message); }
+        };
+    }
     const vmBtn = $("[data-view-model]", m.box);
     if (vmBtn) vmBtn.onclick = () => {
         const mid = item.modelId || opts.fromModelId;
@@ -1454,6 +1483,15 @@ function rememberImage(id) {
         localStorage.setItem(key, JSON.stringify(list.slice(0, 50)));
     } catch (e) { /* 隐私模式等场景忽略 */ }
     apiPost(`/civitai_studio/remember_image/${encodeURIComponent(String(id))}`).catch(() => {});
+}
+
+// 收藏切换(全入口统一走这里;本地 Set 同步维护,供画廊/节点★即时回显)
+async function toggleFav(kind, oid, fields) {
+    const r = await apiPost("/civitai_studio/favorites/toggle", { kind, oid: String(oid), ...(fields || {}) });
+    const setKey = kind === "model" ? "favModelIds" : "favs";
+    S[setKey] = S[setKey] || new Set();
+    if (r.fav) S[setKey].add(String(oid)); else S[setKey].delete(String(oid));
+    return !!r.fav;
 }
 
 // 把图片 ID 写进图像搜索节点的 image_id(优先显式指定,其次画布选中,最后第一个)
@@ -2568,6 +2606,7 @@ async function openSettings() {
             <label class="cs-check"><input id="cs-set-pdesc" type="checkbox" ${cfg.persist_description ? "checked" : ""}/> ${esc(t("pdescLabel"))}</label>
             <label class="cs-check"><input id="cs-set-tscrape" type="checkbox" ${cfg.tag_scrape !== false ? "checked" : ""}/> ${esc(t("tagScrapeLabel"))}</label>
             <label class="cs-check"><input id="cs-set-andmode" type="checkbox" ${cfg.tag_and_mode ? "checked" : ""}/> ${esc(t("tagAndLabel"))}</label>
+            <label class="cs-check"><input id="cs-set-autosync" type="checkbox" ${cfg.fav_autosync ? "checked" : ""}/> ${esc(t("favAutoSync"))}</label>
             <div class="cs-modal-msg">${esc(t("settingsMsg"))}</div>
             <div class="cs-modal-actions">
                 <button class="cs-btn" data-act="cancel">${esc(t("cancel"))}</button>
@@ -2628,6 +2667,7 @@ async function openSettings() {
             persist_description: $("#cs-set-pdesc", m.box).checked,
             tag_scrape: $("#cs-set-tscrape", m.box).checked,
             tag_and_mode: $("#cs-set-andmode", m.box).checked,
+            fav_autosync: $("#cs-set-autosync", m.box).checked,
         };
         const key = $("#cs-set-key", m.box).value.trim();
         if (key) body.api_key = key;
@@ -2666,6 +2706,7 @@ function switchTab(tab) {
     $$(".cs-view", S.ui.root).forEach((v) => v.classList.toggle("active", v.dataset.view === tab));
     if (tab === "local") loadLocal(false); // TTL 在后端,重复加载代价极小,保证不陈旧
     if (tab === "downloads") renderDownloads(true);
+    if (tab === "favorites") loadFavView();
     if (tab === "gallery") {
         const grid = $("#cs-gal-grid", S.ui.root);
         if (!S.gal.items.length) {
@@ -2905,6 +2946,180 @@ function buildDownloadsView(root) {
     };
 }
 
+// ---------- 收藏夹 tab(模型/资产两类 + 分组 + 同步/导入导出) ----------
+function refreshFavGroupSel(view) {
+    const sel = $("#cs-fav-group", view);
+    if (!sel) return;
+    const groups = S.favData?.groups || [];
+    sel.innerHTML = `<option value="all">${esc(t("favGroupAll"))}</option>`
+        + `<option value="_">${esc(t("favGroupNone"))}</option>`
+        + groups.map((g) => `<option value="${esc(g.gid)}">${esc(g.name)}</option>`).join("");
+    sel.value = S.favUi.group;
+    if (!Array.from(sel.options).some((o) => o.selected)) { sel.value = "all"; S.favUi.group = "all"; }
+}
+
+function renderFavGrid(view) {
+    const grid = $("#cs-fav-grid", view);
+    if (!grid) return;
+    grid.innerHTML = "";
+    const q = String($("#cs-fav-search", view)?.value || "").toLowerCase();
+    const items = (S.favData?.items || [])
+        .filter((it) => it.kind === S.favUi.kind)
+        .filter((it) => S.favUi.group === "all" || (S.favUi.group === "_" ? !it.group_id : it.group_id === S.favUi.group))
+        .filter((it) => !q || String(it.name || it.oid).toLowerCase().includes(q));
+    if (!items.length) {
+        grid.innerHTML = `<div class="cs-empty">${esc(t("favEmpty"))}</div>`;
+        return;
+    }
+    const groups = S.favData?.groups || [];
+    const h = 180;
+    for (const it of items) {
+        const cell = document.createElement("div");
+        cell.className = "cs-thumb";
+        cell.style.cssText = `width:135px;height:${h}px;position:relative;`;
+        const cover = it.cover;
+        if (cover && isVideoItem({ url: cover })) {
+            const v = document.createElement("video");
+            v.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;";
+            v.muted = true; v.loop = true; v.playsInline = true; v.preload = "metadata";
+            v.src = imgSrc(cover) + "#t=0.001";
+            cell.appendChild(v);
+        } else if (cover) {
+            const im = document.createElement("img");
+            im.loading = "lazy";
+            im.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;";
+            im.src = imgSrc(cdnThumb(cover));
+            im.onerror = () => { if (!im.dataset.retried) { im.dataset.retried = "1"; im.src = altSrc(cover); } else im.style.display = "none"; };
+            cell.appendChild(im);
+        }
+        // 名称条
+        const cap = document.createElement("div");
+        cap.style.cssText = "position:absolute;left:0;right:0;bottom:0;padding:2px 4px;font-size:10px;"
+            + "background:rgba(0,0,0,.55);color:#eee;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+        cap.textContent = it.name || it.oid;
+        cap.title = it.name || it.oid;
+        cell.appendChild(cap);
+        // ★取消收藏
+        const rm = document.createElement("button");
+        rm.className = "cs-save-btn";
+        rm.style.cssText = "right:auto;left:4px;color:#ffd75e;";
+        rm.title = t("favRemoveTitle");
+        rm.textContent = "★";
+        rm.onclick = async (ev) => {
+            ev.stopPropagation();
+            try {
+                await toggleFav(it.kind, it.oid);
+                S.favData.items = (S.favData.items || []).filter((x) => !(x.kind === it.kind && x.oid === it.oid));
+                renderFavGrid(view);
+            } catch (e) { toast("error", t("favFailed"), e.message); }
+        };
+        cell.appendChild(rm);
+        // 分组下拉
+        const gs = document.createElement("select");
+        gs.style.cssText = "position:absolute;right:2px;top:2px;width:78px;font-size:10px;padding:1px;"
+            + "background:rgba(20,20,24,.85);color:#eee;border:1px solid #555;border-radius:4px;";
+        gs.title = t("favGroupLabel");
+        gs.innerHTML = `<option value="">${esc(t("favGroupNone"))}</option>`
+            + groups.map((g) => `<option value="${esc(g.gid)}"${g.gid === it.group_id ? " selected" : ""}>${esc(g.name)}</option>`).join("");
+        gs.onclick = (ev) => ev.stopPropagation();
+        gs.onchange = async () => {
+            try {
+                await apiPost("/civitai_studio/favorites/assign", { kind: it.kind, oid: it.oid, group_id: gs.value || null });
+                it.group_id = gs.value || null;
+            } catch (e) { toast("error", t("favFailed"), e.message); }
+        };
+        cell.appendChild(gs);
+        cell.onclick = () => {
+            if (it.kind === "asset") openImageDetail({ id: it.oid, url: it.cover, meta: (it.extra || {}).meta, modelVersionIds: (it.extra || {}).modelVersionIds });
+        };
+        grid.appendChild(cell);
+    }
+}
+
+async function loadFavView() {
+    try {
+        const d = await apiGet("/civitai_studio/favorites");
+        S.favData = { items: d.items || [], groups: d.groups || [] };
+        S.favs = new Set(d.ids || []);
+        S.favModelIds = new Set(d.model_ids || []);
+        refreshFavGroupSel(S.ui.root);
+        renderFavGrid(S.ui.root);
+    } catch (e) { toast("error", t("loadFailed"), e.message); return; }
+    // 自动同步:开夹时静默触发,30 分钟节流
+    if (S.cfg?.fav_autosync && Date.now() - (S.favLastSync || 0) > 30 * 60 * 1000) favDoSync(true);
+}
+
+async function favDoSync(silent) {
+    const btn = $("#cs-fav-sync", S.ui.root);
+    if (btn) { btn.disabled = true; btn.textContent = t("favSyncing"); }
+    try {
+        const r = await apiPost("/civitai_studio/favorites/sync");
+        S.favLastSync = Date.now();
+        if (r.status === "busy") toast("warn", S.lang === "zh" ? "同步已在进行中" : "Sync already running", "");
+        else if (r.scope_hint) toast("warn", r.scope_hint, "");
+        else if (!silent) toast("success", t("favSyncDone", r) + (r.truncated ? (S.lang === "zh" ? "(收藏较多,本次仅同步前 1000 条)" : " (first 1000 items only)") : ""), "");
+        else if (r.upsync_failed) toast("warn", t("favFailed"), String(r.errors?.[0] || ""));
+        await loadFavDataOnly();
+    } catch (e) {
+        if (!silent) toast("error", t("favFailed"), e.message);
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = t("favSync"); }
+    }
+}
+
+async function loadFavDataOnly() {
+    const d = await apiGet("/civitai_studio/favorites");
+    S.favData = { items: d.items || [], groups: d.groups || [] };
+    S.favs = new Set(d.ids || []);
+    S.favModelIds = new Set(d.model_ids || []);
+    refreshFavGroupSel(S.ui.root);
+    renderFavGrid(S.ui.root);
+}
+
+function buildFavoritesView(root) {
+    const view = document.createElement("div");
+    view.className = "cs-view";
+    view.dataset.view = "favorites";
+    S.favUi = S.favUi || { kind: "asset", group: "all" };
+    view.innerHTML = `
+        <div class="cs-filters">
+            <select id="cs-fav-kind">
+                <option value="asset">${esc(t("favKindAsset"))}</option>
+                <option value="model">${esc(t("favKindModel"))}</option>
+            </select>
+            <select id="cs-fav-group"></select>
+            <input id="cs-fav-search" type="text" placeholder="${esc(t("favSearchPh"))}" style="flex:1;min-width:90px"/>
+            <button class="cs-btn" id="cs-fav-sync">${esc(t("favSync"))}</button>
+            <button class="cs-btn" id="cs-fav-import">${esc(t("favImport"))}</button>
+            <button class="cs-btn" id="cs-fav-export">${esc(t("favExport"))}</button>
+            <input type="file" id="cs-fav-file" accept=".json,application/json" style="display:none"/>
+        </div>
+        <div class="cs-scroll"><div id="cs-fav-grid" class="cs-gal-grid"></div></div>`;
+    root.appendChild(view);
+    $("#cs-fav-kind", view).onchange = (e) => { S.favUi.kind = e.target.value; refreshFavGroupSel(view); renderFavGrid(view); };
+    $("#cs-fav-group", view).onchange = (e) => { S.favUi.group = e.target.value; renderFavGrid(view); };
+    let debSearch;
+    $("#cs-fav-search", view).addEventListener("input", (e) => {
+        e.stopPropagation();
+        clearTimeout(debSearch);
+        debSearch = setTimeout(() => renderFavGrid(view), 250);
+    });
+    $("#cs-fav-sync", view).onclick = () => favDoSync(false);
+    $("#cs-fav-import", view).onclick = () => $("#cs-fav-file", view).click();
+    $("#cs-fav-file", view).onchange = async (e) => {
+        const f = e.target.files?.[0];
+        e.target.value = "";
+        if (!f) return;
+        try {
+            const r = await apiPost("/civitai_studio/favorites/import", { payload: JSON.parse(await f.text()) });
+            toast("success", t("favImported", { items: r.imported?.items ?? 0, groups: r.imported?.groups ?? 0 }), "");
+            loadFavView();
+        } catch (err) { toast("error", t("favImportFailed"), err.message); }
+    };
+    $("#cs-fav-export", view).onclick = () => window.open("/civitai_studio/favorites/export", "_blank");
+    loadFavView();
+}
+
 function buildRoot(el) {
     destroyComboPickers(el); // 侧栏重建:旧的补全弹层与 scroll 监听一并清理(节点侧不受影响)
     el.innerHTML = "";
@@ -2917,6 +3132,7 @@ function buildRoot(el) {
             <button class="cs-tab-btn" data-tab="local">${esc(t("tabLocal"))}</button>
             <button class="cs-tab-btn" data-tab="downloads">${esc(t("tabDownloads"))} <span id="cs-dl-badge" class="cs-dl-badge" style="display:none"></span></button>
             <button class="cs-tab-btn" data-tab="gallery">${esc(t("galleryTab"))}</button>
+            <button class="cs-tab-btn" data-tab="favorites" title="${esc(t("favTabTitle"))}">★</button>
             <span class="cs-topbar-spacer"></span>
             <button class="cs-tab-btn" id="cs-settings-btn" title="${esc(t("settings"))}">⚙</button>
         </div>
@@ -2927,6 +3143,7 @@ function buildRoot(el) {
     buildLocalView($(".cs-body", root));
     buildDownloadsView($(".cs-body", root));
     buildGalleryView($(".cs-body", root));
+    buildFavoritesView($(".cs-body", root));
     $$(".cs-tab-btn[data-tab]", root).forEach((b) => { b.onclick = () => switchTab(b.dataset.tab); });
     $("#cs-settings-btn", root).onclick = openSettings;
     switchTab("browse");
@@ -3536,6 +3753,21 @@ function renderNodeThumbs(node) {
         }
         if (idw?.value && String(idw.value) === String(c.it.id)) cell.style.borderColor = "#4a90e2";
         appendMissingMarks(cell, c.it);
+        // 左上角★收藏快捷键(与画廊同款交互)
+        const oid = String(c.it.id ?? "");
+        const favBtn = document.createElement("button");
+        favBtn.className = "cs-save-btn";
+        favBtn.style.cssText = "right:auto;left:4px;" + (S.favs?.has(oid) ? "color:#ffd75e;" : "");
+        favBtn.title = t("favBtnTitle");
+        favBtn.textContent = "★";
+        favBtn.onclick = async (ev) => {
+            ev.stopPropagation();
+            try {
+                const on = await toggleFav("asset", oid, { name: c.it.username || "", cover: c.it.url });
+                favBtn.style.color = on ? "#ffd75e" : "";
+            } catch (e) { toast("error", t("favFailed"), e.message); }
+        };
+        cell.appendChild(favBtn);
         cell.onclick = () => showNodeImageFloat(node, c.it);
         strip.appendChild(cell);
     }

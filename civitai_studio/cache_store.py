@@ -44,6 +44,28 @@ CREATE TABLE IF NOT EXISTS local_files (
     sidecar TEXT,
     cached_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS fav_items (
+    kind TEXT NOT NULL,            -- 'model' | 'asset'
+    oid TEXT NOT NULL,             -- model: Civitai model_id;asset: image_id
+    group_id TEXT,
+    name TEXT,
+    cover TEXT,
+    added_at REAL,
+    updated_at REAL,               -- 冲突判定基准(本地/远端取更近的写入时刻)
+    src TEXT DEFAULT 'local',      -- local | remote
+    dirty INTEGER DEFAULT 0,       -- 1=本地改动待上推(含墓碑)
+    deleted INTEGER DEFAULT 0,     -- 墓碑:本地取消且远端仍有,同步时据此下推/跳过
+    extra TEXT,                    -- JSON: version_id/base_model/url 等
+    PRIMARY KEY(kind, oid)
+);
+CREATE INDEX IF NOT EXISTS idx_fav_items_group ON fav_items(group_id);
+CREATE TABLE IF NOT EXISTS fav_groups (
+    gid TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    civitai_id INTEGER,            -- 对齐 Civitai collection id(无则 NULL)
+    dirty INTEGER DEFAULT 0,
+    updated_at REAL
+);
 """
 
 
