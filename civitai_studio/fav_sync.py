@@ -12,6 +12,7 @@
 同步是"尽力而为"的合并:任何单通道失败不阻塞其它通道;结果逐项计数返回给设置页展示。
 """
 
+import asyncio
 import os
 import time
 from datetime import datetime, timezone
@@ -193,11 +194,13 @@ async def _upsync_groups(result):
             await civitai_client.trpc_mutation("collection.saveItem", js)
             fs.mark_group_pushed(it["kind"], it["oid"], gid)
             result["items_up"] += 1
+            await asyncio.sleep(0.5)  # 限速:存量首推为逐条 POST,防撞 429
         except civitai_client.TrpcScopeError as e:
             result["scope_hint"] = str(e)
             return
-        except Exception:
-            continue  # 单条失败(404 已删等)不拖垮剩余推送
+        except Exception as e:
+            result["items_up_failed"] = result.get("items_up_failed", 0) + 1
+            result["errors"].append("条目上行: " + str(e)[:120])
 
 
 async def sync_now():

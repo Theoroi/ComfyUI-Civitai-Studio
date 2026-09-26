@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS fav_items (
     dirty INTEGER DEFAULT 0,       -- 1=本地改动待上推(含墓碑)
     deleted INTEGER DEFAULT 0,     -- 墓碑:本地取消且远端仍有,同步时据此下推/跳过
     extra TEXT,                    -- JSON: version_id/base_model/url 等
+    gpushed TEXT,                  -- JSON 数组:已推入的远端集合 gid(分组上行防重推)
     PRIMARY KEY(kind, oid)
 );
 CREATE INDEX IF NOT EXISTS idx_fav_items_group ON fav_items(group_id);

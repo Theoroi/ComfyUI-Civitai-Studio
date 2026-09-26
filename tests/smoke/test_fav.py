@@ -159,3 +159,18 @@ assert g4b["civitai_id"] == 424242 and g4b["dirty"] == 0
 fs.upsert_group("重名集合", civitai_id=424242)
 assert len([g for g in fs.groups_list() if g["civitai_id"] == 424242]) == 1
 print("分组上行数据面 OK")
+
+# ===== 自愈重建后收藏功能不瘫痪(gpushed 进 _SCHEMA;审计 P1-1 回归) =====
+cache_store._CONN.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+cache_store._CONN.close()
+for s in ("", "-wal", "-shm"):
+    try:
+        os.remove(cache_store.db_path() + s)
+    except OSError:
+        pass
+cache_store._CONN = None
+cache_store._gpushed_checked = False
+cache_store.init()
+assert fs.toggle(fs.KIND_ASSET, "9999", {"name": "post-heal"}) is True, "重建库缺 gpushed 列"
+assert fs.is_active(fs.KIND_ASSET, "9999")
+print("自愈后 gpushed 列 OK")

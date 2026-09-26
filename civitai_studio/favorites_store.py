@@ -289,10 +289,21 @@ def upsert_group(name, gid=None, civitai_id=None, dirty=0, updated_at=None):
             if not gid:
                 gid = "g_" + str(int(now * 1000))
             else:
-                # 按 gid 改名时保留既有联动字段(防抹掉 civitai_id 致下次同步分叉)
-                r = conn.execute("SELECT civitai_id FROM fav_groups WHERE gid=?", (gid,)).fetchone()
+                # 保留既有联动字段:按 gid 改名不抹 civitai_id(防下次同步分叉)
+                r = conn.execute("SELECT civitai_id, dirty, name FROM fav_groups WHERE gid=?", (gid,)).fetchone()
                 if r and civitai_id is None:
                     civitai_id = r[0]
+                if r and r[1] == 1:
+                    # 本地未同步的改名不被下行远端名覆盖(items 侧"dirty 让位"同款):
+                    # 只补绑 civitai_id,名字留给上行推
+                    new_cid = int(civitai_id) if civitai_id else r[0]
+                    conn.execute(
+                        "UPDATE fav_groups SET civitai_id=?, updated_at=? WHERE gid=?",
+                        (new_cid, updated_at or now, gid),
+                    )
+                    conn.commit()
+                    return {"gid": gid, "name": r[2], "civitai_id": new_cid,
+                            "dirty": 1, "updated_at": updated_at or now}
             conn.execute(
                 "INSERT OR REPLACE INTO fav_groups(gid, name, civitai_id, dirty, updated_at)"
                 " VALUES(?,?,?,?,?)",
@@ -342,14 +353,15 @@ def mark_group_synced(gid, civitai_id):
 
 
 def mark_group_pushed(kind, oid, gid):
-    """条目成功推入远端集合:记入 gpushed 防重推(UPDATE 不动其余字段)."""
+    """条目成功推入远端集合:记入 gpushed 防重推.推送 await 期间条目被改组/取消
+    (group_id 变化/墓碑)则不记——该推送已不反映当前归属,留下轮按新状态重推."""
     conn = _conn()
     if conn is None:
         return
     with _LOCK:
         try:
             it = get_item(kind, oid)
-            if not it:
+            if not it or it["deleted"] or it["group_id"] != gid:
                 return
             pushed = it.get("gpushed") or []
             if gid in pushed:

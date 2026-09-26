@@ -2185,7 +2185,11 @@ function idb() {
                 if (!db.objectStoreNames.contains("kv")) db.createObjectStore("kv");
                 if (!db.objectStoreNames.contains("thumbs")) db.createObjectStore("thumbs");
             };
-            rq.onsuccess = () => res(rq.result);
+            rq.onsuccess = () => {
+                const db = rq.result;
+                db.onversionchange = () => { try { db.close(); } catch {} }; // 让位未来版本升级
+                res(db);
+            };
             rq.onerror = () => res(null); // 无 IDB(隐私模式等):降级为无快照/无 blob 缓存
             rq.onblocked = () => res(null);
         } catch { res(null); }
@@ -2213,18 +2217,28 @@ async function idbSet(store, key, val) {
 
 // 缩略图 blob 缓存:命中免 CDN;objectURL 按 url 复用防会话内泄漏;容量上限按键序近似裁剪
 const THUMB_CAP = 800;
-const _thumbObjUrls = new Map();
+const THUMB_BLOB_TTL = 7 * 86400 * 1000; // 站方可能替换原图:blob 一周后重拉
+const _thumbObjUrls = new Map();          // url -> objectURL(会话级复用)
+const _thumbPending = new Map();          // url -> Promise(并发同 url 去重)
 let _thumbPuts = 0;
 async function attachThumbBlob(imgEl, url) {
     if (!url) return;
     const cached = _thumbObjUrls.get(url);
-    if (cached) { imgEl.src = cached; return; }
-    try {
-        let blob = (await idbGet("thumbs", url))?.blob;
+    if (cached) { imgEl.src = cached; imgEl.style.display = ""; return; }
+    let inflight = _thumbPending.get(url);
+    if (inflight) { await inflight.catch(() => {}); if (_thumbObjUrls.has(url)) { imgEl.src = _thumbObjUrls.get(url); imgEl.style.display = ""; } return; }
+    inflight = (async () => {
+        let blob = null;
+        try {
+            const rec = await idbGet("thumbs", url);
+            if (rec?.blob && Date.now() - (rec.ts || 0) < THUMB_BLOB_TTL) blob = rec.blob;
+        } catch {}
         if (!blob) {
-            const resp = await fetch(url);
-            if (!resp.ok) return; // 拉取失败:保持原 src(HTTP 缓存兜底)
-            blob = await resp.blob();
+            try {
+                const resp = await fetch(url);
+                if (!resp.ok) return; // 拉取失败:保持原 src(HTTP 缓存兜底)
+                blob = await resp.blob();
+            } catch { return; }
             idbSet("thumbs", url, { blob, ts: Date.now() }).then(() => {
                 if (++_thumbPuts % 25 === 0) idbTrimThumbs(THUMB_CAP);
             }).catch(() => {});
@@ -2232,7 +2246,17 @@ async function attachThumbBlob(imgEl, url) {
         const obj = URL.createObjectURL(blob);
         _thumbObjUrls.set(url, obj);
         imgEl.src = obj;
-    } catch { /* 保持原 src */ }
+        imgEl.style.display = ""; // 原 CDN src 失败时 onerror 会隐藏,换 blob 成功要复位
+        if (_thumbObjUrls.size > 600) { // 会话内存上限:最旧先 revoke
+            for (const [k, v] of _thumbObjUrls) {
+                if (_thumbObjUrls.size <= 500) break;
+                try { URL.revokeObjectURL(v); } catch {}
+                _thumbObjUrls.delete(k);
+            }
+        }
+    })();
+    _thumbPending.set(url, inflight);
+    try { await inflight; } finally { _thumbPending.delete(url); }
 }
 async function idbTrimThumbs(cap) {
     // 淘汰顺序为键序近似(非严格 LRU),只控容量;被裁掉的缩略图会按需重新缓存
