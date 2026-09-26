@@ -517,6 +517,196 @@ async def image_proxy(request):
         return _json_error(f"图片中转失败: {civitai_client.net_error_message(e)}", 502)
 
 
+# ---------- 导入为资产 / 提取工作流 ----------
+
+_ASSET_MAX_BYTES = 100 * 1024 * 1024
+_EXTRACT_DIR = "workflows/civitai_studio"
+_EXTRACT_WARN_COUNT = 300  # 子目录内提取文件数告警阈值(防泛滥软上限)
+
+
+async def _download_asset_bytes(url):
+    """异步下载原始文件(白名单域,重定向逐跳校验,≤100MB)."""
+    timeout = aiohttp.ClientTimeout(total=180, connect=15)
+    current = url
+    for _hop in range(5):
+        async with await civitai_client.open_stream(current, timeout=timeout, allow_redirects=True) as resp:
+            if resp.status in (301, 302, 303, 307, 308) and resp.headers.get("Location"):
+                current = str(URL(resp.headers["Location"]).join(URL(current)))
+                if not civitai_client.host_allowed_image(current):
+                    return None, "重定向到不允许的地址"
+                continue
+            if resp.status != 200:
+                return None, f"下载失败: HTTP {resp.status}"
+            body = await resp.content.read(_ASSET_MAX_BYTES + 1)
+            if len(body) > _ASSET_MAX_BYTES:
+                return None, "文件超过 100MB 上限"
+            return body, None
+    return None, "重定向次数过多"
+
+
+def _url_ext(url):
+    path = urllib.parse.urlparse(url).path
+    ext = os.path.splitext(path)[1].lower()
+    return ext if ext in (".png", ".jpg", ".jpeg", ".webp", ".gif", ".mp4", ".mov", ".webm") else ".png"
+
+
+def _asset_target(image_id, ext, data):
+    """civitai_<id> 命名 + hash 去重:同名同 hash 跳过;不同 hash → civitai_<id>_x 递增."""
+    import hashlib
+    h = hashlib.sha256(data).hexdigest()
+    base = folder_paths.get_input_directory()
+    d = os.path.join(base, "civitai_import")
+    os.makedirs(d, exist_ok=True)
+    name = f"civitai_{image_id}{ext}"
+    i = 0
+    while True:
+        p = os.path.join(d, name)
+        if not os.path.exists(p):
+            return p, name, h, False
+        try:
+            with open(p, "rb") as f:
+                import hashlib as _h2
+                if _h2.sha256(f.read()).hexdigest() == h:
+                    return p, name, h, True  # 同名同内容:幂等
+        except OSError:
+            pass
+        i += 1
+        name = f"civitai_{image_id}_{i}{ext}"
+        if i > 99:
+            raise ValueError("同名冲突过多,请清理 input/civitai_import")
+
+
+@_post("/civitai_studio/import_asset")
+async def import_asset(request):
+    """【导入为资产】:下载原始图片到 input/civitai_import/,命名 civitai_<id>(hash 去重).
+
+    文件内嵌的工作流随文件可用(拖入 ComfyUI/LoadImage 皆可)."""
+    body = await _read_json_dict(request)
+    if body is None:
+        return _json_error("请求体必须是 JSON 对象", 400)
+    url = str(body.get("url") or "")
+    image_id = str(body.get("image_id") or "").strip()
+    if not image_id.isdigit():
+        return _json_error("缺少有效的图片 ID", 400)
+    if not url.startswith(("http://", "https://")) or not civitai_client.host_allowed_image(url):
+        return _json_error("不允许的图片地址", 400)
+    data, err = await _download_asset_bytes(url)
+    if err:
+        return _json_error(err, 502)
+    try:
+        target, name, h, existed = await local_index.run_bg(_asset_target, image_id, _url_ext(url), data)
+        if not existed:
+            await local_index.run_bg(_write_file, target, data)
+    except ValueError as e:
+        return _json_error(str(e), 400)
+    except OSError as e:
+        return _json_error(f"写入失败: {e}", 500)
+    return _ok(name=name, existed=existed, hash=h,
+               dir=os.path.relpath(os.path.dirname(target), folder_paths.get_base_directory()))
+
+
+def _write_file(path, data):
+    """同步实现 — 经 run_bg(executor) 调用;async 版协程在 executor 里永远不会被 await."""
+    tmp = "%s.%d.tmp" % (path, os.getpid())
+    with open(tmp, "wb") as f:
+        f.write(data)
+    os.replace(tmp, path)
+
+
+def _extract_filepath(request, image_id):
+    """per-user 工作流目录:workflows/civitai_studio/extract_<id>.json."""
+    um = getattr(PromptServer.instance, "user_manager", None)
+    if um is None:
+        return None
+    try:
+        return um.get_request_user_filepath(
+            request, f"{_EXTRACT_DIR}/extract_{image_id}.json", create_dir=True)
+    except Exception:
+        return None
+
+
+@_post("/civitai_studio/extract_workflow")
+async def extract_workflow(request):
+    """【提取工作流】:下载原始文件,解析内嵌 workflow,存 per-user 工作流子目录.
+
+    防泛滥:① 提取放 workflows/civitai_studio/ 子目录(模板浏览器非递归 glob,
+    实测不会涌入模板列表);② extract_<id> 固定命名幂等覆盖,重复提取不膨胀;
+    ③ 提供列表/删除管理端点;④ 超 300 个提示清理。"""
+    body = await _read_json_dict(request)
+    if body is None:
+        return _json_error("请求体必须是 JSON 对象", 400)
+    url = str(body.get("url") or "")
+    image_id = str(body.get("image_id") or "").strip()
+    if not image_id.isdigit():
+        return _json_error("缺少有效的图片 ID", 400)
+    if not url.startswith(("http://", "https://")) or not civitai_client.host_allowed_image(url):
+        return _json_error("不允许的图片地址", 400)
+    data, err = await _download_asset_bytes(url)
+    if err:
+        return _json_error(err, 502)
+    meta = await local_index.run_bg(media_meta.extract_from_bytes, data, _url_ext(url))
+    wf = (meta or {}).get("workflow")
+    if isinstance(wf, str):
+        try:
+            wf = json.loads(wf)
+        except ValueError:
+            wf = None
+    if not isinstance(wf, dict) or not wf:
+        return _json_error("该文件未内嵌 ComfyUI 工作流(站方脱敏且原文件无内嵌数据)", 404)
+    target = _extract_filepath(request, image_id)
+    if not target:
+        return _json_error("无法定位用户工作流目录(user_manager 不可用)", 500)
+    payload = json.dumps(wf, ensure_ascii=False)
+    try:
+        await local_index.run_bg(_write_file, target, payload.encode("utf-8"))
+    except OSError as e:
+        return _json_error(f"写入失败: {e}", 500)
+    d = os.path.dirname(target)
+    try:
+        count = len([f for f in os.listdir(d) if f.endswith(".json")])
+    except OSError:
+        count = 0
+    return _ok(name=os.path.basename(target), count=count,
+               warn=("提取文件已达 {n} 个,建议清理".format(n=count) if count > _EXTRACT_WARN_COUNT else ""))
+
+
+@_get("/civitai_studio/workflow_extracts")
+async def workflow_extracts(request):
+    target = _extract_filepath(request, "list")  # 仅解析 per-user 目录
+    d = os.path.dirname(target) if target else None
+    out = []
+    if d and os.path.isdir(d):
+        for f in os.listdir(d):
+            if not f.endswith(".json"):
+                continue
+            p = os.path.join(d, f)
+            try:
+                st = os.stat(p)
+            except OSError:
+                continue
+            out.append({"name": f, "size": st.st_size, "mtime": st.st_mtime})
+    out.sort(key=lambda x: -x["mtime"])
+    return _ok(items=out)
+
+
+@_post("/civitai_studio/workflow_extracts/delete")
+async def workflow_extracts_delete(request):
+    body = await _read_json_dict(request)
+    if body is None:
+        return _json_error("请求体必须是 JSON 对象", 400)
+    name = os.path.basename(str(body.get("name") or ""))
+    if not re.fullmatch(r"extract_\d+\.json", name):
+        return _json_error("仅允许删除 extract_<id>.json", 400)
+    target = _extract_filepath(request, name[len("extract_"):-len(".json")])
+    if not target or not os.path.isfile(target):
+        return _json_error("文件不存在", 404)
+    try:
+        os.remove(target)
+    except OSError as e:
+        return _json_error(f"删除失败: {e}", 500)
+    return _ok()
+
+
 # ---------- 下载 ----------
 
 @_get("/civitai_studio/enums")
