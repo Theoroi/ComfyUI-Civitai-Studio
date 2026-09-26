@@ -1087,8 +1087,8 @@ async function renderVersion(version, model, box, opts = {}) {
             <div class="cs-files">${(version.files || []).map((f, i) => `
                 <div class="cs-file">
                     <div class="cs-file-info">
-                        <div class="cs-file-name" title="${esc(f.name)}">${esc(f.name)}</div>
-                        <div class="cs-file-meta">${fmtSize((f.sizeKB || 0) * 1024)}${f.primary ? " · " + esc(t("primaryFile")) : ""}</div>
+                        <div class="cs-file-name" title="${esc(f.name)}">${esc(fileDisplayName(f))}</div>
+                        <div class="cs-file-meta">${esc([fileMetaBits(f), fmtSize((f.sizeKB || 0) * 1024)].filter(Boolean).join(" · "))}</div>
                     </div>
                     <button class="cs-btn cs-btn-primary" data-file-idx="${i}">${esc(t("download"))}</button>
                 </div>`).join("") || `<div class="cs-empty">${esc(t("noFiles"))}</div>`}
@@ -1556,8 +1556,10 @@ async function openDownloadDialog({ model, version, fileIndex = null, defaultRoo
         <div class="cs-form">
             ${files.length > 1 ? `
             <label>${esc(t("fileLabel"))}
-                <select id="cs-dl-file">${files.map((f, i) =>
-                    `<option value="${i}" ${i === selIdx ? "selected" : ""}>${esc(f.name)} (${fmtSize((f.sizeKB || 0) * 1024)})</option>`).join("")}
+                <select id="cs-dl-file">${files.map((f, i) => {
+                    const bits = fileMetaBits(f);
+                    return `<option value="${i}" ${i === selIdx ? "selected" : ""}>${esc(fileDisplayName(f))}${bits ? " · " + esc(bits) : ""} (${fmtSize((f.sizeKB || 0) * 1024)})</option>`;
+                }).join("")}
                 </select>
             </label>` : ""}
             ${typeKeys.length > 1 ? `
@@ -1574,7 +1576,7 @@ async function openDownloadDialog({ model, version, fileIndex = null, defaultRoo
                 <input id="cs-dl-sub" type="text" placeholder="${esc(t("subfolderPh"))}" value="${esc(defaultSub)}"/>
             </label>
             <label>${esc(t("saveName"))}
-                <input id="cs-dl-name" type="text" value="${esc(files[selIdx]?.name || (version.name + ".safetensors"))}"/>
+                <input id="cs-dl-name" type="text" value="${esc(fileDisplayName(files[selIdx]) || (version.name + ".safetensors"))}"/>
             </label>
             <div class="cs-modal-msg cs-dl-hint">${esc(t("dlHint", { hash: S.cfg.verify_hash ? t("dlHintHash") : "" }))}</div>
             <div class="cs-modal-actions">
@@ -1588,7 +1590,7 @@ async function openDownloadDialog({ model, version, fileIndex = null, defaultRoo
     if (fileSel) {
         fileSel.onchange = () => {
             const f = files[parseInt(fileSel.value, 10)];
-            if (f) $("#cs-dl-name", m.box).value = f.name;
+            if (f) $("#cs-dl-name", m.box).value = fileDisplayName(f);
         };
     }
     // 切类型/范围 → 重建目标目录;原目录仍在清单中则保持选中(初始以 preRoot 为准)
@@ -2899,6 +2901,27 @@ function unwrapMeta(rawMeta) {
 function cdnThumb(url, w = 256) {
     if (!url) return "";
     return url.replace("/original=true/", `/width=${w}/`);
+}
+
+// 站方部分文件名尾部是"_文件ID"(量化信息只在 metadata.fp,如 Qwen 2.1 官方包)。
+// 显示/默认保存名用 fp 还原该段:qwenImage21_v21_txt_3239854.safetensors → …_bf16.safetensors
+function fileDisplayName(f) {
+    let name = String(f?.name || "");
+    const fp = f?.metadata?.fp || f?.fp || "";
+    const m = name.match(/^(.*?)[_\- ](\d{5,})(\.[^.]+)$/);
+    if (fp && m) name = `${m[1]}_${fp}${m[3]}`;
+    return name;
+}
+
+// 文件 metadata 摘要(除 format 外):类型 · 精度 · 裁剪 · 主文件
+function fileMetaBits(f) {
+    const md = f?.metadata || {};
+    const bits = [];
+    if (f?.type) bits.push(String(f.type));
+    if (md.fp || f?.fp) bits.push(String(md.fp || f.fp));
+    if (md.size || f?.size) bits.push(String(md.size || f.size));
+    if (f?.primary) bits.push(S.lang === "zh" ? "主文件" : "primary");
+    return bits.join(" · ");
 }
 
 // 缺失生成参数的三色感叹号(prompt红/lora黄/model绿),纵列在缩略图右上角;节点条与画廊共用。
