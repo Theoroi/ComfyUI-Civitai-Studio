@@ -2,6 +2,11 @@
 
 格式参照 Keep a Changelog;项目版本号见 `pyproject.toml` 与 `civitai_studio/version.py`。
 
+## [Unreleased]
+
+### 变更
+- 「Civitai 保存图片」节点显示名改为「Export with A1111 geninfo」,并补充搜索别名(类名 `CivitaiSaveImage` 不变,已摆放的节点不受影响)
+
 ## [0.7.0] - 2026-09-26
 
 ### 新增

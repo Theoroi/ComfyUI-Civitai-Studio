@@ -299,6 +299,7 @@ class CivitaiSaveImage:
     FUNCTION = "run"
     CATEGORY = "Civitai Studio"
     OUTPUT_NODE = True
+    SEARCH_ALIASES = ["export", "geninfo", "save image", "保存", "导出"]
 
     # ---- 工作流解析(尽力而为,失败留空不抛错) ----
     @staticmethod
@@ -442,5 +443,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "CivitaiImageSearch": "Civitai 图片搜索 (Image Search)",
     "CivitaiLoraRecipe": "Civitai LoRA 配方 (LoRA Recipe)",
     "CivitaiShowText": "Civitai 显示文本 (Show Text)",
-    "CivitaiSaveImage": "Civitai 保存图片 (Save · meta+hash)",
+    "CivitaiSaveImage": "Export with A1111 geninfo",
 }
