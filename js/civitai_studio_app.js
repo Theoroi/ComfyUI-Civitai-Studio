@@ -141,7 +141,8 @@ const STR = {
         favAutoSync: "收藏自动同步(打开收藏夹时,冲突按最新修改时间覆盖;模型上推需 key 勾选 SocialWrite)",
         favRemoveTitle: "取消收藏", favSearchPh: "在收藏里搜索…",
         importAsset: "导入为资产", importAssetDone: "已导入 input/civitai_import/{name}", importAssetExists: "已存在,跳过重复导入: {name}",
-        extractWf: "提取工作流", extractDone: "已存为工作流模板: {name}", extractNone: "该文件未内嵌 ComfyUI 工作流",
+        importFailed: "导入失败",
+        extractWf: "提取工作流", extractDone: "已存为工作流模板: {name}", extractNone: "该文件未内嵌 ComfyUI 工作流", extractFail: "提取失败",
         extractMgr: "提取管理", extractMgrTitle: "提取的工作流(civitai_studio/)", extractEmpty: "还没有提取过工作流",
         extractDelete: "删除", extractDeleted: "已删除", extractCapWarn: "提取文件已达 {n} 个,建议清理",
         pimgLabel: "预览图经服务端中转(直连打不开图片时开启)",
@@ -274,7 +275,8 @@ const STR = {
         favAutoSync: "Auto-sync favorites with Civitai (on Favorites tab open; conflicts resolved by newest timestamp; model push requires the SocialWrite key scope)",
         favRemoveTitle: "Unfavorite", favSearchPh: "Search favorites…",
         importAsset: "Import as asset", importAssetDone: "Imported to input/civitai_import/{name}", importAssetExists: "Already imported, skipped: {name}",
-        extractWf: "Extract workflow", extractDone: "Saved as workflow: {name}", extractNone: "No embedded ComfyUI workflow in this file",
+        importFailed: "Import failed",
+        extractWf: "Extract workflow", extractDone: "Saved as workflow: {name}", extractNone: "No embedded ComfyUI workflow in this file", extractFail: "Extract failed",
         extractMgr: "Extracts", extractMgrTitle: "Extracted workflows (civitai_studio/)", extractEmpty: "No extracted workflows yet",
         extractDelete: "Delete", extractDeleted: "Deleted", extractCapWarn: "{n} extracts — consider cleaning up",
         pimgLabel: "Route preview images through the backend (enable if direct loading fails)",
@@ -1438,7 +1440,7 @@ function openImageDetail(item, opts = {}) {
         try {
             const r = await apiPost("/civitai_studio/import_asset", { url: item.url, image_id: String(item.id) });
             toast("success", t(r.existed ? "importAssetExists" : "importAssetDone", { name: r.name }), r.dir || "");
-        } catch (e) { toast("error", t("favFailed"), e.message); }
+        } catch (e) { toast("error", t("importFailed"), e.message); }
         finally { importBtn.disabled = false; }
     };
     const extractBtn = $("[data-extract-wf]", m.box);
@@ -1447,7 +1449,10 @@ function openImageDetail(item, opts = {}) {
         try {
             const r = await apiPost("/civitai_studio/extract_workflow", { url: item.url, image_id: String(item.id) });
             toast("success", t("extractDone", { name: r.name }), r.warn ? t("extractCapWarn", { n: r.count }) : "");
-        } catch (e) { toast("error", t("extractNone"), e.message); }
+        } catch (e) {
+            const noWf = /未内嵌/.test(e.message || "");
+            toast("error", t(noWf ? "extractNone" : "extractFail"), e.message);
+        }
         finally { extractBtn.disabled = false; }
     };
     const vmBtn = $("[data-view-model]", m.box);
