@@ -77,7 +77,13 @@ def _parse_moov(data):
         if typ == b"udta":
             for typ2, s2, e2 in _iter_boxes(data, s, e):
                 if typ2 == b"meta":
-                    return _parse_meta(data, s2 + 4, e2)
+                    # ISO BMFF(ffmpeg 产物)的 meta 是 fullbox(4B version/flags);
+                    # Apple 原生 QuickTime 的 meta 无这 4 字节。先按 fullbox 试,
+                    # 解析不出再回退不跳 — _parse_meta 解析失败返回 None,无误报面。
+                    parsed = _parse_meta(data, s2 + 4, e2)
+                    if parsed is None:
+                        parsed = _parse_meta(data, s2, e2)
+                    return parsed
     return None
 
 
@@ -125,28 +131,43 @@ def extract_mp4_file(path):
 
 # ---------- PNG(tEXt/iTXt) ----------
 
+def _pick_text(text):
+    """PIL 的 text dict → 统一输出形状(prompt/workflow: dict|str,parameters: str)。"""
+    out = {}
+    for k, v in (text or {}).items():
+        if k in ("prompt", "workflow"):
+            try:
+                out[k] = json.loads(v)
+            except ValueError:
+                out[k] = v  # 非标准文件:原样保留字符串,消费方按弱类型处理
+        elif k == "parameters":
+            out[k] = v
+    return out or None
+
+
+def _png_quietly(err):
+    """坏图/异常视频静默降级是常态;但非预期错误要与'无数据'可区分。"""
+    name = type(err).__name__
+    if name in ("UnidentifiedImageError", "OSError", "DecompressionBombError"):
+        return
+    print("[Civitai-Studio] 内嵌元数据解析异常:", name, err)
+
+
 def extract_png_file(path):
     try:
         from PIL import Image
         with Image.open(path) as img:
             text = getattr(img, "text", None) or {}
-        out = {}
-        for k, v in text.items():
-            if k in ("prompt", "workflow"):
-                try:
-                    out[k] = json.loads(v)
-                except ValueError:
-                    out[k] = v
-            elif k == "parameters":
-                out[k] = v
-        return out or None
-    except Exception:  # PIL 缺失/坏图/密码保护等:一律降级为无数据
+        return _pick_text(text)
+    except Exception as e:
+        _png_quietly(e)
         return None
 
 
 # ---------- 缓存入口 ----------
 
 def extract_from_bytes(data, ext):
+    """任务3(导入为资产/提取工作流)预留:下载的原始文件先解析再落盘/提取。"""
     ext = (ext or "").lower()
     if ext == ".png":
         import io
@@ -154,17 +175,9 @@ def extract_from_bytes(data, ext):
             from PIL import Image
             with Image.open(io.BytesIO(data)) as img:
                 text = getattr(img, "text", None) or {}
-            out = {}
-            for k, v in text.items():
-                if k in ("prompt", "workflow"):
-                    try:
-                        out[k] = json.loads(v)
-                    except ValueError:
-                        out[k] = v
-                elif k == "parameters":
-                    out[k] = v
-            return out or None
-        except Exception:
+            return _pick_text(text)
+        except Exception as e:
+            _png_quietly(e)
             return None
     if ext in (".mp4", ".mov"):
         return extract_mp4_bytes(data)
