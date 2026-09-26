@@ -85,8 +85,15 @@ def _sidecar_blob(meta):
     return json.dumps(meta, ensure_ascii=False) if meta is not None else None
 
 
+def _stat_optional(path):
+    try:
+        return os.stat(path)
+    except OSError:
+        return None
+
+
 def _scan_unlocked(deep=False):
-    """指纹增量化:未变的文件直接复用上次 sidecar 解析结果,不重读磁盘 sidecar."""
+    """指纹增量化:模型文件与 sidecar 的 size/mtime 都未变 → 复用上次解析结果."""
     global _cache
     t0 = time.time()
     fp = {} if deep else cache_store.fingerprints()
@@ -95,7 +102,7 @@ def _scan_unlocked(deep=False):
     models = []
     seen = set()  # item_id 去重
     alive = set()  # 成功入索引的完整路径(同步指纹表用)
-    changed = []  # (path, size, mtime, sidecar_json|None) 待写回指纹表
+    changed = []  # (path, size, mtime, sc_size, sc_mtime, sidecar_json|None) 待写回
     reused = 0
     truncated = False
     for key in categories():
@@ -119,18 +126,24 @@ def _scan_unlocked(deep=False):
                         st = os.stat(full)
                     except OSError:
                         continue
+                    sst = _stat_optional(sidecar_path(full))
+                    sc_key = (sst.st_size, sst.st_mtime) if sst else (None, None)
                     hit = fp.get(full)
                     if (hit is not None and hit[0] == st.st_size
-                            and hit[1] == st.st_mtime):
+                            and hit[1] == st.st_mtime
+                            and (hit[2], hit[3]) == sc_key):
+                        blob = cache_store.sidecar_blob(full)
                         try:
-                            civitai = json.loads(hit[2]) if hit[2] is not None else None
+                            civitai = json.loads(blob) if blob is not None else None
                             reused += 1
                         except ValueError:
                             civitai = read_sidecar(full)
-                            changed.append((full, st.st_size, st.st_mtime, _sidecar_blob(civitai)))
+                            changed.append((full, st.st_size, st.st_mtime,
+                                            sc_key[0], sc_key[1], _sidecar_blob(civitai)))
                     else:
                         civitai = read_sidecar(full)
-                        changed.append((full, st.st_size, st.st_mtime, _sidecar_blob(civitai)))
+                        changed.append((full, st.st_size, st.st_mtime,
+                                        sc_key[0], sc_key[1], _sidecar_blob(civitai)))
                     alive.add(full)
                     models.append({
                         "id": item_id,
@@ -149,7 +162,8 @@ def _scan_unlocked(deep=False):
                 break
         if truncated:
             break
-    cache_store.sync_fingerprints(changed, alive)
+    # truncated 时 alive 不完整:不清库,保住没扫到文件的指纹(下轮接着增量)
+    cache_store.sync_fingerprints(changed, None if truncated else alive)
     by_version = {}
     by_name = {}
     by_id = {}

@@ -673,9 +673,14 @@ async def cache_usage(request):
 @_post("/civitai_studio/cache_clear")
 async def cache_clear(request):
     """清空缓存(kv 表 + 指纹表)后立即全量重建索引,避免空索引窗口."""
-    cache_store.clear_cache()
+    await local_index.run_bg(cache_store.clear_cache)  # checkpoint 别堵事件循环
     await _scan_async(True, True)
-    return web.json_response({"status": "ok", "used_bytes": cache_store.usage()})
+    cfg = config.load()
+    return web.json_response({
+        "status": "ok",
+        "used_bytes": cache_store.usage(),
+        "max_mb": cfg.get("cache_max_mb", 500),
+    })
 
 
 @_post("/civitai_studio/local/delete")

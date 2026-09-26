@@ -2503,7 +2503,10 @@ async function openSettings() {
     apiGet("/civitai_studio/cache_usage").then((d) => {
         const el = $("#cs-cache-usage", m.box);
         if (el) el.textContent = usageFmt(d);
-    }).catch(() => {});
+    }).catch((e) => {
+        const el = $("#cs-cache-usage", m.box);
+        if (el) el.textContent = t("readCfgFailed") + ": " + e.message;
+    });
     const maintMsg = $("#cs-set-maint-msg", m.box);
     $("#cs-set-clearcache", m.box).onclick = async () => {
         try {

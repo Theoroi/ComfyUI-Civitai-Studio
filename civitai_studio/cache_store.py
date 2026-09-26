@@ -5,8 +5,8 @@
   download_jobs.json  下载队列(downloader 迁入,由 downloader 自管)
 
 多实例共享同一 user 目录:WAL 允许并发读 + 单写,busy_timeout 化解写竞争。
-单连接 + 线程锁串行化;任何 sqlite 异常都降级(损坏则删库重建一次),
-绝不阻断插件加载/业务主流程。
+单连接 + 线程锁串行化;仅"文件损坏"类错误触发删库重建(锁竞争/IO 暂态只
+静默降级,绝不误删共享库);任何异常都不阻断插件加载/业务主流程。
 """
 
 import json
@@ -21,7 +21,7 @@ from . import config
 
 _LOCK = threading.RLock()
 _CONN = None
-_BROKEN = False  # sqlite 损坏且重建仍失败:此后所有操作静默降级为空实现
+_BROKEN = False  # sqlite 确认损坏且重建仍失败:此后所有操作静默降级为空实现
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS kv_cache (
@@ -37,6 +37,8 @@ CREATE TABLE IF NOT EXISTS local_files (
     path TEXT PRIMARY KEY,
     size INTEGER NOT NULL,
     mtime REAL NOT NULL,
+    sc_size INTEGER,
+    sc_mtime REAL,
     sidecar TEXT,
     cached_at REAL NOT NULL
 );
@@ -58,10 +60,24 @@ def _max_mb():
         return 500
 
 
+def _norm(path):
+    """指纹键统一 normpath:walk 路径与调用方(可能混合斜杠)必须能对上."""
+    return os.path.normpath(str(path))
+
+
+def _is_corruption(err):
+    """只有"文件不是库/已损坏"才值得删库重建;锁竞争与 IO 暂态必须放行."""
+    if not isinstance(err, sqlite3.DatabaseError):
+        return False
+    msg = str(err).lower()
+    return ("not a database" in msg or "malformed" in msg
+            or "encrypted" in msg or "corrupt" in msg)
+
+
 def _heal(err):
     """损坏自愈:关连接→删库文件→重建一次;再失败进入永久降级."""
     global _CONN, _BROKEN
-    print("[Civitai-Studio] 缓存库异常,尝试重建:", err)
+    print("[Civitai-Studio] 缓存库损坏,尝试重建:", err)
     if _CONN is not None:
         try:
             _CONN.close()
@@ -73,6 +89,7 @@ def _heal(err):
             os.remove(db_path() + suffix)
         except OSError:
             pass
+    conn = None
     try:
         conn = sqlite3.connect(db_path(), timeout=5.0, check_same_thread=False)
         conn.execute("PRAGMA journal_mode=WAL")
@@ -82,8 +99,36 @@ def _heal(err):
         conn.commit()
         _CONN = conn
     except (sqlite3.Error, OSError) as e:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
         _BROKEN = True
         print("[Civitai-Studio] 缓存库重建失败,本会话禁用磁盘缓存:", e)
+
+
+def _migrate(conn):
+    """旧 schema 增量补列(本插件早期开发态库可能缺 sc_* 列),避免永久降级."""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(local_files)")}
+    if cols and "sc_size" not in cols:
+        conn.execute("ALTER TABLE local_files ADD COLUMN sc_size INTEGER")
+        conn.execute("ALTER TABLE local_files ADD COLUMN sc_mtime REAL")
+        conn.commit()
+
+
+def _connect(conn):
+    """建连后的公共 PRAGMA + 建表 + 迁移."""
+    mode = conn.execute("PRAGMA journal_mode=WAL").fetchone()
+    if not mode or str(mode[0]).lower() != "wal":
+        # 网络盘等场景 WAL 静默退化:多实例并发写动机失效,点一条日志
+        print("[Civitai-Studio] sqlite WAL 未生效(journal_mode=%s),多实例并发写请留意" % (mode,))
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+    conn.executescript(_SCHEMA)
+    _migrate(conn)
+    conn.commit()
+    return mode
 
 
 def init():
@@ -95,11 +140,7 @@ def init():
         try:
             os.makedirs(cache_dir(), exist_ok=True)
             conn = sqlite3.connect(db_path(), timeout=5.0, check_same_thread=False)
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("PRAGMA busy_timeout=5000")
-            conn.executescript(_SCHEMA)
-            conn.commit()
+            _connect(conn)
             _CONN = conn
             _CONN.execute(
                 "DELETE FROM kv_cache WHERE expires_at IS NOT NULL AND expires_at < ?",
@@ -113,7 +154,11 @@ def init():
                     conn.close()
                 except Exception:
                     pass
-            _heal(e)
+            if _is_corruption(e):
+                _heal(e)
+            else:
+                # 锁竞争/目录暂不可写等:本轮降级为空实现,下次调用再试
+                print("[Civitai-Studio] 缓存库暂不可用(下次调用重试):", e)
 
 
 # ---------- kv 端点缓存(阶段2 的 GET 接入用;阶段1 先落地表与机制) ----------
@@ -177,44 +222,47 @@ def kv_delete(key):
 
 
 def _enforce_quota():
-    """超限时先删过期再按 LRU 淘汰 kv 行(指纹表极小,不参与淘汰)."""
+    """超限时淘汰:先过期 kv → kv LRU → local_files 按 cached_at LRU(指纹被淘汰
+    只是下次扫描重读 sidecar,数据本体在磁盘,不丢东西)."""
+    limit = _max_mb() * 1024 * 1024
     try:
-        if usage() <= _max_mb() * 1024 * 1024:
+        if usage() <= limit:
             return
         _CONN.execute(
             "DELETE FROM kv_cache WHERE expires_at IS NOT NULL AND expires_at < ?",
             (time.time(),),
         )
-        while usage() > _max_mb() * 1024 * 1024:
-            cur = _CONN.execute(
-                "DELETE FROM kv_cache WHERE key IN "
-                "(SELECT key FROM kv_cache ORDER BY last_access LIMIT 100)"
-            )
-            _CONN.commit()
-            if cur.rowcount <= 0:
-                break  # 只剩指纹表可保:不再硬删
+        _CONN.commit()
+        for table, order in (("kv_cache", "last_access"), ("local_files", "cached_at")):
+            while usage() > limit:
+                cur = _CONN.execute(
+                    f"DELETE FROM {table} WHERE rowid IN "
+                    f"(SELECT rowid FROM {table} ORDER BY {order} LIMIT 200)"
+                )
+                _CONN.commit()
+                if cur.rowcount <= 0:
+                    return
     except (sqlite3.Error, OSError):
         pass
 
 
 # ---------- 本地索引指纹表(local_index 增量化用) ----------
 
-def _norm(path):
-    """指纹键统一 normpath:walk 路径与调用方(可能混合斜杠)必须能对上."""
-    return os.path.normpath(str(path))
-
-
 def fingerprints():
-    """{path: (size, mtime, sidecar_json|None)};不可用时返回 {} → 全量重读兜底."""
+    """轻量指纹索引 {path: (size, mtime, sc_size|None, sc_mtime|None)}.
+
+    不带 sidecar blob(最坏数百 MB 的内存峰值);blob 用 sidecar_blob() 按需取。
+    sqlite 不可用时返回 {} → 全量重读兜底。
+    """
     init()
     if _CONN is None:
         return {}
     with _LOCK:
         try:
             return {
-                _norm(r[0]): (r[1], r[2], r[3])
+                _norm(r[0]): (r[1], r[2], r[3], r[4])
                 for r in _CONN.execute(
-                    "SELECT path, size, mtime, sidecar FROM local_files"
+                    "SELECT path, size, mtime, sc_size, sc_mtime FROM local_files"
                 )
             }
         except sqlite3.Error as e:
@@ -222,8 +270,23 @@ def fingerprints():
             return {}
 
 
+def sidecar_blob(path):
+    """取该路径上次缓存的 sidecar JSON 文本(无记录返回 None)."""
+    if _CONN is None:
+        return None
+    with _LOCK:
+        try:
+            row = _CONN.execute(
+                "SELECT sidecar FROM local_files WHERE path=?", (_norm(path),)
+            ).fetchone()
+            return row[0] if row else None
+        except sqlite3.Error:
+            return None
+
+
 def sync_fingerprints(changed_rows, seen_paths):
-    """增提交:changed_rows=[(path,size,mtime,sidecar_json|None)];删除库中已消失条目."""
+    """增提交:changed_rows=[(path,size,mtime,sc_size,sc_mtime,sidecar_json|None)];
+    seen_paths 非 None 时删除库中已消失条目(truncated 扫描传 None 保未扫到的指纹)."""
     init()
     if _CONN is None:
         return
@@ -231,9 +294,11 @@ def sync_fingerprints(changed_rows, seen_paths):
     with _LOCK:
         try:
             _CONN.executemany(
-                "INSERT OR REPLACE INTO local_files(path, size, mtime, sidecar, cached_at)"
-                " VALUES(?,?,?,?,?)",
-                [(_norm(p), s, m, sc, now) for (p, s, m, sc) in changed_rows],
+                "INSERT OR REPLACE INTO local_files"
+                "(path, size, mtime, sc_size, sc_mtime, sidecar, cached_at)"
+                " VALUES(?,?,?,?,?,?,?)",
+                [(_norm(p), s, m, ss, sm, sc, now)
+                 for (p, s, m, ss, sm, sc) in changed_rows],
             )
             if seen_paths is not None:
                 _CONN.execute("CREATE TEMP TABLE IF NOT EXISTS _seen(path TEXT PRIMARY KEY)")
@@ -246,6 +311,10 @@ def sync_fingerprints(changed_rows, seen_paths):
                 _CONN.execute("DELETE FROM _seen")
             _CONN.commit()
         except sqlite3.Error as e:
+            try:
+                _CONN.rollback()
+            except sqlite3.Error:
+                pass
             print("[Civitai-Studio] 写索引指纹失败(下次重扫补齐):", e)
 
 
