@@ -383,7 +383,7 @@ async def _download_to_tmp(job, attempt_url, tmp, dl_timeout, started):
 
 
 async def _run_job(job):
-    data = await civitai_client.get_json(f"/model-versions/{job['version_id']}")
+    data = await civitai_client.get_version_cached(job["version_id"])
     if not job.get("version_name"):
         job["version_name"] = data.get("name") or ""
     if not job.get("model_id") and data.get("modelId"):

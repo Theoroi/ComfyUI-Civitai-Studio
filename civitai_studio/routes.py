@@ -18,7 +18,7 @@ import folder_paths
 from aiohttp import web
 from yarl import URL
 
-from . import cache_store, civitai_client, config, downloader, local_index
+from . import api_cache, cache_store, civitai_client, config, downloader, local_index
 from .version import VERSION, build
 
 _enums_cache = {"data": None, "ts": 0.0}
@@ -255,7 +255,7 @@ async def resolve_versions(request):
 
         async def fetch_one(vid):
             try:
-                data = await civitai_client.get_json(f"/model-versions/{vid}")
+                data = await civitai_client.get_version_cached(vid)
                 files = data.get("files") or [{}]
                 mv = data.get("model") or {}
                 model_id = data.get("modelId") or mv.get("id")  # 镜像响应只有 modelId 顶层字段
@@ -454,7 +454,7 @@ async def version_images(request):
         # 与搜索同档位;新 API 是布尔开关,映射后再透传
         params["nsfw"] = "false" if q["nsfw"] in ("0", "false") else "true"
     try:
-        data = await civitai_client.get_json("/images", params=params)
+        data = await civitai_client.get_images_page(params)
     except civitai_client.CivitaiError as e:
         return _json_error(e, 502)
     # images 接口的翻页在 metadata.nextPage(完整 URL):解析成查询对回传给前端
@@ -509,12 +509,12 @@ async def image_proxy(request):
 
 @_get("/civitai_studio/enums")
 async def enums(request):
-    """代理站方枚举(ModelType/ActiveBaseModel/BaseModel...),内存缓存 6h."""
+    """代理站方枚举(ModelType/ActiveBaseModel/BaseModel...):内存 6h + 磁盘 24h SWR."""
     global _enums_cache
     now = time.time()
     if _enums_cache["data"] is None or now - _enums_cache["ts"] > _ENUMS_TTL:
         try:
-            data = await civitai_client.get_json("/enums", timeout=aiohttp.ClientTimeout(total=20, connect=10))
+            data = await civitai_client.get_enums_cached()
         except civitai_client.CivitaiError as e:
             if _enums_cache["data"] is not None:  # 失败时回退旧缓存
                 return web.json_response(_enums_cache["data"])
@@ -672,8 +672,13 @@ async def cache_usage(request):
 
 @_post("/civitai_studio/cache_clear")
 async def cache_clear(request):
-    """清空缓存(kv 表 + 指纹表)后立即全量重建索引,避免空索引窗口."""
+    """清空缓存(内存层 + kv 表 + 指纹表,穿透全部层)后立即全量重建索引."""
     await local_index.run_bg(cache_store.clear_cache)  # checkpoint 别堵事件循环
+    api_cache.clear_mem()
+    civitai_client._model_cache.clear()
+    global _enums_cache
+    _enums_cache = {"data": None, "ts": 0.0}
+    _VERSION_CACHE.clear()
     await _scan_async(True, True)
     cfg = config.load()
     return web.json_response({
@@ -1029,7 +1034,7 @@ async def version_detail(request):
     if not vid.isdigit():
         return _json_error("版本 ID 必须是数字", 400)
     try:
-        data = await civitai_client.get_json(f"/model-versions/{vid}")
+        data = await civitai_client.get_version_cached(vid)
     except civitai_client.CivitaiError as e:
         return _json_error(e, 502)
     return web.json_response(data)
@@ -1107,7 +1112,7 @@ async def check_updates(request):
         }
         async with sem:
             try:
-                data = await civitai_client.get_json(f"/models/{meta['model_id']}")
+                data = await civitai_client.get_model_cached(meta["model_id"])
                 versions = [v for v in data.get("modelVersions", []) if v.get("id")]
                 latest = versions[0] if versions else None
                 current = str(meta.get("version_id"))
