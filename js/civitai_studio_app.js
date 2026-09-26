@@ -3055,8 +3055,9 @@ async function favDoSync(silent) {
     try {
         const r = await apiPost("/civitai_studio/favorites/sync");
         S.favLastSync = Date.now();
-        if (r.scope_hint) toast("warn", r.scope_hint, "");
-        else if (!silent) toast("success", t("favSyncDone", r), "");
+        if (r.status === "busy") toast("warn", S.lang === "zh" ? "同步已在进行中" : "Sync already running", "");
+        else if (r.scope_hint) toast("warn", r.scope_hint, "");
+        else if (!silent) toast("success", t("favSyncDone", r) + (r.truncated ? (S.lang === "zh" ? "(收藏较多,本次仅同步前 1000 条)" : " (first 1000 items only)") : ""), "");
         else if (r.upsync_failed) toast("warn", t("favFailed"), String(r.errors?.[0] || ""));
         await loadFavDataOnly();
     } catch (e) {

@@ -12,6 +12,7 @@
 同步是"尽力而为"的合并:任何单通道失败不阻塞其它通道;结果逐项计数返回给设置页展示。
 """
 
+import os
 import time
 from datetime import datetime, timezone
 
@@ -48,9 +49,12 @@ async def _trpc_paged(proc, base_input, item_key):
 
 
 async def _down_favorites(kind):
-    """REST 收藏读:kind='asset' → /images?favorites=true;'model' → /models?favorites=true."""
+    """REST 收藏读。返回 {n, truncated, seen}:truncated=翻到页数上限;seen=本次远端
+    存在的 id 集(供缺席对账)。"""
     path = "/images" if kind == fs.KIND_ASSET else "/models"
     cursor, pages, n = None, 0, 0
+    seen = set()
+    truncated = False
     while pages < _MAX_PAGES:
         params = {"favorites": "true", "limit": str(_PAGE_LIMIT)}
         if cursor:
@@ -61,13 +65,15 @@ async def _down_favorites(kind):
             oid = str(it.get("id") or "")
             if not oid:
                 continue
+            seen.add(oid)
             if kind == fs.KIND_ASSET:
                 fs.upsert_remote(kind, oid, name=it.get("username") or None,
                                  cover=it.get("url"),
                                  extra={"modelVersionIds": it.get("modelVersionIds")},
                                  remote_updated=_ts(it.get("createdAt")))
             else:
-                cover = ((it.get("modelVersions") or [{}])[0].get("images") or [{}])[0].get("url")
+                versions = it.get("modelVersions") or []
+                cover = ((versions[0] or {}).get("images") or [{}])[0].get("url") if versions else None
                 fs.upsert_remote(kind, oid, name=it.get("name"), cover=cover,
                                  extra={"type": it.get("type")},
                                  remote_updated=_ts(it.get("lastVersionAt") or it.get("createdAt")))
@@ -77,7 +83,8 @@ async def _down_favorites(kind):
         pages += 1
         if not cursor or not items:
             break
-    return n
+    truncated = bool(cursor)  # 循环因页数上限退出但仍有下一页 → 截断
+    return {"n": n, "truncated": truncated, "seen": seen}
 
 
 async def _down_groups():
@@ -127,38 +134,49 @@ async def _upsync_models(result):
                 {"modelId": int(it["oid"]), "setTo": not it["deleted"]},
             )
             result["upsynced"] += 1
-            fs.mark_synced(it["kind"], it["oid"])
+            fs.mark_synced(it["kind"], it["oid"], expected_updated=it["updated_at"])
         except civitai_client.TrpcScopeError as e:
             result["scope_hint"] = str(e)
             break
-        except civitai_client.CivitaiError as e:
+        except Exception as e:
             result["upsync_failed"] += 1
             result["errors"].append(str(e)[:160])
 
 
 async def sync_now():
     """全量同步入口(设置页按钮/自动同步);返回计数供 UI 展示."""
+    token = os.urandom(8).hex()
     if cache_store.kv_get(_SYNC_LOCK_KEY):
         return {"status": "busy"}
-    cache_store.kv_put(_SYNC_LOCK_KEY, True, ttl=300)  # 5 分钟防重入保险
+    cache_store.kv_put(_SYNC_LOCK_KEY, token, ttl=300)  # 防重入;finally 校验 token 再清
     result = {"assets_down": 0, "models_down": 0, "groups_down": 0, "upsynced": 0,
-              "upsync_failed": 0, "scope_hint": "", "errors": [], "at": time.time()}
+              "upsync_failed": 0, "scope_hint": "", "truncated": False, "errors": [],
+              "at": time.time()}
     try:
         try:
-            result["assets_down"] = await _down_favorites(fs.KIND_ASSET)
-        except civitai_client.CivitaiError as e:
+            r = await _down_favorites(fs.KIND_ASSET)
+            result["assets_down"] = r["n"]
+            result["truncated"] = r["truncated"]
+        except Exception as e:
             result["errors"].append("资产收藏读取: " + str(e)[:160])
         try:
-            result["models_down"] = await _down_favorites(fs.KIND_MODEL)
-        except civitai_client.CivitaiError as e:
+            r = await _down_favorites(fs.KIND_MODEL)
+            result["models_down"] = r["n"]
+            if r["truncated"]:
+                result["truncated"] = True
+            else:
+                # 未截断才做缺席对账(截断时"缺席"可能只是翻页上限,会误杀)
+                await bg.run_bg(fs.mark_remote_absent, fs.KIND_MODEL, r["seen"])
+        except Exception as e:
             result["errors"].append("模型收藏读取: " + str(e)[:160])
         try:
             result["groups_down"] = await _down_groups()
-        except civitai_client.CivitaiError as e:
+        except Exception as e:
             result["errors"].append("集合读取: " + str(e)[:160])
         await _upsync_models(result)
         await bg.run_bg(fs.purge_tombstones)
         result["status"] = "ok"
     finally:
-        cache_store.kv_delete(_SYNC_LOCK_KEY)
+        if cache_store.kv_get(_SYNC_LOCK_KEY) == token:
+            cache_store.kv_delete(_SYNC_LOCK_KEY)
     return result

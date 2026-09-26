@@ -377,12 +377,20 @@ async def _trpc_request(proc, js, mutation):
             except Exception:
                 raise CivitaiError(f"tRPC {proc} 返回非 JSON(HTTP {resp.status})")
             if resp.status != 200:
-                err = ((data or {}).get("error") or {}).get("json") or {}
+                err = {}
+                if isinstance(data, dict):
+                    err = ((data.get("error") or {}).get("json")) or {}
                 msg = err.get("message") or f"HTTP {resp.status}"
                 if err.get("code") == -32003 or "required scope" in str(msg):
                     raise TrpcScopeError(f"{proc}: 当前 API Key 缺少所需作用域 — 请到 Civitai 账户设置重建 Key 并勾选相应权限")
-                raise CivitaiError(f"tRPC {proc}: {msg[:200]}")
-            return ((data or {}).get("result") or {}).get("data", {}).get("json")
+                raise CivitaiError(f"tRPC {proc}: {str(msg)[:200]}")
+            if not isinstance(data, dict):
+                return None
+            result = data.get("result")
+            if not isinstance(result, dict):
+                return None
+            payload = result.get("data")
+            return payload.get("json") if isinstance(payload, dict) else None
     except (asyncio.TimeoutError, aiohttp.ClientError) as e:
         raise CivitaiError(net_error_message(e)) from e
 

@@ -153,8 +153,11 @@ def toggle(kind, oid, fields=None):
 
 def upsert_remote(kind, oid, *, name=None, cover=None, group_id=None, extra=None,
                   remote_updated=None, deleted=False):
-    """远端条目落地:本地无 → 收;本地 dirty → 以本地为准(待上推,不动);
-    本地墓碑且墓碑较新 → 保持(上推取消);否则采纳远端(时间戳新者胜)."""
+    """远端条目落地.裁决(依审计收紧):
+    - 本地墓碑 → 一律保持(终局):本地取消不被远端拉回,复活须本地显式★;
+      否则无上推通道的资产取消会在下次同步被静默撤销
+    - 活动行 dirty → 让位(本地改动等上推)
+    - 其余:收为/刷新为 src=remote dirty=0;updated_at 记远端时间(无则本地时刻)"""
     conn = _conn()
     if conn is None:
         return
@@ -165,19 +168,18 @@ def upsert_remote(kind, oid, *, name=None, cover=None, group_id=None, extra=None
         try:
             cur = get_item(kind, oid)
             if cur and cur["deleted"]:
-                if cur["updated_at"] >= ru:
-                    return  # 墓碑较新:远端旧收藏不拉回
-                # 远端更新:落入下方 REPLACE 复活(dirty=0,src=remote)
-            elif cur and cur["dirty"]:
-                return  # 活动行有未同步的本地改动:等上推,远端旧值不覆盖
+                return  # 墓碑终局
+            if cur and cur["dirty"]:
+                return  # 本地改动待上推
+            base = cur or {}
             conn.execute(
                 "INSERT OR REPLACE INTO fav_items(kind, oid, group_id, name, cover, added_at,"
                 " updated_at, src, dirty, deleted, extra) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                (kind, oid, group_id or (cur or {}).get("group_id"),
-                 name or (cur or {}).get("name"), cover or (cur or {}).get("cover"),
-                 (cur or {}).get("added_at") or now, max(ru, now - 1) if ru else now,
-                 "remote", 0, 1 if deleted else 0,
-                 json.dumps(extra, ensure_ascii=False) if extra else None),
+                (kind, oid, group_id or base.get("group_id"),
+                 name or base.get("name"), cover or base.get("cover"),
+                 base.get("added_at") or now, ru or now, "remote", 0, 0,
+                 json.dumps(extra, ensure_ascii=False) if extra else
+                 (json.dumps(base["extra"], ensure_ascii=False) if base.get("extra") else None)),
             )
             conn.commit()
         except Exception as e:
@@ -185,27 +187,33 @@ def upsert_remote(kind, oid, *, name=None, cover=None, group_id=None, extra=None
 
 
 def set_group(kind, oid, group_id):
+    """分组是本地组织行为,不动 dirty(分组不应触发模型收藏上推/冻结远端更新)."""
     conn = _conn()
     if conn is None:
         return
     with _LOCK:
         try:
-            conn.execute("UPDATE fav_items SET group_id=?, dirty=1, updated_at=? WHERE kind=? AND oid=?",
-                         (group_id or None, time.time(), kind, str(oid)))
+            conn.execute("UPDATE fav_items SET group_id=? WHERE kind=? AND oid=?",
+                         (group_id or None, kind, str(oid)))
             conn.commit()
         except Exception as e:
             print("[Civitai-Studio] 收藏分组失败:", e)
 
 
-def mark_synced(kind, oid):
-    """上推成功:清 dirty(墓碑条目直接删除)."""
+def mark_synced(kind, oid, expected_updated=None):
+    """上推成功:清 dirty(墓碑条目直接删除).expected_updated 防"上推期间用户又点了★"
+    的竞态把新改动误标已同步."""
     conn = _conn()
     if conn is None:
         return
     with _LOCK:
         try:
             it = get_item(kind, oid)
-            if it and it["deleted"]:
+            if not it:
+                return
+            if expected_updated is not None and it["updated_at"] != expected_updated:
+                return  # 行在快照后被改过:留给下轮同步
+            if it["deleted"]:
                 conn.execute("DELETE FROM fav_items WHERE kind=? AND oid=?", (kind, str(oid)))
             else:
                 conn.execute("UPDATE fav_items SET dirty=0 WHERE kind=? AND oid=?", (kind, str(oid)))
@@ -245,6 +253,12 @@ def upsert_group(name, gid=None, civitai_id=None, dirty=0, updated_at=None):
     now = time.time()
     with _LOCK:
         try:
+            if civitai_id and not gid:
+                # 同步反复落地同一集合:按 civitai_id 复用既有 gid,防分组无限膨胀
+                r = conn.execute("SELECT gid FROM fav_groups WHERE civitai_id=?",
+                                 (civitai_id,)).fetchone()
+                if r:
+                    gid = r[0]
             if not gid:
                 gid = "g_" + str(int(now * 1000))
             conn.execute(
@@ -267,7 +281,7 @@ def delete_group(gid):
         return
     with _LOCK:
         try:
-            conn.execute("UPDATE fav_items SET group_id=NULL, dirty=1 WHERE group_id=?", (gid,))
+            conn.execute("UPDATE fav_items SET group_id=NULL WHERE group_id=?", (gid,))
             conn.execute("DELETE FROM fav_groups WHERE gid=?", (gid,))
             conn.commit()
         except Exception as e:
@@ -275,16 +289,42 @@ def delete_group(gid):
 
 
 def purge_tombstones(older_than=_TOMBSTONE_TTL):
+    """只清"已同步"的墓碑(dirty=0,模型上推成功后本应被 mark_synced 删除,这里兜底).
+    dirty=1 的墓碑是资产取消收藏的唯一防线,永不过期 — 过期即复活(审计 P0)."""
     conn = _conn()
     if conn is None:
         return
     with _LOCK:
         try:
-            conn.execute("DELETE FROM fav_items WHERE deleted=1 AND updated_at < ?",
+            conn.execute("DELETE FROM fav_items WHERE deleted=1 AND dirty=0 AND updated_at < ?",
                          (time.time() - older_than,))
             conn.commit()
         except Exception:
             pass
+
+
+def mark_remote_absent(kind, seen_oids, now=None):
+    """远端缺席对账:src=remote、未 dirty、仍活动的条目本次远端列表未出现 → 落墓碑
+    (远端已取消收藏).只对模型做——资产收藏与集合条目重叠,缺席≠取消."""
+    seen = {str(x) for x in (seen_oids or [])}
+    conn = _conn()
+    if conn is None:
+        return 0
+    ts = now or time.time()
+    n = 0
+    with _LOCK:
+        try:
+            for r in list_items(kind=kind, include_deleted=False):
+                if r["src"] == "remote" and not r["dirty"] and r["oid"] not in seen:
+                    conn.execute(
+                        "UPDATE fav_items SET deleted=1, dirty=0, updated_at=? WHERE kind=? AND oid=?",
+                        (ts, kind, r["oid"]),
+                    )
+                    n += 1
+            conn.commit()
+        except Exception as e:
+            print("[Civitai-Studio] 缺席对账失败:", e)
+    return n
 
 
 # ---------- 导入/导出 ----------
@@ -326,18 +366,23 @@ def import_json(payload, replace=False):
             for it in items:
                 if not isinstance(it, dict) or not it.get("oid") or it.get("kind") not in (KIND_MODEL, KIND_ASSET):
                     continue
+                deleted = 1 if it.get("deleted") else 0
                 conn.execute(
                     "INSERT OR REPLACE INTO fav_items(kind, oid, group_id, name, cover, added_at,"
                     " updated_at, src, dirty, deleted, extra) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                     (it["kind"], str(it["oid"]), it.get("group_id"), it.get("name"),
                      it.get("cover"), float(it.get("added_at") or now),
                      float(it.get("updated_at") or now), it.get("src") or "local",
-                     1 if it.get("dirty") else 0, 1 if it.get("deleted") else 0,
+                     1 if not deleted else (1 if it.get("dirty") else 0), deleted,
                      json.dumps(it["extra"], ensure_ascii=False) if it.get("extra") else None),
                 )
                 n += 1
             conn.commit()
             return {"groups": len(groups), "items": n}
         except Exception as e:
+            try:
+                conn.rollback()  # replace 模式清库后导入失败:回滚,防半截事务被无关 commit 落盘
+            except Exception:
+                pass
             print("[Civitai-Studio] 收藏导入失败:", e)
             raise
