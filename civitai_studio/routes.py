@@ -526,13 +526,28 @@ async def enums(request):
 
 
 def _scope_of(root: str) -> str:
-    """Comfy Desktop 多实例:按路径归类 scope(Shared 共享 / Installs 安装实例 / 其它)."""
-    r = str(root).replace("/", "\\").lower()
-    if "comfyui-shared" in r:
+    """按注册根与当前实例安装目录(folder_paths.base_path)的关系归类:
+    install=本实例目录内;shared=extra_model_paths 等共享路径。不猜路径名。"""
+    try:
+        base = os.path.realpath(folder_paths.base_path)
+        rp = os.path.realpath(root)
+    except OSError:
         return "shared"
-    if "comfyui-installs" in r:
-        return "installs"
-    return "other"
+    if rp == base or rp.lower().startswith(base.lower() + os.sep):
+        return "install"
+    return "shared"
+
+
+def _scopes() -> list:
+    """[实例]下拉选项:共享目录在前,其后当前安装实例(按实际注册根归类)."""
+    try:
+        name = os.path.basename(os.path.realpath(folder_paths.base_path)) or "ComfyUI"
+    except Exception:
+        name = "ComfyUI"
+    return [
+        {"id": "shared", "label": "共享目录 (extra_model_paths)"},
+        {"id": "install", "label": f"本实例 ({name})"},
+    ]
 
 
 @_get("/civitai_studio/destinations")
@@ -558,8 +573,9 @@ async def destinations(request):
             out.append({"key": key, "root": root, "label": f"{key} · {root}", "scope": _scope_of(root)})
     resp: dict = {"destinations": out}
     if ctype == "all":
-        # 下载框"模型类型"手动覆盖用:Civitai 类型 → 目录 key 映射
+        # 下载/移动框"模型类型"覆盖与"实例"下拉用
         resp["type_map"] = {k: list(v) for k, v in local_index.TYPE_TO_FOLDERS.items()}
+        resp["scopes"] = _scopes()
     return web.json_response(resp)
 
 

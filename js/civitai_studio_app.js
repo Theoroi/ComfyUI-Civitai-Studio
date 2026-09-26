@@ -110,7 +110,7 @@ const STR = {
         stDone: "完成 ✔", stCancelled: "已取消", stError: "失败: ",
         cancelBtn: "取消" + "", cancelFailed: "取消失败", clearFailed: "清除失败",
         retryResume: "重试(续传)", retryTip: "从已传输的字节处继续下载(.part 断点)", retryFailed: "重试失败",
-        scopeLabel: "范围", scopeAll: "所有 ComfyUI 实例",
+        scopeLabel: "实例", scopeAll: "所有实例",
         revealFile: "查看本地文件", toLocal: "本地库", moveBtn: "移动",
         moveTitle: "移动 — {name}", movedToast: "已移动", moveFailed: "移动失败",
         settingsTitle: "⚙ Civitai Studio 设置",
@@ -223,7 +223,7 @@ const STR = {
         stDone: "Done ✔", stCancelled: "Cancelled", stError: "Failed: ",
         cancelBtn: "Cancel", cancelFailed: "Cancel failed", clearFailed: "Clear failed",
         retryResume: "Retry (resume)", retryTip: "Resume from the transferred bytes (.part breakpoint)", retryFailed: "Retry failed",
-        scopeLabel: "Scope", scopeAll: "All ComfyUI instances",
+        scopeLabel: "Instance", scopeAll: "All instances",
         revealFile: "Show in folder", toLocal: "Local library", moveBtn: "Move",
         moveTitle: "Move — {name}", movedToast: "Moved", moveFailed: "Move failed",
         settingsTitle: "⚙ Civitai Studio settings",
@@ -1511,18 +1511,19 @@ async function openDownloadDialog({ model, version, fileIndex = null, defaultRoo
     }
     let destinations = [];
     let destError = "";
-    let allDests = [], typeMap = {};
+    let allDests = [], typeMap = {}, destScopes = [];
     try {
         const data = await apiGet(`/civitai_studio/destinations?type=${encodeURIComponent(model.type || "Other")}`);
         destinations = data.destinations || [];
     } catch (e) {
         destError = e.message;
     }
-    // 手动改类型用:全量目录 + Civitai 类型→目录映射(拉取失败仅退回"不可改类型")
+    // 手动改类型/实例用:全量目录 + 类型→目录映射 + 实例清单(拉取失败仅退回原类型)
     try {
         const all = await apiGet("/civitai_studio/destinations?type=all");
         allDests = all.destinations || [];
         typeMap = all.type_map || {};
+        destScopes = all.scopes || [];
     } catch (e) { /* 忽略 */ }
     if (!destinations.length) {
         toast("error", t("openDownloadFailed"), destError ? t("destFetchFailed") + destError : t("noRegFolders"));
@@ -1536,8 +1537,9 @@ async function openDownloadDialog({ model, version, fileIndex = null, defaultRoo
     const preRoot = matched ? matched.root : destinations[0].root;
     const curType = model.type || "Other";
     const typeKeys = [...new Set([curType, ...Object.keys(typeMap)])];
-    const scopeOpts = [["shared", "ComfyUI-Shared"], ["installs", "ComfyUI-Installs"], ["all", t("scopeAll")]];
-    // 范围:按后端路径归类过滤(shared/installs);all = 全部实例
+    // [实例]下拉:后端按注册根实际归类下发(共享目录/本实例…),末项"所有实例"
+    const scopeOpts = [...destScopes.map((s) => [s.id, s.label]), ["all", t("scopeAll")]];
+    // 过滤:shared=共享目录/install=本实例;all = 全部
     const destsFor = (tp, scope) => {
         const keys = typeMap[tp];
         let list = tp === curType && destinations.length
@@ -1546,8 +1548,9 @@ async function openDownloadDialog({ model, version, fileIndex = null, defaultRoo
         if (scope !== "all") list = list.filter((d) => d.scope === scope);
         return list;
     };
-    // 默认范围取当前目标目录所在 scope(用户环境通常是 ComfyUI-Shared)
-    const preScope = (destinations.find((d) => d.root === preRoot) || allDests.find((d) => d.root === preRoot) || {}).scope || "shared";
+    // 默认实例取当前目标目录所在 scope
+    const preScope = (destinations.find((d) => d.root === preRoot) || allDests.find((d) => d.root === preRoot) || {}).scope
+        || (destScopes[0] || {}).id || "all";
     const m = showModal(`
         <h3 class="cs-modal-title">${esc(t("dlDialogTitle", { name: version.name || model.name }))}</h3>
         <div class="cs-form">
@@ -2537,21 +2540,21 @@ function buildBrowseView(root) {
     });
 }
 
-// 移动模型到其它已注册目录:选目标根+子文件夹,文件与 .civitai.json 一并迁移
-// 移动模型到其它已注册目录:类型/范围/目标目录(根+子文件夹),文件与 .civitai.json 一并迁移
+// 移动模型到其它已注册目录:类型/实例/目标目录(根+子文件夹),文件与 .civitai.json 一并迁移
 async function openMoveDialog(m) {
-    let allDests = [], typeMap = {};
+    let allDests = [], typeMap = {}, destScopes = [];
     try {
         const data = await apiGet("/civitai_studio/destinations?type=all");
         allDests = data.destinations || [];
         typeMap = data.type_map || {};
+        destScopes = data.scopes || [];
     } catch (e) { /* 空 → 下方报错返回 */ }
     if (!allDests.length) { toast("error", t("moveFailed"), t("noRegFolders")); return; }
     // 按文件当前目录反推默认类型(typeMap 中第一个包含该目录 key 的类型)
     const preType = Object.keys(typeMap).find((tp) => typeMap[tp].includes(m.category)) || "";
     const typeKeys = [...new Set([...(preType ? [preType] : []), ...Object.keys(typeMap)])];
-    const scopeOpts = [["shared", "ComfyUI-Shared"], ["installs", "ComfyUI-Installs"], ["all", t("scopeAll")]];
-    const curScope = (allDests.find((d) => d.root === m.root) || {}).scope || "shared";
+    const scopeOpts = [...destScopes.map((s) => [s.id, s.label]), ["all", t("scopeAll")]];
+    const curScope = (allDests.find((d) => d.root === m.root) || {}).scope || (destScopes[0] || {}).id || "all";
     const destsFor = (tp, scope) => {
         const keys = typeMap[tp];
         let list = keys ? allDests.filter((d) => keys.includes(d.key)) : allDests;
