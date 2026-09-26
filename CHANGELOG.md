@@ -5,6 +5,9 @@
 ## [Unreleased]
 
 ### 新增
+- 存储系统阶段 4（内嵌生成数据）：解析本地图片/视频内嵌的生成参数（PNG tEXt/iTXt、MP4 mdta——REST 对部分条目脱敏，靠文件内嵌可恢复 prompt/workflow/参数），结果按 mtime/size 缓存于 sqlite（文件不变永久命中）；MP4 流式定位 moov，不整读大视频；新端点 `POST /civitai_studio/embedded_meta`（为「提取工作流/导入为资产」打底）
+- 存储系统阶段 3（媒体缓存）：proxy_images 中转的图片/视频落服务端磁盘缓存（user 目录 cache/media，计入缓存上限，最旧优先自动淘汰；命中支持 Range，视频拖动不整段重拉）
+- 画廊快照（IndexedDB）：页面重载/重启后重开画廊立即显示上次内容与筛选（上限 240 条、30 天有效期），切入时后台静默刷新，数据变化才无感重排
 - 存储系统阶段 2（API 缓存层）：同 key 并发回源只打一次（singleflight）；模型详情与版本数据加磁盘 SWR——重启后 6h 内免回源直接可用，过期先回旧值再后台刷新；images 搜索页 60s 内存缓存（不落盘）；站方枚举磁盘缓存 24h；本地更新检查与下载元数据解析统一走缓存（面板二次打开零回源，API 回源次数大幅下降）
 - 存储系统阶段 1（设计见 docs/cache-design.md）：统一磁盘缓存层 `cache_store`（sqlite/WAL，user 目录 `cache/cache.sqlite`，损坏自动重建）；本地索引 mtime/size 指纹增量化——未变文件不再重读 sidecar，重启后索引立即可用，二次扫描从全盘读文件降为目录列表
 - 设置页：磁盘缓存上限（50-2000MB，默认 500）、缓存占用实时显示、「清空缓存」（kv+指纹清空后立即重建索引）与「深度重扫」（手动改过 sidecar 后的全量兜底）

@@ -18,7 +18,7 @@ import folder_paths
 from aiohttp import web
 from yarl import URL
 
-from . import api_cache, cache_store, civitai_client, config, downloader, local_index
+from . import api_cache, cache_store, civitai_client, config, downloader, local_index, media_meta
 from .bg import spawn as bg_spawn
 from .version import VERSION, build
 
@@ -667,6 +667,19 @@ async def local_deep_rescan(request):
     """清指纹表全量重扫:手动改过 sidecar 后的兜底入口(设置页按钮)."""
     index = await _scan_async(True, True)
     return web.json_response({"status": "ok", "scan_stats": index.get("stats")})
+
+
+@_post("/civitai_studio/embedded_meta")
+async def embedded_meta(request):
+    """读本地图片/视频的内嵌生成数据(PNG tEXt/iTXt、MP4 mdta;结果随 mtime 缓存)."""
+    body = await _read_json_dict(request)
+    if body is None:
+        return _json_error("请求体必须是 JSON 对象", 400)
+    path = local_index.resolve(str(body.get("category") or ""), str(body.get("rel") or ""))
+    if not path or not os.path.isfile(path):
+        return _json_error("本地文件不存在", 404)
+    meta = await local_index.run_bg(media_meta.get_embedded, path)
+    return web.json_response({"status": "ok", "meta": meta})
 
 
 @_get("/civitai_studio/cache_usage")
