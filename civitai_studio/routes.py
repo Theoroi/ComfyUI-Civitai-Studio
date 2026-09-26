@@ -736,13 +736,25 @@ async def local_move(request):
         final = f"{base} ({n}){ext}"
     try:
         shutil.move(src, final)
-        side = local_index.sidecar_path(src)
-        if os.path.exists(side):
-            shutil.move(side, local_index.sidecar_path(final))
     except OSError as e:
         return _json_error(f"移动失败: {e}", 500)
+    # sidecar 失败不能回滚整个移动(文件已就位):降级为成功+警告,清掉源侧孤儿
+    warn = ""
+    side = local_index.sidecar_path(src)
+    if os.path.exists(side):
+        side_dst = local_index.sidecar_path(final)
+        try:
+            if os.path.exists(side_dst):
+                os.remove(side_dst)  # 目标已有同名 sidecar:以移动后的模型为准
+            shutil.move(side, side_dst)
+        except OSError as e:
+            warn = f"模型已移动,但 .civitai.json 迁移失败({e}),旧 sidecar 已清理,请重新关联"
+            try:
+                os.remove(side)
+            except OSError:
+                pass
     local_index.schedule_rescan()
-    return _ok(path=final, name=os.path.basename(final))
+    return web.json_response({"status": "ok", "path": final, "name": os.path.basename(final), "warning": warn})
 
 
 @_get("/civitai_studio/local/subdirs")

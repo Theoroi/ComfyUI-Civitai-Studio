@@ -292,6 +292,10 @@ function sortEnumNames(list) {
 // 底模联想输入:可自由输入 + 自动补全弹层;弹层视觉对齐 ComfyUI 原生 combo 下拉
 // (深色圆角面板/悬停高亮,走 ComfyUI 主题变量),替代浏览器 datalist 私样式。
 // input:文本框;getCands():候选数组(枚举刷新后整体替换);onCommit(val):回车/点选提交
+const _comboPickers = new Set();
+function destroyComboPickers() {
+    for (const api of [..._comboPickers]) api.destroy?.();
+}
 function attachComboComplete(input, getCands, onCommit) {
     const pop = document.createElement("div");
     pop.style.cssText = "position:fixed;z-index:10000;display:none;max-height:240px;overflow-y:auto;"
@@ -341,8 +345,21 @@ function attachComboComplete(input, getCands, onCommit) {
         else if (e.key === "Enter") { e.preventDefault(); if (hi >= 0) pick(hi); else { close(); onCommit(input.value.trim()); } }
         else if (e.key === "Escape") close();
     });
-    window.addEventListener("scroll", () => { if (pop.style.display === "block") close(); }, { capture: true });
+    // 页面滚动即收起;但弹层自身滚动(滚候选列表)不算——排除 pop 内部滚动事件
+    const onScroll = (e) => {
+        if (pop.style.display === "block" && !pop.contains(e.target)) close();
+    };
+    window.addEventListener("scroll", onScroll, { capture: true });
     if (!pop.isConnected) document.body.appendChild(pop);
+    const api = {
+        destroy() { // 节点删除/视图重建时调用,防 scroll 监听与弹层 DOM 泄漏
+            window.removeEventListener("scroll", onScroll, { capture: true });
+            pop.remove();
+            _comboPickers.delete(api);
+        },
+    };
+    _comboPickers.add(api);
+    return api;
 }
 
 function detectLang() {
@@ -933,15 +950,20 @@ function navAddBackButton(rec) {
 
 async function openBrowseFloat(modelId, opts = {}) {
     const body = openFloatDetail(!!opts._navFrom);
+    const panel = S.ui.float; // openFloatDetail 刚创建的本页面板
     body.innerHTML = `<div class="cs-expand-loading">${esc(t("statusLoading"))}</div>`;
     try {
         const model = await apiGet(`/civitai_studio/model/${encodeURIComponent(String(modelId))}`);
-        const rec = navPush(S.ui.float, null, opts._navFrom || null); // 本页入导航栈(来源页隐藏保活)
+        // 等待期间浮层被手动关闭或被新卡片替换:丢弃旧响应,防空面板入栈/抢占新面板
+        if (!panel || !panel.isConnected || S.ui.float !== panel) return;
+        const rec = navPush(panel, null, opts._navFrom || null); // 本页入导航栈(来源页隐藏保活)
         renderDetail(model, body, { ...opts, _navBack: () => rec.closeChain(), _navRec: rec });
         const title = $(".cs-float-head .cs-float-title");
         if (title) title.textContent = model.name || "";
     } catch (e) {
-        body.innerHTML = `<div class="cs-empty">${esc(t("detailLoadFailed") + e.message)}</div>`;
+        if (panel && panel.isConnected && S.ui.float === panel) {
+            body.innerHTML = `<div class="cs-empty">${esc(t("detailLoadFailed") + e.message)}</div>`;
+        }
     }
 }
 
@@ -3522,7 +3544,7 @@ app.registerExtension({
                     node.csLastId = ""; // poll 兜底会刷;这里直接刷一次,反馈即时
                     renderSelInfo(node);
                 };
-                attachComboComplete(idInput,
+                node.csSubPicker = attachComboComplete(idInput,
                     () => { try { return JSON.parse(localStorage.getItem("cs_recent_image_ids") || "[]"); } catch (e) { return []; } },
                     idCommit);
                 idInput.onblur = () => idCommit(idInput.value);
@@ -3668,6 +3690,7 @@ app.registerExtension({
                 this.onRemoved = function () {
                     clearInterval(node.csPoll);
                     if (node.csWheelGuard) window.removeEventListener("wheel", node.csWheelGuard, { capture: true });
+                    node.csSubPicker?.destroy?.(); // 补全弹层 + window scroll 监听一并清理
                     origOnRemoved?.apply(this, arguments);
                 };
                 return r;

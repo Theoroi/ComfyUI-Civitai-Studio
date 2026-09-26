@@ -164,16 +164,21 @@ class CivitaiImageSearch:
         # base_model 输入仍按 Civitai 底模筛选;/images 结果的底模名兜底
         base = base_model if base_model != "(any)" else (vdata.get("baseModel") or base_model)
         # 底模输出(曾为诱饵连线:直接输出 Civitai 底模名,连加载器必报"值不在列表")。
-        # 现改为解析本地已安装的 checkpoint 文件名:按 sidecar 的 base_model 匹配本地索引,
-        # 命中即可直连 CheckpointLoader 的 ckpt_name;未命中输出 "(none)"
+        # 现改为解析本地已安装的 checkpoint 文件名,三级匹配:version_id 精确 >
+        # model_id 同模型 > base_model 兜底;全未命中输出 "(none)"
         local_ckpt = "(none)"
         try:
-            for m in local_index.scan()["models"]:
-                if m.get("category") not in ("checkpoints", "diffusion_models", "unet"):
-                    continue
-                if ((m.get("civitai") or {}).get("base_model") or "") == base:
-                    local_ckpt = m.get("rel") or m.get("name") or "(none)"  # 子目录模型用相对路径
-                    break
+            idx = local_index.scan()
+            ckpts = [m for m in idx["models"]
+                     if m.get("category") in ("checkpoints", "diffusion_models", "unet")]
+            side = lambda m: (m.get("civitai") or {})  # noqa: E731
+            want_vid = str(vids[0]) if vids else ""
+            want_mid = str(vdata.get("modelId") or "")
+            hit = (next((m for m in ckpts if want_vid and str(side(m).get("version_id") or "") == want_vid), None)
+                   or next((m for m in ckpts if want_mid and str(side(m).get("model_id") or "") == want_mid), None)
+                   or next((m for m in ckpts if side(m).get("base_model") == base), None))
+            if hit:
+                local_ckpt = hit.get("rel") or hit.get("name") or "(none)"  # 子目录模型用相对路径
         except Exception:
             pass
         img_bytes = _sync_download(chosen.get("url"))

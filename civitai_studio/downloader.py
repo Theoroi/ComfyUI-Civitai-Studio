@@ -106,6 +106,10 @@ def _persist():
         for j in _jobs.values():
             rec = {k: j.get(k) for k in JOB_PUBLIC_FIELDS}
             rec["payload"] = j.get("payload") or {}  # retry 重新入队需要原始载荷
+            # retry 无载荷兜底重建也需要这三个字段;不进 JOB_PUBLIC_FIELDS 防 API 泄漏
+            rec["root"] = j.get("root")
+            rec["subfolder"] = j.get("subfolder")
+            rec["file_index"] = j.get("file_index", 0)
             snap.append(rec)
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
@@ -500,6 +504,7 @@ def cancel(job_id):
         return False
     if job["status"] == "queued":
         job["status"] = "cancelled"
+        _persist()
         return True
     if job["status"] in ACTIVE_STATUSES[1:]:
         _cancel_flags.add(job_id)

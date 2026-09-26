@@ -282,15 +282,14 @@ async def get_model_cached(mid):
         return hit[1]
     data = None
     try:
-        # 实测(2026-09):REST 两端点的文件名滞后于站方改名,且带时间戳穿透也无法
-        # 刷新(origin 读路径本身就是旧的);by-query 比 by-id 略新,故仍优先它,
-        # 残留的 ID 名由前端 fileDisplayName 用 metadata.fp 兜底
         q = await get_json(f"/models?ids={key}")
         items = q.get("items") if isinstance(q, dict) else None
-        if items:
+        # 身份校验:端点若忽略 ids 参数返回默认列表,绝不能把错模型写进缓存/sidecar
+        if items and str((items[0] or {}).get("id") or "") == key:
             data = items[0]
-    except Exception:
-        data = None  # 端点/镜像不支持时回退
+    except (CivitaiError, asyncio.TimeoutError, aiohttp.ClientError) as e:
+        print(f"[Civitai-Studio] ?ids= 查询失败,回退 by-id: {e}")
+        data = None
     if data is None:
         data = await get_json(f"/models/{key}")
     if len(_model_cache) >= _MODEL_CACHE_MAX:
