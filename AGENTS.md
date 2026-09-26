@@ -2,7 +2,7 @@
 
 ## 版本号 bump(改名)必须先经用户确认
 
-- **不要在每次改动后默认重命名 `js/civitai_studio_app_v0_X_Y.js` 来 bump 版本号**。文件改名会导致 ComfyUI 重新加载模块、用户侧 UI 状态(画布上的浮层/面板)被重置。
+- **不要在每次改动后默认重命名 `js/civitai_studio_app.js` 来 bump 版本号**(主文件为固定名,不再带 v0_X_Y 后缀;历史带版本号的副本已删除)。文件改名会导致 ComfyUI 重新加载模块、用户侧 UI 状态(画布上的浮层/面板)被重置。
 - 只有用户在对话中**明确确认** bump(例如"bump 一下"/"发新版本")后才改名并同步更新 `docs/civitai-benchmark.md` 里的文件名引用。
 - 日常改动后的缓存刷新,用不改名的方式(顺序执行):
   1. 让页面 `fetch(JS_URL, { cache: "reload" })` 刷新该 URL 的缓存条目;

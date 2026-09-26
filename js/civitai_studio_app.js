@@ -110,6 +110,7 @@ const STR = {
         stDone: "完成 ✔", stCancelled: "已取消", stError: "失败: ",
         cancelBtn: "取消" + "", cancelFailed: "取消失败", clearFailed: "清除失败",
         retryResume: "重试(续传)", retryTip: "从已传输的字节处继续下载(.part 断点)", retryFailed: "重试失败",
+        scopeLabel: "范围", scopeAll: "所有 ComfyUI 实例",
         revealFile: "查看本地文件", toLocal: "本地库", moveBtn: "移动",
         moveTitle: "移动 — {name}", movedToast: "已移动", moveFailed: "移动失败",
         settingsTitle: "⚙ Civitai Studio 设置",
@@ -222,6 +223,7 @@ const STR = {
         stDone: "Done ✔", stCancelled: "Cancelled", stError: "Failed: ",
         cancelBtn: "Cancel", cancelFailed: "Cancel failed", clearFailed: "Clear failed",
         retryResume: "Retry (resume)", retryTip: "Resume from the transferred bytes (.part breakpoint)", retryFailed: "Retry failed",
+        scopeLabel: "Scope", scopeAll: "All ComfyUI instances",
         revealFile: "Show in folder", toLocal: "Local library", moveBtn: "Move",
         moveTitle: "Move — {name}", movedToast: "Moved", moveFailed: "Move failed",
         settingsTitle: "⚙ Civitai Studio settings",
@@ -554,6 +556,15 @@ function showModal(innerHTML, cls, keepNav) {
     const escHandler = (e) => { if (e.key === "Escape" && panel.style.display !== "none") panel.querySelector(".cs-float-close").click(); };
     document.addEventListener("keydown", escHandler);
     panel.querySelector(".cs-float-close").onclick = close;
+    // 所有悬浮窗统一左上角"返回":无导航上下文时等价关闭;导航浮层由 navPush 改绑
+    const head0 = panel.querySelector(".cs-float-head");
+    if (head0) {
+        const bk = document.createElement("button");
+        bk.className = "cs-float-back";
+        bk.textContent = S.lang === "zh" ? "← 返回" : "← Back";
+        bk.onclick = close;
+        head0.insertBefore(bk, head0.firstChild);
+    }
     const api = { overlay: panel, box: panel.querySelector(".cs-float-body"), close };
     (S.ui.floatModals = S.ui.floatModals || []).push(api);
     return api;
@@ -895,21 +906,27 @@ function navPush(panel, modalApi, prev) {
     return rec;
 }
 
+function navBack(rec) {
+    // "返回":有来路回退一步(当前页销毁、来源页还原);无来路=整链关闭
+    if (!rec.prev) { rec.closeChain(); return; }
+    const prev = rec.prev;
+    rec.prev = null;
+    rec.closeSingle();
+    prev.panel.style.display = "";
+}
+
 function navAddBackButton(rec) {
     const head = rec.panel.querySelector(".cs-float-head");
-    if (!head || head.querySelector(".cs-float-back")) return;
-    const btn = document.createElement("button");
-    btn.className = "cs-float-back";
-    btn.textContent = S.lang === "zh" ? "← 返回" : "← Back";
+    if (!head) return;
+    let btn = head.querySelector(".cs-float-back");
+    if (!btn) { // showModal 已为所有浮层建默认"返回",这里改绑;防御性兜底创建
+        btn = document.createElement("button");
+        btn.className = "cs-float-back";
+        btn.textContent = S.lang === "zh" ? "← 返回" : "← Back";
+        head.insertBefore(btn, head.firstChild);
+    }
     btn.title = rec.prev ? (S.lang === "zh" ? "返回上一信息页" : "Back to previous page") : (S.lang === "zh" ? "关闭" : "Close");
-    btn.onclick = () => {
-        if (!rec.prev) { rec.closeChain(); return; }
-        const prev = rec.prev;
-        rec.prev = null;
-        rec.closeSingle(); // 只销毁当前页
-        prev.panel.style.display = ""; // 还原隐藏保活的上一信息页(滚动/状态原样)
-    };
-    head.insertBefore(btn, head.firstChild);
+    btn.onclick = () => navBack(rec);
 }
 
 async function openBrowseFloat(modelId, opts = {}) {
@@ -1089,7 +1106,7 @@ async function renderVersion(version, model, box, opts = {}) {
     $$("[data-file-idx]", body).forEach((btn) => {
         btn.onclick = () => {
             const idx = parseInt(btn.dataset.fileIdx, 10);
-            openDownloadDialog({ model, version, fileIndex: idx });
+            openDownloadDialog({ model, version, fileIndex: idx, _navFrom: opts._navRec });
         };
     });
     $$(".cs-gallery-item img", body).forEach((img) => {
@@ -1487,7 +1504,7 @@ function applyRecipeToWorkflow(meta) {
 }
 
 // ---------- 下载对话框 ----------
-async function openDownloadDialog({ model, version, fileIndex = null, defaultRoot = "", defaultSub = "" }) {
+async function openDownloadDialog({ model, version, fileIndex = null, defaultRoot = "", defaultSub = "", _navFrom = null }) {
     if (!version) {
         toast("error", t("cantDownload"), t("versionNotFound"));
         return;
@@ -1519,12 +1536,18 @@ async function openDownloadDialog({ model, version, fileIndex = null, defaultRoo
     const preRoot = matched ? matched.root : destinations[0].root;
     const curType = model.type || "Other";
     const typeKeys = [...new Set([curType, ...Object.keys(typeMap)])];
-    const destsFor = (tp) => {
-        if (tp === curType) return destinations;
+    const scopeOpts = [["shared", "ComfyUI-Shared"], ["installs", "ComfyUI-Installs"], ["all", t("scopeAll")]];
+    // 范围:按后端路径归类过滤(shared/installs);all = 全部实例
+    const destsFor = (tp, scope) => {
         const keys = typeMap[tp];
-        const list = keys ? allDests.filter((d) => keys.includes(d.key)) : allDests;
-        return list.length ? list : destinations;
+        let list = tp === curType && destinations.length
+            ? destinations
+            : (keys ? allDests.filter((d) => keys.includes(d.key)) : allDests);
+        if (scope !== "all") list = list.filter((d) => d.scope === scope);
+        return list;
     };
+    // 默认范围取当前目标目录所在 scope(用户环境通常是 ComfyUI-Shared)
+    const preScope = (destinations.find((d) => d.root === preRoot) || allDests.find((d) => d.root === preRoot) || {}).scope || "shared";
     const m = showModal(`
         <h3 class="cs-modal-title">${esc(t("dlDialogTitle", { name: version.name || model.name }))}</h3>
         <div class="cs-form">
@@ -1538,10 +1561,11 @@ async function openDownloadDialog({ model, version, fileIndex = null, defaultRoo
             <label>${esc(t("modelTypeLabel"))}
                 <select id="cs-dl-type">${typeKeys.map((tp) => `<option value="${esc(tp)}" ${tp === curType ? "selected" : ""}>${esc(tp)}</option>`).join("")}</select>
             </label>` : ""}
+            <label>${esc(t("scopeLabel"))}
+                <select id="cs-dl-scope">${scopeOpts.map(([v, label]) => `<option value="${v}" ${v === preScope ? "selected" : ""}>${esc(label)}</option>`).join("")}</select>
+            </label>
             <label>${esc(t("targetFolder"))}
-                <select id="cs-dl-root">${destinations.map((d) =>
-                    `<option value="${esc(d.root)}" ${d.root === preRoot ? "selected" : ""}>${esc(d.label)}</option>`).join("")}
-                </select>
+                <select id="cs-dl-root"></select>
             </label>
             <label>${esc(t("subfolder"))}
                 <input id="cs-dl-sub" type="text" placeholder="${esc(t("subfolderPh"))}" value="${esc(defaultSub)}"/>
@@ -1554,8 +1578,9 @@ async function openDownloadDialog({ model, version, fileIndex = null, defaultRoo
                 <button class="cs-btn" data-act="cancel">${esc(t("cancel"))}</button>
                 <button class="cs-btn cs-btn-primary" data-act="ok">${esc(t("startDownload"))}</button>
             </div>
-        </div>`);
-    $("[data-act=cancel]", m.box).onclick = m.close;
+        </div>`, null, !!_navFrom);
+    const rec = navPush(m.overlay, m, _navFrom || null); // 入导航栈:开始下载/取消后"返回"回来源页
+    $("[data-act=cancel]", m.box).onclick = () => navBack(rec);
     const fileSel = $("#cs-dl-file", m.box);
     if (fileSel) {
         fileSel.onchange = () => {
@@ -1563,17 +1588,20 @@ async function openDownloadDialog({ model, version, fileIndex = null, defaultRoo
             if (f) $("#cs-dl-name", m.box).value = f.name;
         };
     }
-    // 切类型 → 按映射重建目标目录;原目录仍在清单中则保持选中
+    // 切类型/范围 → 重建目标目录;原目录仍在清单中则保持选中(初始以 preRoot 为准)
     const typeSel = $("#cs-dl-type", m.box);
-    if (typeSel) {
-        typeSel.onchange = () => {
-            const rootSel = $("#cs-dl-root", m.box);
-            const cur = rootSel.value;
-            const list = destsFor(typeSel.value);
-            rootSel.innerHTML = list.map((d) =>
-                `<option value="${esc(d.root)}" ${d.root === cur ? "selected" : ""}>${esc(d.label)}</option>`).join("");
-        };
-    }
+    const scopeSel = $("#cs-dl-scope", m.box);
+    const rootSel = $("#cs-dl-root", m.box);
+    const rebuildRoots = (seedCur) => {
+        const cur = seedCur !== undefined ? seedCur : rootSel.value;
+        const list = destsFor(typeSel ? typeSel.value : curType, scopeSel ? scopeSel.value : "all");
+        rootSel.innerHTML = list.length
+            ? list.map((d) => `<option value="${esc(d.root)}" ${d.root === cur ? "selected" : ""}>${esc(d.label)}</option>`).join("")
+            : `<option value="">${esc(S.lang === "zh" ? "(此范围无可用目录)" : "(no folders in this scope)")}</option>`;
+    };
+    rebuildRoots(preRoot);
+    if (typeSel) typeSel.onchange = () => rebuildRoots();
+    if (scopeSel) scopeSel.onchange = () => rebuildRoots();
     $("[data-act=ok]", m.box).onclick = async () => {
         const btn = $("[data-act=ok]", m.box);
         btn.disabled = true;
@@ -1592,12 +1620,11 @@ async function openDownloadDialog({ model, version, fileIndex = null, defaultRoo
                 filename: $("#cs-dl-name", m.box).value.trim(),
             };
             const res = await apiPost("/civitai_studio/download", body);
-            m.close();
             toast("success", t("queuedToast"), `${model.name} — ${version.name}`);
             if (res.job) S.dl.jobs.unshift(res.job); // 立即入列,不等下一次轮询
             lastPollTs = 0;
-            switchTab("downloads");
-            pollDownloads();
+            pollDownloads(); // 只刷新队列角标,不跳下载页
+            navBack(rec); // 触发"返回":关窗回到来源页(一般是模型页)
         } catch (e) {
             toast("error", t("queueFailed"), e.message);
             btn.disabled = false;
@@ -2511,18 +2538,38 @@ function buildBrowseView(root) {
 }
 
 // 移动模型到其它已注册目录:选目标根+子文件夹,文件与 .civitai.json 一并迁移
+// 移动模型到其它已注册目录:类型/范围/目标目录(根+子文件夹),文件与 .civitai.json 一并迁移
 async function openMoveDialog(m) {
-    let dests = [];
+    let allDests = [], typeMap = {};
     try {
         const data = await apiGet("/civitai_studio/destinations?type=all");
-        dests = (data.destinations || []).filter((d) => d.root !== m.root);
+        allDests = data.destinations || [];
+        typeMap = data.type_map || {};
     } catch (e) { /* 空 → 下方报错返回 */ }
-    if (!dests.length) { toast("error", t("moveFailed"), t("noRegFolders")); return; }
+    if (!allDests.length) { toast("error", t("moveFailed"), t("noRegFolders")); return; }
+    // 按文件当前目录反推默认类型(typeMap 中第一个包含该目录 key 的类型)
+    const preType = Object.keys(typeMap).find((tp) => typeMap[tp].includes(m.category)) || "";
+    const typeKeys = [...new Set([...(preType ? [preType] : []), ...Object.keys(typeMap)])];
+    const scopeOpts = [["shared", "ComfyUI-Shared"], ["installs", "ComfyUI-Installs"], ["all", t("scopeAll")]];
+    const curScope = (allDests.find((d) => d.root === m.root) || {}).scope || "shared";
+    const destsFor = (tp, scope) => {
+        const keys = typeMap[tp];
+        let list = keys ? allDests.filter((d) => keys.includes(d.key)) : allDests;
+        if (scope !== "all") list = list.filter((d) => d.scope === scope);
+        return list.filter((d) => d.root !== m.root); // 排除当前位置
+    };
     const m2 = showModal(`
         <h3 class="cs-modal-title">${esc(t("moveTitle", { name: m.name }))}</h3>
         <div class="cs-form">
+            ${typeKeys.length > 1 ? `
+            <label>${esc(t("modelTypeLabel"))}
+                <select id="cs-mv-type">${typeKeys.map((tp) => `<option value="${esc(tp)}" ${tp === preType ? "selected" : ""}>${esc(tp)}</option>`).join("")}</select>
+            </label>` : ""}
+            <label>${esc(t("scopeLabel"))}
+                <select id="cs-mv-scope">${scopeOpts.map(([v, label]) => `<option value="${v}" ${v === curScope ? "selected" : ""}>${esc(label)}</option>`).join("")}</select>
+            </label>
             <label>${esc(t("targetFolder"))}
-                <select id="cs-mv-root">${dests.map((d, i) => `<option value="${i}">${esc(d.label)}</option>`).join("")}</select>
+                <select id="cs-mv-root"></select>
             </label>
             <label>${esc(t("subfolder"))}
                 <input id="cs-mv-sub" type="text" placeholder="${esc(t("subfolderPh"))}"/>
@@ -2532,12 +2579,28 @@ async function openMoveDialog(m) {
                 <button class="cs-btn cs-btn-primary" data-act="ok">${esc(t("moveBtn"))}</button>
             </div>
         </div>`);
+    const typeSel = $("#cs-mv-type", m2.box);
+    const scopeSel = $("#cs-mv-scope", m2.box);
+    const rootSel = $("#cs-mv-root", m2.box);
+    let lastList = [];
+    const rebuildRoots = () => {
+        const tp = typeSel ? typeSel.value : preType;
+        const scope = scopeSel ? scopeSel.value : "all";
+        lastList = destsFor(tp, scope);
+        rootSel.innerHTML = lastList.length
+            ? lastList.map((d, i) => `<option value="${i}">${esc(d.label)}</option>`).join("")
+            : `<option value="">${esc(S.lang === "zh" ? "(此范围无可用目录)" : "(no folders in this scope)")}</option>`;
+    };
+    rebuildRoots();
+    if (typeSel) typeSel.onchange = rebuildRoots;
+    if (scopeSel) scopeSel.onchange = rebuildRoots;
     $("[data-act=cancel]", m2.box).onclick = m2.close;
     $("[data-act=ok]", m2.box).onclick = async () => {
         const btn = $("[data-act=ok]", m2.box);
+        const d = lastList[parseInt(rootSel.value, 10)];
+        if (!d) { toast("error", t("moveFailed"), t("noRegFolders")); return; }
         btn.disabled = true;
         try {
-            const d = dests[parseInt($("#cs-mv-root", m2.box).value, 10)] || dests[0];
             await apiPost("/civitai_studio/local/move", {
                 category: m.category, rel: m.rel,
                 root: d.root, subfolder: $("#cs-mv-sub", m2.box).value.trim(),

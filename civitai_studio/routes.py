@@ -525,6 +525,16 @@ async def enums(request):
     return web.json_response(_enums_cache["data"])
 
 
+def _scope_of(root: str) -> str:
+    """Comfy Desktop 多实例:按路径归类 scope(Shared 共享 / Installs 安装实例 / 其它)."""
+    r = str(root).replace("/", "\\").lower()
+    if "comfyui-shared" in r:
+        return "shared"
+    if "comfyui-installs" in r:
+        return "installs"
+    return "other"
+
+
 @_get("/civitai_studio/destinations")
 async def destinations(request):
     ctype = request.query.get("type", "Checkpoint")
@@ -545,7 +555,7 @@ async def destinations(request):
             if rp in seen_roots:
                 continue
             seen_roots.add(rp)
-            out.append({"key": key, "root": root, "label": f"{key} · {root}"})
+            out.append({"key": key, "root": root, "label": f"{key} · {root}", "scope": _scope_of(root)})
     resp: dict = {"destinations": out}
     if ctype == "all":
         # 下载框"模型类型"手动覆盖用:Civitai 类型 → 目录 key 映射
