@@ -126,6 +126,12 @@ const STR = {
         mirrorLabel: "API 站点(默认 civitai.com)", siteCustom: "自定义",
         mirrorPh: "留空 = https://civitai.red",
         concLabel: "下载并发数(1-4)",
+        cacheMaxLabel: "磁盘缓存上限 MB(50-2000)",
+        cacheUsageFmt: "缓存占用:{mb} MB / 上限 {max} MB", cacheUsageLoading: "缓存占用:统计中…",
+        clearCacheBtn: "清空缓存", deepScanBtn: "深度重扫",
+        cacheCleared: "缓存已清空,索引已重建",
+        deepScanDone: "重扫完成:共 {total} 项,复用 {reused},重读 {read},耗时 {dur}s",
+        deepScanFailed: "深度重扫失败",
         pimgLabel: "预览图经服务端中转(直连打不开图片时开启)",
         hashLabel: "下载完成后校验 SHA256",
         pdescLabel: "说明落盘:把 Civitai 说明/标签/封面写进 .civitai.json(离线可看,默认关)",
@@ -241,6 +247,12 @@ const STR = {
         mirrorLabel: "API site (default civitai.com)", siteCustom: "Custom",
         mirrorPh: "empty = https://civitai.red",
         concLabel: "Download concurrency (1-4)",
+        cacheMaxLabel: "Disk cache limit MB (50-2000)",
+        cacheUsageFmt: "Cache usage: {mb} MB / limit {max} MB", cacheUsageLoading: "Cache usage: calculating…",
+        clearCacheBtn: "Clear cache", deepScanBtn: "Deep rescan",
+        cacheCleared: "Cache cleared, index rebuilt",
+        deepScanDone: "Rescan done: {total} items, {reused} reused, {read} re-read, {dur}s",
+        deepScanFailed: "Deep rescan failed",
         pimgLabel: "Route preview images through the backend (enable if direct loading fails)",
         hashLabel: "Verify SHA256 after download",
         pdescLabel: "Persist description: write Civitai description/tags/cover into .civitai.json (offline viewing, default off)",
@@ -2453,6 +2465,15 @@ async function openSettings() {
             <label>${esc(t("concLabel"))}
                 <input id="cs-set-conc" type="number" min="1" max="4" value="${cfg.max_concurrent || 1}"/>
             </label>
+            <label>${esc(t("cacheMaxLabel"))}
+                <input id="cs-set-cachemb" type="number" min="50" max="2000" value="${cfg.cache_max_mb || 500}"/>
+                <span class="cs-form-hint" id="cs-cache-usage">${esc(t("cacheUsageLoading"))}</span>
+            </label>
+            <div class="cs-form-hint" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <button class="cs-btn" id="cs-set-clearcache" type="button">${esc(t("clearCacheBtn"))}</button>
+                <button class="cs-btn" id="cs-set-deepscan" type="button">${esc(t("deepScanBtn"))}</button>
+                <span id="cs-set-maint-msg"></span>
+            </div>
             <label class="cs-check"><input id="cs-set-pimg" type="checkbox" ${cfg.proxy_images ? "checked" : ""}/> ${esc(t("pimgLabel"))}</label>
             <label class="cs-check"><input id="cs-set-hash" type="checkbox" ${cfg.verify_hash ? "checked" : ""}/> ${esc(t("hashLabel"))}</label>
             <label class="cs-check"><input id="cs-set-pdesc" type="checkbox" ${cfg.persist_description ? "checked" : ""}/> ${esc(t("pdescLabel"))}</label>
@@ -2477,6 +2498,34 @@ async function openSettings() {
     siteSel.addEventListener("change", () => {
         mirrorInput.style.display = siteSel.value === "__custom__" ? "block" : "none";
     });
+    // 缓存占用 + 维护按钮(清空缓存/深度重扫)
+    const usageFmt = (d) => t("cacheUsageFmt", { mb: ((d.used_bytes || 0) / 1048576).toFixed(1), max: d.max_mb || 500 });
+    apiGet("/civitai_studio/cache_usage").then((d) => {
+        const el = $("#cs-cache-usage", m.box);
+        if (el) el.textContent = usageFmt(d);
+    }).catch((e) => {
+        const el = $("#cs-cache-usage", m.box);
+        if (el) el.textContent = t("readCfgFailed") + ": " + e.message;
+    });
+    const maintMsg = $("#cs-set-maint-msg", m.box);
+    $("#cs-set-clearcache", m.box).onclick = async () => {
+        try {
+            const d = await apiPost("/civitai_studio/cache_clear");
+            const el = $("#cs-cache-usage", m.box);
+            if (el) el.textContent = usageFmt(d);
+            maintMsg.textContent = t("cacheCleared");
+        } catch (e) {
+            maintMsg.textContent = t("saveFailed") + ": " + e.message;
+        }
+    };
+    $("#cs-set-deepscan", m.box).onclick = async () => {
+        try {
+            const d = await apiPost("/civitai_studio/local/deep_rescan");
+            maintMsg.textContent = t("deepScanDone", (d && d.scan_stats) || {});
+        } catch (e) {
+            maintMsg.textContent = t("deepScanFailed") + ": " + e.message;
+        }
+    };
     $("[data-act=ok]", m.box).onclick = async () => {
         const mirror = siteSel.value === "__custom__" ? mirrorInput.value.trim()
             : (siteSel.value === "https://civitai.com" ? "" : siteSel.value); // 留空 = 默认 civitai.com
@@ -2484,6 +2533,7 @@ async function openSettings() {
             proxy: $("#cs-set-proxy", m.box).value.trim(),
             mirror,
             max_concurrent: parseInt($("#cs-set-conc", m.box).value, 10) || 1,
+            cache_max_mb: parseInt($("#cs-set-cachemb", m.box).value, 10) || 500,
             proxy_images: $("#cs-set-pimg", m.box).checked,
             verify_hash: $("#cs-set-hash", m.box).checked,
             persist_description: $("#cs-set-pdesc", m.box).checked,

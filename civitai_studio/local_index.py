@@ -13,6 +13,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import folder_paths
 
+from . import cache_store
+
 # 专用线程池:scan/sha256 等重活不挤占 ComfyUI 共享默认线程池
 _EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="civitai-studio")
 
@@ -73,15 +75,35 @@ def write_sidecar(model_path, meta):
     try:
         with open(sidecar_path(model_path), "w", encoding="utf-8") as f:
             json.dump(meta, f, ensure_ascii=False, indent=2)
+        cache_store.forget_fingerprint(model_path)  # sidecar 变了,指纹作废强制重读
         return True
     except OSError:
         return False
 
 
-def _scan_unlocked(force):
+def _sidecar_blob(meta):
+    return json.dumps(meta, ensure_ascii=False) if meta is not None else None
+
+
+def _stat_optional(path):
+    try:
+        return os.stat(path)
+    except OSError:
+        return None
+
+
+def _scan_unlocked(deep=False):
+    """指纹增量化:模型文件与 sidecar 的 size/mtime 都未变 → 复用上次解析结果."""
     global _cache
+    t0 = time.time()
+    fp = {} if deep else cache_store.fingerprints()
+    if deep:
+        cache_store.clear_fingerprints()
     models = []
-    seen = set()
+    seen = set()  # item_id 去重
+    alive = set()  # 成功入索引的完整路径(同步指纹表用)
+    changed = []  # (path, size, mtime, sc_size, sc_mtime, sidecar_json|None) 待写回
+    reused = 0
     truncated = False
     for key in categories():
         for root in roots_for(key):
@@ -104,6 +126,25 @@ def _scan_unlocked(force):
                         st = os.stat(full)
                     except OSError:
                         continue
+                    sst = _stat_optional(sidecar_path(full))
+                    sc_key = (sst.st_size, sst.st_mtime) if sst else (None, None)
+                    hit = fp.get(full)
+                    if (hit is not None and hit[0] == st.st_size
+                            and hit[1] == st.st_mtime
+                            and (hit[2], hit[3]) == sc_key):
+                        blob = cache_store.sidecar_blob(full)
+                        try:
+                            civitai = json.loads(blob) if blob is not None else None
+                            reused += 1
+                        except ValueError:
+                            civitai = read_sidecar(full)
+                            changed.append((full, st.st_size, st.st_mtime,
+                                            sc_key[0], sc_key[1], _sidecar_blob(civitai)))
+                    else:
+                        civitai = read_sidecar(full)
+                        changed.append((full, st.st_size, st.st_mtime,
+                                        sc_key[0], sc_key[1], _sidecar_blob(civitai)))
+                    alive.add(full)
                     models.append({
                         "id": item_id,
                         "category": key,
@@ -113,7 +154,7 @@ def _scan_unlocked(force):
                         "path": full,
                         "size": st.st_size,
                         "mtime": st.st_mtime,
-                        "civitai": read_sidecar(full),
+                        "civitai": civitai,
                     })
                 if truncated:
                     break
@@ -121,6 +162,8 @@ def _scan_unlocked(force):
                 break
         if truncated:
             break
+    # truncated 时 alive 不完整:不清库,保住没扫到文件的指纹(下轮接着增量)
+    cache_store.sync_fingerprints(changed, None if truncated else alive)
     by_version = {}
     by_name = {}
     by_id = {}
@@ -134,16 +177,18 @@ def _scan_unlocked(force):
         by_name.setdefault(m["name"].lower(), []).append(m)
     # ts 取扫描完成时刻(慢盘上扫描耗时不计入 TTL);整体原子替换快照
     _cache = {"models": models, "by_version": by_version, "by_name": by_name,
-              "by_id": by_id, "ts": time.time(), "truncated": truncated}
+              "by_id": by_id, "ts": time.time(), "truncated": truncated,
+              "stats": {"total": len(models), "reused": reused, "read": len(changed),
+                        "dur": round(time.time() - t0, 2), "deep": bool(deep)}}
     return _cache
 
 
-def scan(force=False):
+def scan(force=False, deep=False):
     global _cache
     with _lock:
-        if _cache is not None and not force and time.time() - _cache["ts"] < SCAN_TTL:
+        if _cache is not None and not force and not deep and time.time() - _cache["ts"] < SCAN_TTL:
             return _cache  # 空库同样受 TTL 保护,避免每请求全扫
-        return _scan_unlocked(force)
+        return _scan_unlocked(deep)
 
 
 _rescan_dirty = False
