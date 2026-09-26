@@ -111,6 +111,7 @@ const STR = {
         cancelBtn: "取消" + "", cancelFailed: "取消失败", clearFailed: "清除失败",
         retryResume: "重试(续传)", retryTip: "从已传输的字节处继续下载(.part 断点)", retryFailed: "重试失败",
         scopeLabel: "实例", scopeAll: "所有实例",
+        browseBtn: "浏览…", subdirPickTitle: "选择子文件夹", subdirRoot: "(目标目录根)", browseFailed: "打开失败",
         revealFile: "查看本地文件", toLocal: "本地库", moveBtn: "移动",
         moveTitle: "移动 — {name}", movedToast: "已移动", moveFailed: "移动失败",
         settingsTitle: "⚙ Civitai Studio 设置",
@@ -224,6 +225,7 @@ const STR = {
         cancelBtn: "Cancel", cancelFailed: "Cancel failed", clearFailed: "Clear failed",
         retryResume: "Retry (resume)", retryTip: "Resume from the transferred bytes (.part breakpoint)", retryFailed: "Retry failed",
         scopeLabel: "Instance", scopeAll: "All instances",
+        browseBtn: "Browse…", subdirPickTitle: "Pick subfolder", subdirRoot: "(root)", browseFailed: "Open failed",
         revealFile: "Show in folder", toLocal: "Local library", moveBtn: "Move",
         moveTitle: "Move — {name}", movedToast: "Moved", moveFailed: "Move failed",
         settingsTitle: "⚙ Civitai Studio settings",
@@ -1573,7 +1575,10 @@ async function openDownloadDialog({ model, version, fileIndex = null, defaultRoo
                 <select id="cs-dl-root"></select>
             </label>
             <label>${esc(t("subfolder"))}
-                <input id="cs-dl-sub" type="text" placeholder="${esc(t("subfolderPh"))}" value="${esc(defaultSub)}"/>
+                <div style="display:flex;gap:4px;align-items:center;">
+                    <input id="cs-dl-sub" type="text" placeholder="${esc(t("subfolderPh"))}" value="${esc(defaultSub)}" style="flex:1;min-width:0;"/>
+                    <button class="cs-btn" id="cs-dl-sub-browse" type="button">${esc(t("browseBtn"))}</button>
+                </div>
             </label>
             <label>${esc(t("saveName"))}
                 <input id="cs-dl-name" type="text" value="${esc(fileDisplayName(files[selIdx]) || (version.name + ".safetensors"))}"/>
@@ -1607,6 +1612,9 @@ async function openDownloadDialog({ model, version, fileIndex = null, defaultRoo
     rebuildRoots(preRoot);
     if (typeSel) typeSel.onchange = () => rebuildRoots();
     if (scopeSel) scopeSel.onchange = () => rebuildRoots();
+    $("#cs-dl-sub-browse", m.box).onclick = () => openSubdirPicker(() => rootSel.value, (p) => {
+        $("#cs-dl-sub", m.box).value = p;
+    });
     $("[data-act=ok]", m.box).onclick = async () => {
         const btn = $("[data-act=ok]", m.box);
         btn.disabled = true;
@@ -2542,6 +2550,26 @@ function buildBrowseView(root) {
     });
 }
 
+// 子文件夹浏览:列出目标根下已存在的子目录(深度≤3),点选回填输入框(可手输多级叠加)
+async function openSubdirPicker(getRoot, onPick) {
+    const root = getRoot();
+    if (!root) { toast("error", t("browseFailed"), t("noRegFolders")); return; }
+    let dirs = [];
+    try {
+        const d = await apiGet(`/civitai_studio/local/subdirs?root=${encodeURIComponent(root)}`);
+        dirs = d.subdirs || [];
+    } catch (e) { toast("error", t("browseFailed"), e.message); return; }
+    const m2 = showModal(`
+        <h3 class="cs-modal-title">${esc(t("subdirPickTitle"))}</h3>
+        <div style="max-height:300px;overflow-y:auto;display:flex;flex-direction:column;gap:3px;">
+            <button class="cs-btn" data-p="">${esc(t("subdirRoot"))}</button>
+            ${dirs.map((d2) => `<button class="cs-btn" data-p="${esc(d2)}">${esc(d2)}</button>`).join("")}
+        </div>`);
+    $$("[data-p]", m2.box).forEach((b) => {
+        b.onclick = () => { onPick(b.dataset.p); m2.close(); };
+    });
+}
+
 // 移动模型到其它已注册目录:类型/实例/目标目录(根+子文件夹),文件与 .civitai.json 一并迁移
 async function openMoveDialog(m) {
     let allDests = [], typeMap = {}, destScopes = [];
@@ -2577,7 +2605,10 @@ async function openMoveDialog(m) {
                 <select id="cs-mv-root"></select>
             </label>
             <label>${esc(t("subfolder"))}
-                <input id="cs-mv-sub" type="text" placeholder="${esc(t("subfolderPh"))}"/>
+                <div style="display:flex;gap:4px;align-items:center;">
+                    <input id="cs-mv-sub" type="text" placeholder="${esc(t("subfolderPh"))}" style="flex:1;min-width:0;"/>
+                    <button class="cs-btn" id="cs-mv-sub-browse" type="button">${esc(t("browseBtn"))}</button>
+                </div>
             </label>
             <div class="cs-modal-actions">
                 <button class="cs-btn" data-act="cancel">${esc(t("cancel"))}</button>
@@ -2599,6 +2630,9 @@ async function openMoveDialog(m) {
     rebuildRoots();
     if (typeSel) typeSel.onchange = rebuildRoots;
     if (scopeSel) scopeSel.onchange = rebuildRoots;
+    $("#cs-mv-sub-browse", m2.box).onclick = () => openSubdirPicker(() => (lastList[parseInt(rootSel.value, 10)] || {}).root || "", (p) => {
+        $("#cs-mv-sub", m2.box).value = p;
+    });
     $("[data-act=cancel]", m2.box).onclick = m2.close;
     $("[data-act=ok]", m2.box).onclick = async () => {
         const btn = $("[data-act=ok]", m2.box);

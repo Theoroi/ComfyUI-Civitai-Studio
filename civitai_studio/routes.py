@@ -745,6 +745,33 @@ async def local_move(request):
     return _ok(path=final, name=os.path.basename(final))
 
 
+@_get("/civitai_studio/local/subdirs")
+async def local_subdirs(request):
+    """目标根下已存在的相对子目录(深度≤3,上限 500),供下载/移动对话框的浏览按钮."""
+    root = os.path.normpath(str(request.query.get("root", "")))
+    ok = any(os.path.normpath(r) == root
+             for key in local_index.categories() for r in local_index.roots_for(key))
+    if not ok:
+        return _json_error("目录不在已注册的模型目录内", 400)
+    out, queue = [], [(root, "", 0)]
+    while queue and len(out) < 500:
+        base, rel, depth = queue.pop(0)
+        try:
+            entries = sorted(os.listdir(base))
+        except OSError:
+            continue
+        for name in entries:
+            if name.startswith("."):
+                continue
+            p = os.path.join(base, name)
+            if os.path.isdir(p):
+                r = f"{rel}/{name}" if rel else name
+                out.append(r)
+                if depth + 1 < 3:
+                    queue.append((p, r, depth + 1))
+    return web.json_response({"subdirs": sorted(out)})
+
+
 @_post("/civitai_studio/local/rename")
 async def local_rename(request):
     body = await _read_json_dict(request)
