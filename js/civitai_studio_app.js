@@ -2137,7 +2137,7 @@ function renderGallery(reset) {
         const mediaEl = item.querySelector("img,video");
         if (mediaEl) mediaEl.onclick = () => showImageMeta(img);
         if (isVideoItem(img)) appendPlayBadge(item); // 半透明播放三角标
-        appendMissingMarks(item, img.meta); // 缺失生成参数的三色感叹号(与节点条共用)
+        appendMissingMarks(item, img); // 缺失生成参数的三色感叹号(与节点条共用)
         item.querySelector(".cs-save-btn").onclick = (ev) => {
             ev.stopPropagation();
             saveImageToOutput(img.url, ev.target);
@@ -2901,14 +2901,17 @@ function cdnThumb(url, w = 256) {
     return url.replace("/original=true/", `/width=${w}/`);
 }
 
-// 缺失生成参数的三色感叹号(prompt红/lora黄/model绿),纵列在缩略图右上角;节点条与画廊共用
-function appendMissingMarks(cell, rawMeta) {
-    let meta = rawMeta || {};
+// 缺失生成参数的三色感叹号(prompt红/lora黄/model绿),纵列在缩略图右上角;节点条与画廊共用。
+// item.modelVersionIds 非空 = 资源链路可查(lora/底模信息存在),不显示黄/绿感叹号
+function appendMissingMarks(cell, item) {
+    item = item || {};
+    let meta = item.meta || {};
     meta = unwrapMeta(meta);
+    const hasVids = Array.isArray(item.modelVersionIds) && item.modelVersionIds.length > 0;
     const miss = [];
     if (!meta.prompt) miss.push("#e2836b");
-    if (!(meta.resources || []).some((r) => (r.type || "lora").toLowerCase() === "lora")) miss.push("#e2b96b");
-    if (!(meta["Model hash"] || meta["Model"] || (meta.hashes || {}).model)) miss.push("#8fd4a0");
+    if (!hasVids && !(meta.resources || []).some((r) => (r.type || "lora").toLowerCase() === "lora")) miss.push("#e2b96b");
+    if (!hasVids && !(meta["Model hash"] || meta["Model"] || (meta.hashes || {}).model)) miss.push("#8fd4a0");
     if (!miss.length) return;
     const b = document.createElement("div");
     b.style.cssText = "position:absolute;top:3px;right:3px;display:flex;flex-direction:column;gap:2px;z-index:2;";
@@ -3261,7 +3264,7 @@ function renderNodeThumbs(node) {
             cell.appendChild(im);
         }
         if (idw?.value && String(idw.value) === String(c.it.id)) cell.style.borderColor = "#4a90e2";
-        appendMissingMarks(cell, c.it.meta);
+        appendMissingMarks(cell, c.it);
         cell.onclick = () => showNodeImageFloat(node, c.it);
         strip.appendChild(cell);
     }
