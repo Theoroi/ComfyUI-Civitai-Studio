@@ -433,15 +433,15 @@ class CivitaiSaveImage:
 
 
 NODE_CLASS_MAPPINGS = {
-    "CivitaiImageSearch": CivitaiImageSearch,
-    "CivitaiLoraRecipe": CivitaiLoraRecipe,
-    "CivitaiShowText": CivitaiShowText,
-    "CivitaiSaveImage": CivitaiSaveImage,
+    "CivitaiStudio_ImageSearch": CivitaiImageSearch,
+    "CivitaiStudio_LoraRecipe": CivitaiLoraRecipe,
+    "CivitaiStudio_ShowText": CivitaiShowText,
+    "CivitaiStudio_SaveImage": CivitaiSaveImage,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "CivitaiImageSearch": "Civitai 图片搜索 (Image Search)",
-    "CivitaiLoraRecipe": "Civitai LoRA 配方 (LoRA Recipe)",
-    "CivitaiShowText": "Civitai 显示文本 (Show Text)",
-    "CivitaiSaveImage": "Export with A1111 geninfo",
+    "CivitaiStudio_ImageSearch": "Civitai 图片搜索 (Image Search)",
+    "CivitaiStudio_LoraRecipe": "Civitai LoRA 配方 (LoRA Recipe)",
+    "CivitaiStudio_ShowText": "Civitai 显示文本 (Show Text)",
+    "CivitaiStudio_SaveImage": "Export with A1111 geninfo",
 }

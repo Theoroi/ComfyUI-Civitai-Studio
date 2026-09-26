@@ -1444,7 +1444,7 @@ function rememberImage(id) {
 
 // 把图片 ID 写进图像搜索节点的 image_id(优先显式指定,其次画布选中,最后第一个)
 function selectAsOutput(item, preferred) {
-    const all = (app.graph?._nodes || []).filter((n) => n.type === "CivitaiImageSearch");
+    const all = (app.graph?._nodes || []).filter((n) => n.type === "CivitaiStudio_ImageSearch");
     let node = preferred && all.includes(preferred) ? preferred : null;
     if (!node) {
         node = all.find((n) => { try { return app.canvas?.selectedItems?.has?.(n) || n.selected; } catch (e) { return false; } })
@@ -3264,7 +3264,7 @@ function refreshTagCombos() {
         S.tagMap = {};
         (d.tags || []).forEach((t) => { S.tagMap[t.name] = t.id; });
         (app.graph?._nodes || []).forEach((n) => {
-            if (n.type !== "CivitaiImageSearch") return;
+            if (n.type !== "CivitaiStudio_ImageSearch") return;
             const tw = (n.widgets || []).find((w) => w.name === "tag");
             if (!tw || !tw.options) return;
             const cur = tw.value;
@@ -3483,7 +3483,7 @@ app.registerExtension({
             LG.prototype.serialize = function () {
                 const data = origSer.apply(this, arguments);
                 for (const nd of data.nodes || []) {
-                    if (nd.type === "CivitaiImageSearch" && Array.isArray(nd.widgets_values)) {
+                    if (nd.type === "CivitaiStudio_ImageSearch" && Array.isArray(nd.widgets_values)) {
                         nd.widgets_values = nd.widgets_values.filter((v) => v !== null);
                     }
                 }
@@ -3495,7 +3495,7 @@ app.registerExtension({
         const type = nodeData.name;
 
         // 图片搜索节点:DOM widget 缩略图条,点击放大/选择
-        if (type === "CivitaiImageSearch") {
+        if (type === "CivitaiStudio_ImageSearch") {
             const origCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
                 const r = origCreated?.apply(this, arguments);
@@ -3780,7 +3780,7 @@ app.registerExtension({
         }
 
         // 显示文本节点:执行完成后把收到的字符串渲染在节点内
-        if (type === "CivitaiShowText") {
+        if (type === "CivitaiStudio_ShowText") {
             const origCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
                 const r = origCreated?.apply(this, arguments);
@@ -3807,7 +3807,7 @@ app.registerExtension({
         }
 
         // LoRA 配方节点:DOM widget 显示选中 LoRA 的封面
-        if (type === "CivitaiLoraRecipe") {
+        if (type === "CivitaiStudio_LoraRecipe") {
             const origCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
                 const r = origCreated?.apply(this, arguments);

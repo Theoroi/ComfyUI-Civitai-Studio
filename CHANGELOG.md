@@ -5,7 +5,8 @@
 ## [Unreleased]
 
 ### 变更
-- 「Civitai 保存图片」节点显示名改为「Export with A1111 geninfo」,并补充搜索别名(类名 `CivitaiSaveImage` 不变,已摆放的节点不受影响)
+- 「Civitai 保存图片」节点显示名改为「Export with A1111 geninfo」,并补充搜索别名
+- **BREAKING**:全部节点注册键迁移到 `CivitaiStudio_` 前缀(`CivitaiStudio_ImageSearch / _LoraRecipe / _ShowText / _SaveImage`)——**旧工作流里的节点会显示缺失,需重新摆放节点**;显示名不变
 
 ## [0.7.0] - 2026-09-26
 

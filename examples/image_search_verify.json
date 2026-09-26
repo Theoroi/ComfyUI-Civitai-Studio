@@ -6,7 +6,7 @@
   "nodes": [
     {
       "id": 1,
-      "type": "CivitaiImageSearch",
+      "type": "CivitaiStudio_ImageSearch",
       "pos": [
         80,
         120
@@ -69,7 +69,7 @@
     },
     {
       "id": 2,
-      "type": "CivitaiShowText",
+      "type": "CivitaiStudio_ShowText",
       "title": "positive(运行后显示在这里)",
       "pos": [
         620,
@@ -100,7 +100,7 @@
     },
     {
       "id": 3,
-      "type": "CivitaiShowText",
+      "type": "CivitaiStudio_ShowText",
       "title": "negative(运行后显示在这里)",
       "pos": [
         620,
