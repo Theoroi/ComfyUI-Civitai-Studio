@@ -1138,7 +1138,7 @@ async def favorites_groups(request):
         return _ok()
     if not name:
         return _json_error("缺少分组名", 400)
-    g = await local_index.run_bg(fs.upsert_group, name, gid)
+    g = await local_index.run_bg(fs.upsert_group, name, gid, None, 1)  # 本地建/改:dirty=1 待上行
     return _ok(group=g)
 
 

@@ -10,6 +10,7 @@ sqlite 不可用时降级:读返回空,写静默丢弃(收藏功能退化为不�
 
 import json
 import os
+import sqlite3
 import threading
 import time
 
@@ -33,15 +34,39 @@ def _row(r):
         "kind": r[0], "oid": r[1], "group_id": r[2], "name": r[3], "cover": r[4],
         "added_at": r[5], "updated_at": r[6], "src": r[7], "dirty": r[8],
         "deleted": r[9], "extra": json.loads(r[10]) if r[10] else None,
+        "gpushed": json.loads(r[11]) if r[11] else [],
     }
 
 
-_COLS = "kind, oid, group_id, name, cover, added_at, updated_at, src, dirty, deleted, extra"
+_COLS = "kind, oid, group_id, name, cover, added_at, updated_at, src, dirty, deleted, extra, gpushed"
+_INS = ("INSERT OR REPLACE INTO fav_items(kind, oid, group_id, name, cover, added_at,"
+        " updated_at, src, dirty, deleted, extra, gpushed) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)")
+
+
+_gpushed_checked = False
 
 
 def _conn():
     cache_store.init()
-    return cache_store._CONN
+    conn = cache_store._CONN
+    if conn is not None:
+        _ensure_gpushed(conn)
+    return conn
+
+
+def _ensure_gpushed(conn):
+    """早期建库无 gpushed 列(分组上行推送标记 JSON 数组):惰性补列."""
+    global _gpushed_checked
+    if _gpushed_checked:
+        return
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(fav_items)")}
+        if cols and "gpushed" not in cols:
+            conn.execute("ALTER TABLE fav_items ADD COLUMN gpushed TEXT")
+            conn.commit()
+        _gpushed_checked = True
+    except sqlite3.Error:
+        pass  # 列已存在/库暂不可用:下次再查
 
 
 def _migrate_legacy():
@@ -62,8 +87,8 @@ def _migrate_legacy():
         if isinstance(ids, list) and ids:
             conn.executemany(
                 "INSERT OR IGNORE INTO fav_items(kind, oid, group_id, name, cover, added_at,"
-                " updated_at, src, dirty, deleted, extra) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                [("asset", str(x), None, None, None, now, now, "local", 0, 0, None)
+                " updated_at, src, dirty, deleted, extra, gpushed) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                [("asset", str(x), None, None, None, now, now, "local", 0, 0, None, None)
                  for x in ids if str(x).strip()][:5000],
             )
             conn.commit()
@@ -137,12 +162,12 @@ def toggle(kind, oid, fields=None):
             base = cur or {}
             extra = f.get("extra") if f.get("extra") is not None else base.get("extra")
             conn.execute(
-                "INSERT OR REPLACE INTO fav_items(kind, oid, group_id, name, cover, added_at,"
-                " updated_at, src, dirty, deleted, extra) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                _INS,
                 (kind, oid, f.get("group_id") or base.get("group_id"),
                  f.get("name") or base.get("name"), f.get("cover") or base.get("cover"),
                  base.get("added_at") or now, now, "local", 1, 0,
-                 json.dumps(extra, ensure_ascii=False) if extra else None),
+                 json.dumps(extra, ensure_ascii=False) if extra else None,
+                 json.dumps(base["gpushed"], ensure_ascii=False) if base.get("gpushed") else None),
             )
             conn.commit()
             return True
@@ -173,13 +198,13 @@ def upsert_remote(kind, oid, *, name=None, cover=None, group_id=None, extra=None
                 return  # 本地改动待上推
             base = cur or {}
             conn.execute(
-                "INSERT OR REPLACE INTO fav_items(kind, oid, group_id, name, cover, added_at,"
-                " updated_at, src, dirty, deleted, extra) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                _INS,
                 (kind, oid, group_id or base.get("group_id"),
                  name or base.get("name"), cover or base.get("cover"),
                  base.get("added_at") or now, ru or now, "remote", 0, 0,
                  json.dumps(extra, ensure_ascii=False) if extra else
-                 (json.dumps(base["extra"], ensure_ascii=False) if base.get("extra") else None)),
+                 (json.dumps(base["extra"], ensure_ascii=False) if base.get("extra") else None),
+                 json.dumps(base["gpushed"], ensure_ascii=False) if base.get("gpushed") else None),
             )
             conn.commit()
         except Exception as e:
@@ -264,10 +289,21 @@ def upsert_group(name, gid=None, civitai_id=None, dirty=0, updated_at=None):
             if not gid:
                 gid = "g_" + str(int(now * 1000))
             else:
-                # 按 gid 改名时保留既有联动字段(防抹掉 civitai_id 致下次同步分叉)
-                r = conn.execute("SELECT civitai_id FROM fav_groups WHERE gid=?", (gid,)).fetchone()
+                # 保留既有联动字段:按 gid 改名不抹 civitai_id(防下次同步分叉)
+                r = conn.execute("SELECT civitai_id, dirty, name FROM fav_groups WHERE gid=?", (gid,)).fetchone()
                 if r and civitai_id is None:
                     civitai_id = r[0]
+                if r and r[1] == 1 and civitai_id is not None:
+                    # 守卫仅限下行落地路径(civitai_id 非空):本地改名(civitai_id=None)一律写新名,
+                    # 否则"建组(即 dirty)后未同步前改名"会被旧名吞掉
+                    new_cid = int(civitai_id) if civitai_id else r[0]
+                    conn.execute(
+                        "UPDATE fav_groups SET civitai_id=?, updated_at=? WHERE gid=?",
+                        (new_cid, updated_at or now, gid),
+                    )
+                    conn.commit()
+                    return {"gid": gid, "name": r[2], "civitai_id": new_cid,
+                            "dirty": 1, "updated_at": updated_at or now}
             conn.execute(
                 "INSERT OR REPLACE INTO fav_groups(gid, name, civitai_id, dirty, updated_at)"
                 " VALUES(?,?,?,?,?)",
@@ -293,6 +329,49 @@ def delete_group(gid):
             conn.commit()
         except Exception as e:
             print("[Civitai-Studio] 分组删除失败:", e)
+
+
+def get_group(gid):
+    for g in groups_list():
+        if g["gid"] == gid:
+            return g
+    return None
+
+
+def mark_group_synced(gid, civitai_id):
+    """上行成功:绑定 Civitai 集合 id 并清 dirty."""
+    conn = _conn()
+    if conn is None:
+        return
+    with _LOCK:
+        try:
+            conn.execute("UPDATE fav_groups SET civitai_id=?, dirty=0, updated_at=? WHERE gid=?",
+                         (int(civitai_id), time.time(), gid))
+            conn.commit()
+        except (sqlite3.Error, ValueError):
+            pass
+
+
+def mark_group_pushed(kind, oid, gid):
+    """条目成功推入远端集合:记入 gpushed 防重推.推送 await 期间条目被改组/取消
+    (group_id 变化/墓碑)则不记——该推送已不反映当前归属,留下轮按新状态重推."""
+    conn = _conn()
+    if conn is None:
+        return
+    with _LOCK:
+        try:
+            it = get_item(kind, oid)
+            if not it or it["deleted"] or it["group_id"] != gid:
+                return
+            pushed = it.get("gpushed") or []
+            if gid in pushed:
+                return
+            pushed.append(gid)
+            conn.execute("UPDATE fav_items SET gpushed=? WHERE kind=? AND oid=?",
+                         (json.dumps(pushed, ensure_ascii=False), kind, str(oid)))
+            conn.commit()
+        except (sqlite3.Error, OSError):
+            pass
 
 
 def purge_tombstones(older_than=_TOMBSTONE_TTL):
@@ -379,13 +458,14 @@ def import_json(payload, replace=False):
                 if not deleted and it["kind"] == KIND_MODEL:
                     dirty = 1
                 conn.execute(
-                    "INSERT OR REPLACE INTO fav_items(kind, oid, group_id, name, cover, added_at,"
-                    " updated_at, src, dirty, deleted, extra) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                    _INS,
                     (it["kind"], str(it["oid"]), it.get("group_id"), it.get("name"),
                      it.get("cover"), float(it.get("added_at") or now),
                      float(it.get("updated_at") or now), it.get("src") or "local",
                      dirty, deleted,
-                     json.dumps(it["extra"], ensure_ascii=False) if it.get("extra") else None),
+                     json.dumps(it["extra"], ensure_ascii=False) if it.get("extra") else None,
+                     json.dumps(it["gpushed"], ensure_ascii=False)
+                     if isinstance(it.get("gpushed"), list) else None),
                 )
                 n += 1
             conn.commit()
