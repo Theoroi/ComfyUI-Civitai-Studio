@@ -10,6 +10,7 @@
 """
 
 import asyncio
+import json
 import os
 import time
 import urllib.parse
@@ -340,6 +341,58 @@ def prime_model_cache(mid, data):
     """外部刷新数据后回填缓存,让后续 /model/{id} 读取拿到新内容(内存+磁盘)."""
     _model_cache[str(mid)] = (time.time(), data)
     api_cache.prime("model:" + str(mid), data, ttl_disk=_MODEL_DISK_TTL, ttl_mem=False)
+
+
+# ---------- tRPC(非公开接口;Bearer key 有效,protectedProcedure 按 key 作用域判定) ----------
+
+class TrpcScopeError(CivitaiError):
+    """key 缺少所需作用域(需在 Civitai 后台重建 key 勾选对应权限)."""
+
+    def __init__(self, msg):
+        super().__init__(msg)
+        self.scope_hint = True
+
+
+async def _trpc_request(proc, js, mutation):
+    """非批量调用:query=GET ?input=;mutation=POST {"json":...}.返回 data.json 或抛 CivitaiError."""
+    url = base_url().rstrip("/") + "/api/trpc/" + proc
+    sess, via_connector = await get_session()
+    p = _proxy()
+    if not via_connector and p and _is_socks(p):
+        raise CivitaiError(net_error_message(ValueError("Only http proxies are supported")))
+    kwargs = {"headers": _headers_for(url, {"Content-Type": "application/json"})}
+    if not via_connector:
+        kwargs["proxy"] = p or None
+    if mutation:
+        kwargs["json"] = {"json": js}
+        ctx = sess.post(url, **kwargs)
+    else:
+        import urllib.parse
+        inp = urllib.parse.quote(json.dumps({"json": js}))
+        ctx = sess.get(url + "?input=" + inp, **kwargs)
+    try:
+        async with ctx as resp:
+            try:
+                data = await resp.json(content_type=None)
+            except Exception:
+                raise CivitaiError(f"tRPC {proc} 返回非 JSON(HTTP {resp.status})")
+            if resp.status != 200:
+                err = ((data or {}).get("error") or {}).get("json") or {}
+                msg = err.get("message") or f"HTTP {resp.status}"
+                if err.get("code") == -32003 or "required scope" in str(msg):
+                    raise TrpcScopeError(f"{proc}: 当前 API Key 缺少所需作用域 — 请到 Civitai 账户设置重建 Key 并勾选相应权限")
+                raise CivitaiError(f"tRPC {proc}: {msg[:200]}")
+            return ((data or {}).get("result") or {}).get("data", {}).get("json")
+    except (asyncio.TimeoutError, aiohttp.ClientError) as e:
+        raise CivitaiError(net_error_message(e)) from e
+
+
+async def trpc_query(proc, js=None):
+    return await _trpc_request(proc, js or {}, mutation=False)
+
+
+async def trpc_mutation(proc, js):
+    return await _trpc_request(proc, js, mutation=True)
 
 
 async def get_json(path, params=None, timeout=None):

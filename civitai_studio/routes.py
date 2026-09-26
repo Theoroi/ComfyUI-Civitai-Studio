@@ -18,7 +18,8 @@ import folder_paths
 from aiohttp import web
 from yarl import URL
 
-from . import api_cache, cache_store, civitai_client, config, downloader, local_index, media_meta
+from . import (api_cache, cache_store, civitai_client, config, downloader, fav_sync,
+               favorites_store as fs, local_index, media_meta)
 from .bg import spawn as bg_spawn
 from .version import VERSION, build
 
@@ -348,6 +349,7 @@ async def get_config(request):
         "tag_scrape": cfg.get("tag_scrape", True),
         "tag_and_mode": cfg.get("tag_and_mode", False),
         "cache_max_mb": cfg.get("cache_max_mb", 500),
+        "fav_autosync": cfg.get("fav_autosync", False),
     })
 
 
@@ -370,7 +372,8 @@ async def set_config(request):
             except (TypeError, ValueError):
                 return _json_error(f"{key} 必须是整数", 400)
             partial[key] = max(lo, min(hi, value))
-    for key in ("proxy_images", "verify_hash", "persist_description", "tag_scrape", "tag_and_mode"):
+    for key in ("proxy_images", "verify_hash", "persist_description", "tag_scrape", "tag_and_mode",
+                "fav_autosync"):
         if key in body:
             partial[key] = bool(body.get(key))
     cfg = config.update(partial)
@@ -852,52 +855,111 @@ async def local_move(request):
     return web.json_response({"status": "ok", "path": final, "name": os.path.basename(final), "warning": warn})
 
 
-# ---------- 收藏(轻量版):收藏的图片 ID 列表,user 目录持久化 ----------
+# ---------- 收藏:sqlite 存储(fav_items/fav_groups)+ 双向同步;旧 favorites.json 已迁移 ----------
 
 
 def _fav_path():
+    """0.7.x 旧文件位置(迁移源,只读保留)."""
     return os.path.join(folder_paths.get_user_directory(), "civitai_studio", "favorites.json")
-
-
-def _fav_list():
-    try:
-        with open(_fav_path(), encoding="utf-8") as f:
-            d = json.load(f)
-        return [str(x) for x in d] if isinstance(d, list) else []
-    except (OSError, ValueError):
-        return []
-
-
-def _fav_save(ids):
-    os.makedirs(os.path.dirname(_fav_path()), exist_ok=True)
-    tmp = _fav_path() + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(ids[:5000], f, ensure_ascii=False)
-    os.replace(tmp, _fav_path())
 
 
 @_get("/civitai_studio/favorites")
 async def favorites_get(request):
-    return web.json_response({"status": "ok", "ids": _fav_list()})
+    """兼容轻量版(ids=资产 id 列表,画廊★过滤用)+ 完整 items/groups。"""
+    items = await local_index.run_bg(fs.list_items, None, None)
+    assets = [it for it in items if it["kind"] == fs.KIND_ASSET]
+    models = [it for it in items if it["kind"] == fs.KIND_MODEL]
+    groups = await local_index.run_bg(fs.groups_list)
+    return web.json_response({
+        "status": "ok",
+        "ids": [it["oid"] for it in assets],
+        "model_ids": [it["oid"] for it in models],
+        "items": items,
+        "groups": groups,
+    })
 
 
 @_post("/civitai_studio/favorites/toggle")
 async def favorites_toggle(request):
+    """兼容轻量版 {id}(资产);扩展 {kind, oid, name, cover, extra}。"""
     body = await _read_json_dict(request)
     if body is None:
         return _json_error("请求体必须是 JSON 对象", 400)
-    fid = str(body.get("id") or "")
-    if not fid:
-        return _json_error("缺少 id", 400)
-    ids = _fav_list()
-    if fid in ids:
-        ids.remove(fid)
-        fav = False
-    else:
-        ids.insert(0, fid)
-        fav = True
-    _fav_save(ids)
-    return web.json_response({"status": "ok", "fav": fav})
+    kind = str(body.get("kind") or fs.KIND_ASSET)
+    if kind not in (fs.KIND_MODEL, fs.KIND_ASSET):
+        return _json_error("kind 必须是 model 或 asset", 400)
+    oid = str(body.get("oid") or body.get("id") or "").strip()
+    if not oid or not oid.isdigit():
+        return _json_error("缺少有效的数字 id", 400)
+    fields = {k: body.get(k) for k in ("group_id", "name", "cover", "extra") if body.get(k) is not None}
+    fav = await local_index.run_bg(fs.toggle, kind, oid, fields)
+    return _ok(fav=fav, kind=kind, oid=oid)
+
+
+@_post("/civitai_studio/favorites/assign")
+async def favorites_assign(request):
+    body = await _read_json_dict(request)
+    if body is None:
+        return _json_error("请求体必须是 JSON 对象", 400)
+    kind = str(body.get("kind") or fs.KIND_ASSET)
+    oid = str(body.get("oid") or "")
+    if not oid:
+        return _json_error("缺少 oid", 400)
+    gid = body.get("group_id")
+    await local_index.run_bg(fs.set_group, kind, oid, (str(gid) if gid else None))
+    return _ok()
+
+
+@_post("/civitai_studio/favorites/groups")
+async def favorites_groups(request):
+    """建组/改名:{gid?, name};删除:{gid, delete:true}。"""
+    body = await _read_json_dict(request)
+    if body is None:
+        return _json_error("请求体必须是 JSON 对象", 400)
+    name = str(body.get("name") or "").strip()
+    gid = str(body.get("gid") or "") or None
+    if body.get("delete"):
+        if not gid:
+            return _json_error("缺少 gid", 400)
+        await local_index.run_bg(fs.delete_group, gid)
+        return _ok()
+    if not name:
+        return _json_error("缺少分组名", 400)
+    g = await local_index.run_bg(fs.upsert_group, name, gid)
+    return _ok(group=g)
+
+
+@_get("/civitai_studio/favorites/export")
+async def favorites_export(request):
+    payload = await local_index.run_bg(fs.export_json)
+    return web.json_response(
+        payload,
+        headers={"Content-Disposition": "attachment; filename=civitai_studio_favorites.json"},
+    )
+
+
+@_post("/civitai_studio/favorites/import")
+async def favorites_import(request):
+    body = await _read_json_dict(request)
+    if body is None:
+        return _json_error("请求体必须是 JSON 对象", 400)
+    payload = body.get("payload")
+    if payload is None and ("items" in body or "groups" in body):
+        payload = body  # 直接粘贴导出文件内容也可
+    if not isinstance(payload, dict):
+        return _json_error("payload 必须是导出文件的对象", 400)
+    try:
+        n = await local_index.run_bg(fs.import_json, payload, bool(body.get("replace")))
+    except (ValueError, RuntimeError) as e:
+        return _json_error(str(e), 400)
+    return _ok(imported=n)
+
+
+@_post("/civitai_studio/favorites/sync")
+async def favorites_sync(request):
+    """手动/自动同步入口:能力矩阵见 docs/favorites-api-research.md。"""
+    result = await fav_sync.sync_now()
+    return web.json_response({"status": result.get("status", "ok"), **result})
 
 
 @_get("/civitai_studio/local/subdirs")
