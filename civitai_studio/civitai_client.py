@@ -339,7 +339,7 @@ async def get_enums_cached():
 def prime_model_cache(mid, data):
     """外部刷新数据后回填缓存,让后续 /model/{id} 读取拿到新内容(内存+磁盘)."""
     _model_cache[str(mid)] = (time.time(), data)
-    api_cache.prime("model:" + str(mid), data, ttl_disk=_MODEL_DISK_TTL)
+    api_cache.prime("model:" + str(mid), data, ttl_disk=_MODEL_DISK_TTL, ttl_mem=False)
 
 
 async def get_json(path, params=None, timeout=None):

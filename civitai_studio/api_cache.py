@@ -59,14 +59,15 @@ async def _singleflight(key, fetch):
         _inflight.pop(sk, None)
 
 
-def _kick_refresh(key, fetch, ttl_disk):
+def _kick_refresh(key, fetch, ttl_disk, ttl_mem):
     if key in _refreshing:
         return
 
     async def _run():
         try:
             data = await _singleflight(key, fetch)  # 已有在途回源则直接共享
-            _mem_put(key, data)
+            if ttl_mem > 0:
+                _mem_put(key, data)
             await bg.run_bg(cache_store.kv_put, "api:" + key,
                             {"ts": time.time(), "data": data}, ttl_disk + _SWR_CAP)
         except Exception as e:  # 刷新失败保留旧值,不打扰用户
@@ -104,7 +105,7 @@ async def cached_json(key, fetch, ttl_mem=0.0, ttl_disk=None, swr=True):
         if swr and age < _SWR_CAP:
             if ttl_mem > 0:
                 _mem_put(key, data)
-            _kick_refresh(key, fetch, ttl_disk)
+            _kick_refresh(key, fetch, ttl_disk, ttl_mem)
             return data
     data = await _singleflight(key, fetch)
     if ttl_mem > 0:  # ttl_mem=0 表示调用方自管内存层(如 _model_cache),别双份驻留
@@ -118,9 +119,13 @@ async def cached_json(key, fetch, ttl_mem=0.0, ttl_disk=None, swr=True):
     return data
 
 
-def prime(key, data, ttl_disk=None):
-    """外部拿到新数据后回填(内存即时;磁盘尽量异步,无 loop 时同步兜底)."""
-    _mem_put(key, data)
+def prime(key, data, ttl_disk=None, ttl_mem=True):
+    """外部拿到新数据后回填(内存即时;磁盘尽量异步,无 loop 时同步兜底).
+
+    ttl_mem=False:调用方自管内存层(如 _model_cache),别往 _MEM 塞死条目.
+    """
+    if ttl_mem:
+        _mem_put(key, data)
     if not ttl_disk:
         return
     payload = {"ts": time.time(), "data": data}
