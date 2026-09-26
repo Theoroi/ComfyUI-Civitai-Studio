@@ -140,6 +140,11 @@ const STR = {
         favImportFailed: "导入失败", favEmpty: "还没有收藏 — 在画廊、节点缩略图或大图浮层里点 ★",
         favAutoSync: "收藏自动同步(打开收藏夹时,冲突按最新修改时间覆盖;模型上推需 key 勾选 SocialWrite)",
         favRemoveTitle: "取消收藏", favSearchPh: "在收藏里搜索…",
+        importAsset: "导入为资产", importAssetDone: "已导入 input/civitai_import/{name}", importAssetExists: "已存在,跳过重复导入: {name}",
+        importFailed: "导入失败",
+        extractWf: "提取工作流", extractDone: "已存为工作流模板: {name}", extractNone: "该文件未内嵌 ComfyUI 工作流", extractFail: "提取失败",
+        extractMgr: "提取管理", extractMgrTitle: "提取的工作流(civitai_studio/)", extractEmpty: "还没有提取过工作流",
+        extractDelete: "删除", extractDeleted: "已删除", extractCapWarn: "提取文件已达 {n} 个,建议清理",
         pimgLabel: "预览图经服务端中转(直连打不开图片时开启)",
         hashLabel: "下载完成后校验 SHA256",
         pdescLabel: "说明落盘:把 Civitai 说明/标签/封面写进 .civitai.json(离线可看,默认关)",
@@ -269,6 +274,11 @@ const STR = {
         favImportFailed: "Import failed", favEmpty: "No favorites yet — tap ★ in the gallery, node thumbnails or the image overlay",
         favAutoSync: "Auto-sync favorites with Civitai (on Favorites tab open; conflicts resolved by newest timestamp; model push requires the SocialWrite key scope)",
         favRemoveTitle: "Unfavorite", favSearchPh: "Search favorites…",
+        importAsset: "Import as asset", importAssetDone: "Imported to input/civitai_import/{name}", importAssetExists: "Already imported, skipped: {name}",
+        importFailed: "Import failed",
+        extractWf: "Extract workflow", extractDone: "Saved as workflow: {name}", extractNone: "No embedded ComfyUI workflow in this file", extractFail: "Extract failed",
+        extractMgr: "Extracts", extractMgrTitle: "Extracted workflows (civitai_studio/)", extractEmpty: "No extracted workflows yet",
+        extractDelete: "Delete", extractDeleted: "Deleted", extractCapWarn: "{n} extracts — consider cleaning up",
         pimgLabel: "Route preview images through the backend (enable if direct loading fails)",
         hashLabel: "Verify SHA256 after download",
         pdescLabel: "Persist description: write Civitai description/tags/cover into .civitai.json (offline viewing, default off)",
@@ -1403,6 +1413,8 @@ function openImageDetail(item, opts = {}) {
         <div class="cs-modal-actions">
             <button class="cs-btn" data-fav-big title="${esc(t("favBtnTitle"))}">★ ${esc(t("favBtnTitle"))}</button>
             <button class="cs-btn" data-save-img>${esc(t("saveBtn"))}</button>
+            ${item.id != null ? `<button class="cs-btn" data-import-asset>${esc(t("importAsset"))}</button>
+            <button class="cs-btn" data-extract-wf>${esc(t("extractWf"))}</button>` : ""}
             <button class="cs-btn cs-btn-primary" data-use-as-output>${esc(t("useAsOutput"))}</button>
             ${hasMeta ? `<button class="cs-btn" data-apply-workflow>${esc(t("applyBtn"))}</button>` : ""}
             ${(opts.fromModelId || item.modelId) ? `<button class="cs-btn" data-view-model>${esc(S.lang === "zh" ? "查看模型" : "View Model")}</button>` : ""}
@@ -1421,6 +1433,28 @@ function openImageDetail(item, opts = {}) {
             } catch (e) { toast("error", t("favFailed"), e.message); }
         };
     }
+    // 导入为资产 / 提取工作流(都从原始文件取数据)
+    const importBtn = $("[data-import-asset]", m.box);
+    if (importBtn) importBtn.onclick = async () => {
+        importBtn.disabled = true;
+        try {
+            const r = await apiPost("/civitai_studio/import_asset", { url: item.url, image_id: String(item.id) });
+            toast("success", t(r.existed ? "importAssetExists" : "importAssetDone", { name: r.name }), r.dir || "");
+        } catch (e) { toast("error", t("importFailed"), e.message); }
+        finally { importBtn.disabled = false; }
+    };
+    const extractBtn = $("[data-extract-wf]", m.box);
+    if (extractBtn) extractBtn.onclick = async () => {
+        extractBtn.disabled = true;
+        try {
+            const r = await apiPost("/civitai_studio/extract_workflow", { url: item.url, image_id: String(item.id) });
+            toast("success", t("extractDone", { name: r.name }), r.warn ? t("extractCapWarn", { n: r.count }) : "");
+        } catch (e) {
+            const noWf = /未内嵌/.test(e.message || "");
+            toast("error", t(noWf ? "extractNone" : "extractFail"), e.message);
+        }
+        finally { extractBtn.disabled = false; }
+    };
     const vmBtn = $("[data-view-model]", m.box);
     if (vmBtn) vmBtn.onclick = () => {
         const mid = item.modelId || opts.fromModelId;
@@ -3092,6 +3126,7 @@ function buildFavoritesView(root) {
             <button class="cs-btn" id="cs-fav-sync">${esc(t("favSync"))}</button>
             <button class="cs-btn" id="cs-fav-import">${esc(t("favImport"))}</button>
             <button class="cs-btn" id="cs-fav-export">${esc(t("favExport"))}</button>
+            <button class="cs-btn" id="cs-fav-extracts">${esc(t("extractMgr"))}</button>
             <input type="file" id="cs-fav-file" accept=".json,application/json" style="display:none"/>
         </div>
         <div class="cs-scroll"><div id="cs-fav-grid" class="cs-gal-grid"></div></div>`;
@@ -3117,7 +3152,35 @@ function buildFavoritesView(root) {
         } catch (err) { toast("error", t("favImportFailed"), err.message); }
     };
     $("#cs-fav-export", view).onclick = () => window.open("/civitai_studio/favorites/export", "_blank");
+    $("#cs-fav-extracts", view).onclick = openExtractMgr;
     loadFavView();
+}
+
+// 提取工作流管理:列表 + 删除(防"塞满模板"的管理手段之一)
+async function openExtractMgr() {
+    let items = [];
+    try {
+        items = (await apiGet("/civitai_studio/workflow_extracts")).items || [];
+    } catch (e) { toast("error", t("favFailed"), e.message); return; }
+    const m = showModal(`<h3 class="cs-modal-title">${esc(t("extractMgrTitle"))}</h3>
+        <div class="cs-scroll" style="max-height:50vh">
+            ${items.length ? items.map((it) => `<div style="display:flex;gap:6px;align-items:center;padding:3px 0;">
+                <span style="flex:1;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(it.name)}</span>
+                <span class="cs-form-hint">${(it.size / 1024).toFixed(1)} KB</span>
+                <button class="cs-btn cs-btn-mini" data-del="${esc(it.name)}">${esc(t("extractDelete"))}</button></div>`).join("")
+            : `<div class="cs-empty">${esc(t("extractEmpty"))}</div>`}
+        </div>
+        <div class="cs-modal-actions"><button class="cs-btn" data-close>${esc(t("cancel"))}</button></div>`);
+    $("[data-close]", m.box).onclick = m.close;
+    m.box.addEventListener("click", async (e) => {
+        const b = e.target.closest?.("[data-del]");
+        if (!b) return;
+        try {
+            await apiPost("/civitai_studio/workflow_extracts/delete", { name: b.dataset.del });
+            b.closest("div").remove();
+            toast("success", t("extractDeleted"), "");
+        } catch (err) { toast("error", t("favFailed"), err.message); }
+    });
 }
 
 function buildRoot(el) {
