@@ -2233,6 +2233,11 @@ async function fetchGallery(reset, opts = {}) {
 function renderGallery(reset) {
     const grid = $("#cs-gal-grid");
     if (!grid) return;
+    if (!grid.clientWidth) { // 隐藏态(非激活 tab):宽度未知,排了也会滞留成窄列,交给切 tab 时渲染
+        S.gal.__needsRender = true;
+        return;
+    }
+    S.gal.__needsRender = false;
     const st = S.gal;
     if (st.error) {
         grid.innerHTML = `<div class="cs-empty">${esc(st.error)}</div>`;
@@ -2665,8 +2670,8 @@ function switchTab(tab) {
         const grid = $("#cs-gal-grid", S.ui.root);
         if (!S.gal.items.length) {
             if (!S.gal.loading) fetchGallery(true);
-        } else if (grid && !grid.childElementCount) {
-            // 快照恢复的状态在隐藏态没渲染过:首次切入渲染一次,再静默刷新
+        } else if (grid && (!grid.childElementCount || S.gal.__needsRender)) {
+            // 快照恢复或隐藏期数据变更过:首次切入渲染一次,再静默刷新
             S.gal.items.forEach((i) => { delete i.__rendered; });
             renderGallery(true);
             if (S.gal.__restored) { S.gal.__restored = false; fetchGallery(true, { silent: true }); }

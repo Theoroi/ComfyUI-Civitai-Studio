@@ -225,10 +225,11 @@ def kv_delete(key):
 
 def _enforce_quota():
     """超限时淘汰:先过期 kv → kv LRU → local_files 按 cached_at LRU(指纹被淘汰
-    只是下次扫描重读 sidecar,数据本体在磁盘,不丢东西)."""
+    只是下次扫描重读 sidecar,数据本体在磁盘,不丢东西) → 媒体文件按 mtime."""
     limit = _max_mb() * 1024 * 1024
     try:
-        if usage() <= limit:
+        total = usage(force=True)  # 配额判定用强取值;热路径上仍受 TTL 缓存保护
+        if total <= limit:
             return
         _CONN.execute(
             "DELETE FROM kv_cache WHERE expires_at IS NOT NULL AND expires_at < ?",
@@ -241,7 +242,7 @@ def _enforce_quota():
         except sqlite3.Error:
             pass
         for table, order in (("kv_cache", "last_access"), ("local_files", "cached_at")):
-            while usage() > limit:
+            while total > limit:
                 cur = _CONN.execute(
                     f"DELETE FROM {table} WHERE rowid IN "
                     f"(SELECT rowid FROM {table} ORDER BY {order} LIMIT 200)"
@@ -249,7 +250,8 @@ def _enforce_quota():
                 _CONN.commit()
                 if cur.rowcount <= 0:
                     break
-        media_evict(limit)  # 媒体文件是配额大头,最后按 mtime 淘汰
+                total = usage(force=True)
+        media_evict(limit)  # 媒体文件是配额大头,最后按 mtime 淘汰(内部自带增量计数)
     except (sqlite3.Error, OSError):
         pass
 
@@ -354,8 +356,15 @@ def clear_fingerprints():
 
 # ---------- 设置页:占用与清空 ----------
 
-def usage():
+_usage_cache = {"ts": 0.0, "bytes": 0}
+_USAGE_TTL = 8.0  # usage 在配额热路径上(kv_put/media_store 每写都查):结果短缓存,防持锁全量 walk
+
+
+def usage(force=False):
     """cache 目录字节总数(递归含 media/ 子目录;不含 download_jobs.json — 队列状态不算缓存)."""
+    now = time.time()
+    if not force and now - _usage_cache["ts"] < _USAGE_TTL:
+        return _usage_cache["bytes"]
     total = 0
     try:
         for dirpath, _dirnames, filenames in os.walk(cache_dir()):
@@ -368,6 +377,8 @@ def usage():
                     pass
     except OSError:
         pass
+    _usage_cache["ts"] = now
+    _usage_cache["bytes"] = total
     return total
 
 
