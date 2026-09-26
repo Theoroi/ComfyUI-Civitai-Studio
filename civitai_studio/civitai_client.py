@@ -271,13 +271,25 @@ _MODEL_CACHE_MAX = 50
 
 
 async def get_model_cached(mid):
-    """按 id 取模型详情,带 10 分钟 LRU 缓存(上限 50 条)."""
+    """按 id 取模型详情,带 10 分钟 LRU 缓存(上限 50 条).
+
+    优先 /models?ids= 查询端点(与网页版同源,部分文件名可读:量化后缀而非文件ID段);
+    镜像不支持该参数或返回空 items 时回退 /models/{id}。"""
     key = str(mid)
     hit = _model_cache.get(key)
     now = time.time()
     if hit and now - hit[0] < _MODEL_TTL:
         return hit[1]
-    data = await get_json(f"/models/{key}")
+    data = None
+    try:
+        q = await get_json(f"/models?ids={key}")
+        items = q.get("items") if isinstance(q, dict) else None
+        if items:
+            data = items[0]
+    except Exception:
+        data = None  # 端点/镜像不支持时回退
+    if data is None:
+        data = await get_json(f"/models/{key}")
     if len(_model_cache) >= _MODEL_CACHE_MAX:
         oldest = min(_model_cache, key=lambda k: _model_cache[k][0])
         _model_cache.pop(oldest, None)
