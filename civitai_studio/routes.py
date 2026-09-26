@@ -18,7 +18,7 @@ import folder_paths
 from aiohttp import web
 from yarl import URL
 
-from . import api_cache, cache_store, civitai_client, config, downloader, local_index
+from . import api_cache, cache_store, civitai_client, config, downloader, local_index, media_meta
 from .bg import spawn as bg_spawn
 from .version import VERSION, build
 
@@ -667,6 +667,54 @@ async def local_deep_rescan(request):
     """清指纹表全量重扫:手动改过 sidecar 后的兜底入口(设置页按钮)."""
     index = await _scan_async(True, True)
     return web.json_response({"status": "ok", "scan_stats": index.get("stats")})
+
+
+_META_EXTS = (".png", ".mp4", ".mov")
+
+
+def _meta_roots():
+    """内嵌元数据可读的目录白名单:output/input/temp + 全部已注册模型根."""
+    roots = []
+    for getter in (folder_paths.get_output_directory, folder_paths.get_input_directory,
+                   folder_paths.get_temp_directory):
+        try:
+            p = getter()
+        except Exception:
+            p = None
+        if p:
+            roots.append(os.path.realpath(p))
+    for _key, entry in folder_paths.folder_names_and_paths.items():
+        for p in entry[0]:
+            try:
+                if p and os.path.isdir(p):
+                    roots.append(os.path.realpath(p))
+            except (OSError, TypeError):
+                pass
+    return roots
+
+
+@_post("/civitai_studio/embedded_meta")
+async def embedded_meta(request):
+    """读本地图片/视频的内嵌生成数据(PNG tEXt/iTXt、MP4 mdta;结果随 mtime 缓存).
+
+    body {path}:须位于 output/input/temp 或已注册模型根之下。
+    meta 形状:{prompt|workflow: dict|str, parameters|encoder: str} 或 null(无内嵌数据)。
+    """
+    body = await _read_json_dict(request)
+    if body is None:
+        return _json_error("请求体必须是 JSON 对象", 400)
+    raw = str(body.get("path") or "")
+    if os.path.splitext(raw)[1].lower() not in _META_EXTS:
+        return _json_error("仅支持 PNG/MP4/MOV 文件", 400)
+    if not os.path.isfile(raw):
+        return _json_error("文件不存在", 404)
+    real = os.path.realpath(raw)
+    # 大小写不敏感比对(与 local/reveal 的约定一致;大小写不敏感卷上防误 403)
+    real_l, roots_l = real.lower(), [r.lower() for r in _meta_roots()]
+    if not any(real_l == r or real_l.startswith(r + os.sep) for r in roots_l):
+        return _json_error("路径不在允许目录内(output/input/temp/模型目录)", 403)
+    meta = await local_index.run_bg(media_meta.get_embedded, real)
+    return _ok(meta=meta)
 
 
 @_get("/civitai_studio/cache_usage")
