@@ -216,7 +216,9 @@ def mark_synced(kind, oid, expected_updated=None):
             if it["deleted"]:
                 conn.execute("DELETE FROM fav_items WHERE kind=? AND oid=?", (kind, str(oid)))
             else:
-                conn.execute("UPDATE fav_items SET dirty=0 WHERE kind=? AND oid=?", (kind, str(oid)))
+                # src 转 remote:此后纳入远端缺席对账(网页端取消收藏可传播到本地)
+                conn.execute("UPDATE fav_items SET dirty=0, src='remote' WHERE kind=? AND oid=?",
+                             (kind, str(oid)))
             conn.commit()
         except Exception:
             pass
@@ -261,6 +263,11 @@ def upsert_group(name, gid=None, civitai_id=None, dirty=0, updated_at=None):
                     gid = r[0]
             if not gid:
                 gid = "g_" + str(int(now * 1000))
+            else:
+                # 按 gid 改名时保留既有联动字段(防抹掉 civitai_id 致下次同步分叉)
+                r = conn.execute("SELECT civitai_id FROM fav_groups WHERE gid=?", (gid,)).fetchone()
+                if r and civitai_id is None:
+                    civitai_id = r[0]
             conn.execute(
                 "INSERT OR REPLACE INTO fav_groups(gid, name, civitai_id, dirty, updated_at)"
                 " VALUES(?,?,?,?,?)",
@@ -367,13 +374,17 @@ def import_json(payload, replace=False):
                 if not isinstance(it, dict) or not it.get("oid") or it.get("kind") not in (KIND_MODEL, KIND_ASSET):
                     continue
                 deleted = 1 if it.get("deleted") else 0
+                # 活动行强制 dirty=1 仅供模型(有上推通道);资产无上推,置 dirty 反而永久冻结远端刷新
+                dirty = 1 if it.get("dirty") else 0
+                if not deleted and it["kind"] == KIND_MODEL:
+                    dirty = 1
                 conn.execute(
                     "INSERT OR REPLACE INTO fav_items(kind, oid, group_id, name, cover, added_at,"
                     " updated_at, src, dirty, deleted, extra) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                     (it["kind"], str(it["oid"]), it.get("group_id"), it.get("name"),
                      it.get("cover"), float(it.get("added_at") or now),
                      float(it.get("updated_at") or now), it.get("src") or "local",
-                     1 if not deleted else (1 if it.get("dirty") else 0), deleted,
+                     dirty, deleted,
                      json.dumps(it["extra"], ensure_ascii=False) if it.get("extra") else None),
                 )
                 n += 1
