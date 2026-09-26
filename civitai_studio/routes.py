@@ -19,6 +19,7 @@ from aiohttp import web
 from yarl import URL
 
 from . import api_cache, cache_store, civitai_client, config, downloader, local_index
+from .bg import spawn as bg_spawn
 from .version import VERSION, build
 
 _enums_cache = {"data": None, "ts": 0.0}
@@ -479,6 +480,12 @@ async def image_proxy(request):
         raise web.HTTPFound(url)
     if not url.startswith(("http://", "https://")) or not civitai_client.host_allowed_image(url):
         return _json_error("不允许的图片地址", 400)
+    # 磁盘缓存命中:直接回文件(FileResponse 支持 Range,视频拖动不再整段重拉)
+    hit = await local_index.run_bg(cache_store.media_lookup, url)
+    if hit:
+        resp = web.FileResponse(hit[0], headers={"Cache-Control": "public, max-age=86400"})
+        resp.content_type = hit[1]  # .bin 扩展名会被推断成 octet-stream,必须显式回写
+        return resp
     timeout = aiohttp.ClientTimeout(total=15, connect=8)  # 单跳 15s,5 跳留在会话退役窗口内
     current = url
     try:
@@ -498,6 +505,8 @@ async def image_proxy(request):
                 body = await resp.content.read(20 * 1024 * 1024 + 1)
                 if len(body) > 20 * 1024 * 1024:
                     return _json_error("图片超过 20MB 上限", 502)
+                # 键用原始 url(与 media_lookup 对齐;302 终点的 ctype/内容才是实际下发的)
+                bg_spawn(local_index.run_bg(cache_store.media_store, url, ctype, body))
                 return web.Response(body=body, content_type=ctype,
                                     headers={"Cache-Control": "public, max-age=86400"})
         return _json_error("图片重定向次数过多", 502)

@@ -10,6 +10,7 @@
 """
 
 import json
+import hashlib
 import os
 import sqlite3
 import threading
@@ -22,6 +23,7 @@ from . import config
 _LOCK = threading.RLock()
 _CONN = None
 _BROKEN = False  # sqlite 确认损坏且重建仍失败:此后所有操作静默降级为空实现
+_MEDIA_MAX_BYTES = 20 * 1024 * 1024  # 与 image_proxy 的单文件上限一致
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS kv_cache (
@@ -223,10 +225,11 @@ def kv_delete(key):
 
 def _enforce_quota():
     """超限时淘汰:先过期 kv → kv LRU → local_files 按 cached_at LRU(指纹被淘汰
-    只是下次扫描重读 sidecar,数据本体在磁盘,不丢东西)."""
+    只是下次扫描重读 sidecar,数据本体在磁盘,不丢东西) → 媒体文件按 mtime."""
     limit = _max_mb() * 1024 * 1024
     try:
-        if usage() <= limit:
+        total = usage(force=True)  # 配额判定用强取值;热路径上仍受 TTL 缓存保护
+        if total <= limit:
             return
         _CONN.execute(
             "DELETE FROM kv_cache WHERE expires_at IS NOT NULL AND expires_at < ?",
@@ -239,14 +242,16 @@ def _enforce_quota():
         except sqlite3.Error:
             pass
         for table, order in (("kv_cache", "last_access"), ("local_files", "cached_at")):
-            while usage() > limit:
+            while total > limit:
                 cur = _CONN.execute(
                     f"DELETE FROM {table} WHERE rowid IN "
                     f"(SELECT rowid FROM {table} ORDER BY {order} LIMIT 200)"
                 )
                 _CONN.commit()
                 if cur.rowcount <= 0:
-                    return
+                    break
+                total = usage(force=True)
+        media_evict(limit)  # 媒体文件是配额大头,最后按 mtime 淘汰(内部自带增量计数)
     except (sqlite3.Error, OSError):
         pass
 
@@ -351,21 +356,34 @@ def clear_fingerprints():
 
 # ---------- 设置页:占用与清空 ----------
 
-def usage():
-    """cache 目录字节总数(不含 download_jobs.json — 那是队列状态,不算缓存)."""
+_usage_cache = {"ts": 0.0, "bytes": 0}
+_USAGE_TTL = 8.0  # usage 在配额热路径上(kv_put/media_store 每写都查):结果短缓存,防持锁全量 walk
+
+
+def usage(force=False):
+    """cache 目录字节总数(递归含 media/ 子目录;不含 download_jobs.json — 队列状态不算缓存)."""
+    now = time.time()
+    if not force and now - _usage_cache["ts"] < _USAGE_TTL:
+        return _usage_cache["bytes"]
     total = 0
     try:
-        for name in os.listdir(cache_dir()):
-            p = os.path.join(cache_dir(), name)
-            if os.path.isfile(p) and name != "download_jobs.json":
-                total += os.path.getsize(p)
+        for dirpath, _dirnames, filenames in os.walk(cache_dir()):
+            for name in filenames:
+                if name == "download_jobs.json":
+                    continue
+                try:
+                    total += os.path.getsize(os.path.join(dirpath, name))
+                except OSError:
+                    pass
     except OSError:
         pass
+    _usage_cache["ts"] = now
+    _usage_cache["bytes"] = total
     return total
 
 
 def clear_cache():
-    """清空缓存 = 清 kv 表 + 清指纹表(下次扫描转全量)+ checkpoint 回收磁盘."""
+    """清空缓存 = 清 kv 表 + 清指纹表 + 清媒体文件(下次扫描转全量)+ checkpoint 回收磁盘."""
     init()
     if _CONN is None:
         return
@@ -377,6 +395,83 @@ def clear_cache():
             _CONN.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         except sqlite3.Error as e:
             print("[Civitai-Studio] 清空缓存失败:", e)
+    media_evict(0)
+
+
+# ---------- 媒体磁盘缓存(image_proxy 用;阶段3) ----------
+
+def media_dir():
+    return os.path.join(cache_dir(), "media")
+
+
+def media_lookup(url):
+    """命中返回 (path, ctype);未命中/元数据丢失返回 None."""
+    init()
+    h = hashlib.sha1(url.encode("utf-8")).hexdigest()
+    p = os.path.join(media_dir(), h + ".bin")
+    try:
+        if not os.path.isfile(p):
+            return None
+    except OSError:
+        return None
+    meta = kv_get("media:" + h)
+    if not isinstance(meta, dict) or not meta.get("ctype"):
+        return None
+    return p, str(meta["ctype"])
+
+
+def media_store(url, ctype, data):
+    """写媒体缓存(应经 bg 线程池调用);异常静默,不阻断响应路径."""
+    try:
+        if len(data) > _MEDIA_MAX_BYTES:
+            return None
+        os.makedirs(media_dir(), exist_ok=True)
+        h = hashlib.sha1(url.encode("utf-8")).hexdigest()
+        p = os.path.join(media_dir(), h + ".bin")
+        # tmp 名带 pid+tid:并发同键写不共享 tmp,防混合字节经 os.replace 变成"合法坏文件"
+        tmp = "%s.%d.%d.tmp" % (p, os.getpid(), threading.get_ident())
+        with open(tmp, "wb") as f:
+            f.write(data)
+        os.replace(tmp, p)
+        kv_put("media:" + h, {"ctype": ctype, "size": len(data)})
+        _enforce_quota()
+        return p
+    except (OSError, sqlite3.Error):
+        return None
+
+
+def media_evict(limit):
+    """媒体文件按 mtime 最旧优先删到 limit 字节以内;对应 kv 元数据一并清."""
+    try:
+        entries = []
+        total = 0
+        for name in os.listdir(media_dir()):
+            p = os.path.join(media_dir(), name)
+            try:
+                st = os.stat(p)
+            except OSError:
+                continue
+            if name.endswith(".tmp"):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+                continue
+            entries.append((st.st_mtime, st.st_size, p))
+            total += st.st_size
+        if total <= limit:
+            return
+        for _mtime, size, p in sorted(entries):
+            if total <= limit:
+                break
+            try:
+                os.remove(p)
+                total -= size
+                kv_delete("media:" + os.path.splitext(os.path.basename(p))[0])
+            except OSError:
+                pass
+    except OSError:
+        pass
 
 
 init()
