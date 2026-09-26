@@ -526,7 +526,8 @@ _EXTRACT_WARN_COUNT = 300  # 子目录内提取文件数告警阈值(防泛滥�
 
 
 async def _download_asset_bytes(url):
-    """异步下载原始文件(白名单域,重定向逐跳校验,≤100MB,Content-Type 白名单)."""
+    """异步下载原始文件(白名单域,重定向逐跳校验,≤100MB,Content-Type 白名单).
+    已知取舍:单用户本地插件,响应全量驻内存(≤100MB×并发数)可接受,不做流式落盘."""
     timeout = aiohttp.ClientTimeout(total=180, connect=15)
     current = url
     for _hop in range(5):
@@ -551,6 +552,8 @@ async def _download_asset_bytes(url):
 
 
 def _url_ext(url):
+    """已知简化:白名单外/无扩展名一律按 .png 落盘(浏览器/LoadImage 按内容嗅探可打开,
+    仅文件名误导);跨扩展名同内容不去重(去重键=完整文件名)."""
     path = urllib.parse.urlparse(url).path
     ext = os.path.splitext(path)[1].lower()
     return ext if ext in (".png", ".jpg", ".jpeg", ".webp", ".gif", ".mp4", ".mov", ".webm") else ".png"
