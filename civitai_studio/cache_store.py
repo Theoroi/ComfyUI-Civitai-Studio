@@ -233,6 +233,11 @@ def _enforce_quota():
             (time.time(),),
         )
         _CONN.commit()
+        try:
+            # -wal 未并入主库前 usage() 会高估,先 checkpoint 防过度淘汰
+            _CONN.execute("PRAGMA wal_checkpoint(PASSIVE)")
+        except sqlite3.Error:
+            pass
         for table, order in (("kv_cache", "last_access"), ("local_files", "cached_at")):
             while usage() > limit:
                 cur = _CONN.execute(
@@ -310,6 +315,7 @@ def sync_fingerprints(changed_rows, seen_paths):
                 _CONN.execute("DELETE FROM local_files WHERE path NOT IN (SELECT path FROM _seen)")
                 _CONN.execute("DELETE FROM _seen")
             _CONN.commit()
+            _enforce_quota()  # 指纹 blob 是阶段1最大的缓存增长源,写入后查一次上限
         except sqlite3.Error as e:
             try:
                 _CONN.rollback()
