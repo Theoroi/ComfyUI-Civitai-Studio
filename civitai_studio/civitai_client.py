@@ -282,9 +282,10 @@ async def get_model_cached(mid):
         return hit[1]
     data = None
     try:
-        # _:缓存穿透参数——REST 端点的 CDN 缓存会滞后于站方改名(Qwen 2.1 实测),
-        # 带时间戳强制回源拿最新文件记录;本函数自带 10 分钟 LRU,不会高频回源
-        q = await get_json(f"/models?ids={key}&_={int(now)}")
+        # 实测(2026-09):REST 两端点的文件名滞后于站方改名,且带时间戳穿透也无法
+        # 刷新(origin 读路径本身就是旧的);by-query 比 by-id 略新,故仍优先它,
+        # 残留的 ID 名由前端 fileDisplayName 用 metadata.fp 兜底
+        q = await get_json(f"/models?ids={key}")
         items = q.get("items") if isinstance(q, dict) else None
         if items:
             data = items[0]
