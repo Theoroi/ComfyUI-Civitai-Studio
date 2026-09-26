@@ -757,6 +757,54 @@ async def local_move(request):
     return web.json_response({"status": "ok", "path": final, "name": os.path.basename(final), "warning": warn})
 
 
+# ---------- 收藏(轻量版):收藏的图片 ID 列表,user 目录持久化 ----------
+
+
+def _fav_path():
+    return os.path.join(folder_paths.get_user_directory(), "civitai_studio", "favorites.json")
+
+
+def _fav_list():
+    try:
+        with open(_fav_path(), encoding="utf-8") as f:
+            d = json.load(f)
+        return [str(x) for x in d] if isinstance(d, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def _fav_save(ids):
+    os.makedirs(os.path.dirname(_fav_path()), exist_ok=True)
+    tmp = _fav_path() + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(ids[:5000], f, ensure_ascii=False)
+    os.replace(tmp, _fav_path())
+
+
+@_get("/civitai_studio/favorites")
+async def favorites_get(request):
+    return web.json_response({"status": "ok", "ids": _fav_list()})
+
+
+@_post("/civitai_studio/favorites/toggle")
+async def favorites_toggle(request):
+    body = await _read_json_dict(request)
+    if body is None:
+        return _json_error("请求体必须是 JSON 对象", 400)
+    fid = str(body.get("id") or "")
+    if not fid:
+        return _json_error("缺少 id", 400)
+    ids = _fav_list()
+    if fid in ids:
+        ids.remove(fid)
+        fav = False
+    else:
+        ids.insert(0, fid)
+        fav = True
+    _fav_save(ids)
+    return web.json_response({"status": "ok", "fav": fav})
+
+
 @_get("/civitai_studio/local/subdirs")
 async def local_subdirs(request):
     """目标根下已存在的相对子目录(深度≤3,上限 500),供下载/移动对话框的浏览按钮."""

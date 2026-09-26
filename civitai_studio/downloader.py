@@ -236,7 +236,6 @@ def _slot():
     except (TypeError, ValueError):
         want = 1
     want = max(1, min(4, want))
-    global _slot_sem, _slot_want
     if _slot_sem is None or _slot_want != want:
         _slot_sem = asyncio.Semaphore(want)
         _slot_want = want
@@ -304,7 +303,7 @@ class _DownloadStatusError(Exception):
 
 async def _download_candidates(url):
     """下载地址候选:原 URL → 官方域;token 候选对接受 Key 的 civitai 系域追加."""
-    key = (config.load().get("api_key") or "").strip()
+    key = civitai_client.api_key()
     out = [url]
     com = re.sub(r"(?<=://)[^/]+", "civitai.com", url, count=1)
     if com != url:
@@ -407,11 +406,9 @@ async def _run_job(job):
     started = time.time()
     candidates = await _download_candidates(url)
     last_err = None
-    used_url = url
     for cand in candidates:
         try:
             await _download_to_tmp(job, cand, tmp, dl_timeout, started)
-            used_url = cand
             break
         except _DownloadStatusError as e:
             last_err = e

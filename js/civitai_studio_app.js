@@ -111,6 +111,7 @@ const STR = {
         cancelBtn: "取消" + "", cancelFailed: "取消失败", clearFailed: "清除失败",
         retryResume: "重试(续传)", retryTip: "从已传输的字节处继续下载(.part 断点)", retryFailed: "重试失败",
         scopeLabel: "实例", scopeAll: "所有实例",
+        favOnlyTitle: "只看收藏", favBtnTitle: "收藏", favFailed: "收藏失败",
         browseBtn: "浏览…", subdirPickTitle: "选择子文件夹", subdirRoot: "(目标目录根)", browseFailed: "打开失败",
         revealFile: "查看本地文件", toLocal: "本地库", moveBtn: "移动",
         moveTitle: "移动 — {name}", movedToast: "已移动", moveFailed: "移动失败",
@@ -225,6 +226,7 @@ const STR = {
         cancelBtn: "Cancel", cancelFailed: "Cancel failed", clearFailed: "Clear failed",
         retryResume: "Retry (resume)", retryTip: "Resume from the transferred bytes (.part breakpoint)", retryFailed: "Retry failed",
         scopeLabel: "Instance", scopeAll: "All instances",
+        favOnlyTitle: "Favorites only", favBtnTitle: "Favorite", favFailed: "Favorite failed",
         browseBtn: "Browse…", subdirPickTitle: "Pick subfolder", subdirRoot: "(root)", browseFailed: "Open failed",
         revealFile: "Show in folder", toLocal: "Local library", moveBtn: "Move",
         moveTitle: "Move — {name}", movedToast: "Moved", moveFailed: "Move failed",
@@ -272,7 +274,7 @@ let S = {
     },
     local: { models: [], search: "", type: "", loading: false, updates: {}, truncated: false, openId: null, detailCache: {} },
     dl: { jobs: [], lastSig: "", failStreak: 0 },
-    gal: { items: [], next: [], sort: "Newest", period: "AllTime", base: "", tag: "", imageId: "", nsfwLevel: 0, thumbSize: 256, loading: false, error: "" },
+    gal: { items: [], next: [], sort: "Newest", period: "AllTime", base: "", tag: "", imageId: "", nsfwLevel: 0, thumbSize: 256, loading: false, error: "", favOnly: false },
     ui: { tab: "browse", root: null, scrollTop: 0, detailId: null, backendStale: false },
 };
 
@@ -2169,7 +2171,9 @@ function renderGallery(reset) {
         img.__rendered = true;
         const item = document.createElement("div");
         item.className = "cs-gal-item";
-        const save = `<button class="cs-save-btn" title="${esc(t("saveBtnTitle"))}" data-save-url="${esc(img.url)}">⬇</button>`;
+        const favOn = !!(S.favs && S.favs.has(String(img.id)));
+        const save = `<button class="cs-save-btn" title="${esc(t("saveBtnTitle"))}" data-save-url="${esc(img.url)}">⬇</button>`
+            + `<button class="cs-save-btn" style="right:auto;left:4px;${favOn ? "color:#ffd75e;" : ""}" title="${esc(t("favBtnTitle"))}" data-fav="${esc(img.id)}">★</button>`;
         if (isVideoItem(img)) {
             // 视频条目:静音取首帧作封面,点击悬浮层播放
             item.innerHTML = `${save}<video muted loop playsinline preload="metadata"
@@ -2186,6 +2190,15 @@ function renderGallery(reset) {
         item.querySelector(".cs-save-btn").onclick = (ev) => {
             ev.stopPropagation();
             saveImageToOutput(img.url, ev.target);
+        };
+        item.querySelector("[data-fav]").onclick = async (ev) => {
+            ev.stopPropagation();
+            S.favs = S.favs || new Set();
+            try {
+                const r2 = await apiPost("/civitai_studio/favorites/toggle", { id: String(img.id) });
+                if (r2.fav) S.favs.add(String(img.id)); else S.favs.delete(String(img.id));
+                ev.target.style.color = r2.fav ? "#ffd75e" : "";
+            } catch (e) { toast("error", t("favFailed"), e.message); }
         };
         const ar = img.width && img.height ? img.width / img.height : 0.75;
         st.jrow.push({ el: item, ar }); st.jrowAr = (st.jrowAr || 0) + ar;
@@ -2215,6 +2228,7 @@ function buildGalleryView(root) {
             </select>
             <select id="cs-gal-nsfw"><option value="0" ${!st.nsfwLevel ? "selected" : ""}>${esc(t("sfwLabel"))}</option><option value="1" ${st.nsfwLevel ? "selected" : ""}>${esc(t("nsfwLabel"))}</option></select>
             <select id="cs-gal-size" title="${esc(S.lang === "zh" ? "缩略图大小" : "Thumbnail size")}">${[128, 256, 512].map((px) => `<option value="${px}" ${st.thumbSize === px ? "selected" : ""}>${px}px</option>`).join("")}</select>
+            <button class="cs-btn" id="cs-gal-fav" title="${esc(t("favOnlyTitle"))}" style="${st.favOnly ? "background:var(--accent-color,#4a90e2);color:#fff;border-color:transparent;" : ""}">★</button>
         </div>
         <div id="cs-gal-content" class="cs-scroll">
             <div id="cs-gal-grid" class="cs-gal-grid"></div>
@@ -2230,6 +2244,19 @@ function buildGalleryView(root) {
         st.items.forEach((i) => { delete i.__rendered; });
         renderGallery(true);
     });
+    // 只看收藏:客户端过滤已加载条目(收藏集合从后端 favorites.json 载入)
+    $("#cs-gal-fav", view).onclick = () => {
+        st.favOnly = !st.favOnly;
+        const b = $("#cs-gal-fav", view);
+        b.style.background = st.favOnly ? "var(--accent-color,#4a90e2)" : "";
+        b.style.color = st.favOnly ? "#fff" : "";
+        st.items.forEach((i2) => { delete i2.__rendered; });
+        renderGallery(true);
+    };
+    apiGet("/civitai_studio/favorites").then((d) => {
+        S.favs = new Set((d.ids || []).map(String));
+        if (st.favOnly) renderGallery(true);
+    }).catch(() => {});
     const debouncedFetch = () => {
         clearTimeout(buildGalleryView._deb);
         buildGalleryView._deb = setTimeout(() => fetchGallery(true), 600);

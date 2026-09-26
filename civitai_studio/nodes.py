@@ -22,17 +22,6 @@ from . import civitai_client, local_index
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
 
-def _recent_image_ids():
-    """最近点选/查询过的图片 ID(新→旧),供 image_id 下拉列出."""
-    try:
-        path = folder_paths.get_user_directory() + "/civitai_studio/recent_image_ids.json"
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        return [str(x) for x in data] if isinstance(data, list) else []
-    except Exception:
-        return []
-
-
 def _load_tag_mapping():
     """本地 tag 名称→ID 映射(与 routes 侧共用同一文件)."""
     try:
@@ -295,7 +284,8 @@ class CivitaiSaveImage:
             "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
 
-    RETURN_TYPES = ()
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("images",)
     FUNCTION = "run"
     CATEGORY = "Civitai Studio"
     OUTPUT_NODE = True
@@ -429,7 +419,8 @@ class CivitaiSaveImage:
             file = f"{filename}_{counter + i:05}_.png"
             Image.fromarray(arr).save(os.path.join(full_output_folder, file), pnginfo=pnginfo, compress_level=4)
             results.append({"filename": file, "subfolder": subfolder, "type": "output"})
-        return {"ui": {"images": results}, "result": ()}
+        # IMAGE 直通:存完图可继续喂给下个节点(对齐原生 SaveImage 新行为)
+        return {"ui": {"images": results}, "result": (images,)}
 
 
 NODE_CLASS_MAPPINGS = {

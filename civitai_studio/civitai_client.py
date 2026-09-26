@@ -10,6 +10,7 @@
 """
 
 import asyncio
+import os
 import time
 import urllib.parse
 from contextlib import asynccontextmanager
@@ -138,11 +139,19 @@ def net_error_message(e):
     return f"网络错误: {e}(检查网络/代理设置)"
 
 
+def api_key():
+    """设置页 key 优先;未配置时读 CIVITAI_API_KEY 环境变量兜底(云部署/容器场景)."""
+    key = (config.load().get("api_key") or "").strip()
+    if not key:
+        key = (os.environ.get("CIVITAI_API_KEY") or "").strip()
+    return key
+
+
 def _headers_for(url, extra=None):
     # 只发浏览器 UA(与 docs/civitai/civitai_pull.py 实测一致),勿加自定义 Accept 头。
     # Bearer 按"本次请求目标主机"决定,civitai 系域(含镜像 red)均下发。
     headers = {"User-Agent": _UA}
-    key = (config.load().get("api_key") or "").strip()
+    key = api_key()
     if key and is_key_host(url):
         headers["Authorization"] = "Bearer " + key
     if extra:
@@ -335,7 +344,7 @@ async def get_json(path, params=None, timeout=None):
                         if isinstance(err, dict):
                             msg = err.get("message")
                     hint = ""
-                    if resp.status in (401, 403) and (config.load().get("api_key") or "").strip():
+                    if resp.status in (401, 403) and api_key():
                         hint = "(已配置 API Key:报 401/403 通常是 Key 失效或该资源需要登录/Early Access)"
                     raise CivitaiError(f"HTTP {resp.status}: {msg or str(data)[:200]}{hint}")
                 try:

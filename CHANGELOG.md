@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+### 新增
+- 画廊收藏（轻量版）：条目★一键收藏/取消（user 目录 favorites.json 持久化，上限 5000），「★只看收藏」过滤
+- Export with A1111 geninfo 节点新增 IMAGE 直通输出（存完图可继续喂给下个节点，对齐原生 SaveImage）
+- 支持 `CIVITAI_API_KEY` 环境变量兜底：设置页未配置 key 时自动读取（云部署/容器场景）
+
+### 变更
+- API key 读取统一走 `civitai_client.api_key()`（设置页优先 → 环境变量兜底），涉及请求头/下载 token/401 提示三处
+
+### 清理
+- 移除死代码 `_recent_image_ids()`、`used_url` 死变量、`_slot()` 重复 global 声明
+
 ### 变更
 - 「Civitai 保存图片」节点显示名改为「Export with A1111 geninfo」,并补充搜索别名
 - **BREAKING**:全部节点注册键迁移到 `CivitaiStudio_` 前缀(`CivitaiStudio_ImageSearch / _LoraRecipe / _ShowText / _SaveImage`)——**旧工作流里的节点会显示缺失,需重新摆放节点**;显示名不变
