@@ -2101,13 +2101,88 @@ async function runUpdateCheck(items) {
     }
 }
 
-// ---------- 社区画廊(images API) ----------
-async function fetchGallery(reset) {
+// ---------- IndexedDB(画廊快照 — 页面重载/重启后画廊秒开;存储系统阶段3 L1) ----------
+let _idbPromise = null;
+function idb() {
+    if (_idbPromise) return _idbPromise;
+    _idbPromise = new Promise((res) => {
+        try {
+            const rq = indexedDB.open("civitai-studio", 1);
+            rq.onupgradeneeded = () => { rq.result.createObjectStore("kv"); };
+            rq.onsuccess = () => res(rq.result);
+            rq.onerror = () => res(null); // 无 IDB(隐私模式等):降级为无快照
+            rq.onblocked = () => res(null);
+        } catch { res(null); }
+    });
+    return _idbPromise;
+}
+async function idbGet(key) {
+    const db = await idb();
+    if (!db) return undefined;
+    return new Promise((res) => {
+        try {
+            const rq = db.transaction("kv").objectStore("kv").get(key);
+            rq.onsuccess = () => res(rq.result);
+            rq.onerror = () => res(undefined);
+        } catch { res(undefined); }
+    });
+}
+async function idbSet(key, val) {
+    const db = await idb();
+    if (!db) return;
+    try {
+        db.transaction("kv", "readwrite").objectStore("kv").put(val, key);
+    } catch {}
+}
+
+const GAL_SNAPSHOT_KEY = "gal_snapshot";
+function galleryFilters(st) {
+    return { sort: st.sort, period: st.period, nsfwLevel: st.nsfwLevel, base: st.base, tag: st.tag, imageId: st.imageId || "" };
+}
+async function saveGallerySnapshot() {
     const st = S.gal;
-    if (st.loading) { st.pending = true; return; }
+    if (!st.items.length) return;
+    await idbSet(GAL_SNAPSHOT_KEY, {
+        items: st.items.slice(0, 240), // 上限防快照无限膨胀
+        next: st.next || [],
+        filters: galleryFilters(st),
+        ts: Date.now(),
+    });
+}
+async function restoreGallerySnapshot(view) {
+    const st = S.gal;
+    if (st.items.length || st.loading) return;
+    const snap = await idbGet(GAL_SNAPSHOT_KEY);
+    if (!view.isConnected || st.items.length || st.loading) return; // 等待期间用户已手动刷新
+    if (!snap || !Array.isArray(snap.items) || !snap.items.length) return;
+    const f = snap.filters || {};
+    st.sort = f.sort || st.sort;
+    st.period = f.period || st.period;
+    st.nsfwLevel = typeof f.nsfwLevel === "number" ? f.nsfwLevel : st.nsfwLevel;
+    st.base = f.base || "";
+    st.tag = f.tag || "";
+    st.imageId = f.imageId || "";
+    st.items = snap.items.map((x) => { const c = { ...x }; delete c.__rendered; return c; });
+    st.next = Array.isArray(snap.next) ? snap.next : [];
+    st.__restored = true; // 首次切到画廊页时渲染 + 静默刷新(隐藏态不渲染,clientWidth 为 0)
+    // 同步筛选控件回显
+    const setVal = (sel, v) => { const el = $(sel, view); if (el) el.value = v; };
+    setVal("#cs-gal-sort", st.sort);
+    setVal("#cs-gal-period", st.period);
+    setVal("#cs-gal-nsfw", String(st.nsfwLevel));
+    setVal("#cs-gal-base", st.base);
+    setVal("#cs-gal-imgid", st.imageId);
+    if (view.__galTagPicker) view.__galTagPicker.set(String(st.tag || "").split(",").map((s) => s.trim()).filter(Boolean));
+}
+
+// ---------- 社区画廊(images API) ----------
+async function fetchGallery(reset, opts = {}) {
+    const st = S.gal;
+    const silent = !!opts.silent; // 快照恢复后的后台刷新:不动 UI,数据变了才重排
+    if (st.loading) { if (!silent) st.pending = true; return; }
     if (!reset && !(st.next && st.next.length)) return; // 没有下一页
-    st.loading = true;
-    renderGallery();
+    const sig0 = st.items.map((x) => x.id).join(",");
+    if (!silent) { st.loading = true; renderGallery(); }
     try {
         const p = new URLSearchParams({ limit: "24", sort: st.sort, period: st.period });
         p.set("nsfw", st.nsfwLevel > 0 ? "true" : "false");
@@ -2140,10 +2215,12 @@ async function fetchGallery(reset) {
         st.next = data.next_query || [];
         st.error = "";
     } catch (e) {
-        st.error = t("loadFailed") + e.message;
+        if (!silent || !st.items.length) st.error = t("loadFailed") + e.message; // 静默失败保住快照画面
     } finally {
         st.loading = false;
-        renderGallery(reset);
+        const sig1 = st.items.map((x) => x.id).join(",");
+        if (!silent || sig0 !== sig1 || st.error) renderGallery(reset);
+        saveGallerySnapshot();
         if (st.pending) { st.pending = false; fetchGallery(true); }
     }
 }
@@ -2293,6 +2370,7 @@ function buildGalleryView(root) {
             },
         });
         csTagPickers.add(tp);
+        view.__galTagPicker = tp; // 快照恢复用:set() 回填 chips 不触发 onChange
     }
     // 底模:可自由输入 + 自动补全弹层(与浏览页共用 attachComboComplete)
     const galBaseCands = { list: BASE_MODELS };
@@ -2316,6 +2394,7 @@ function buildGalleryView(root) {
         const el = e.target;
         if (el.scrollTop + el.clientHeight >= el.scrollHeight - 400 && !st.loading && st.next.length) fetchGallery(false);
     });
+    restoreGallerySnapshot(view); // 异步:面板重开后恢复上次画廊(状态先行,渲染延迟到切 tab)
 }
 
 // ---------- 下载队列 ----------
@@ -2577,7 +2656,17 @@ function switchTab(tab) {
     $$(".cs-view", S.ui.root).forEach((v) => v.classList.toggle("active", v.dataset.view === tab));
     if (tab === "local") loadLocal(false); // TTL 在后端,重复加载代价极小,保证不陈旧
     if (tab === "downloads") renderDownloads(true);
-    if (tab === "gallery" && !S.gal.items.length && !S.gal.loading) fetchGallery(true);
+    if (tab === "gallery") {
+        const grid = $("#cs-gal-grid", S.ui.root);
+        if (!S.gal.items.length) {
+            if (!S.gal.loading) fetchGallery(true);
+        } else if (grid && !grid.childElementCount) {
+            // 快照恢复的状态在隐藏态没渲染过:首次切入渲染一次,再静默刷新
+            S.gal.items.forEach((i) => { delete i.__rendered; });
+            renderGallery(true);
+            if (S.gal.__restored) { S.gal.__restored = false; fetchGallery(true, { silent: true }); }
+        }
+    }
 }
 
 function buildBrowseView(root) {
