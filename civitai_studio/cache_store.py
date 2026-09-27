@@ -67,6 +67,16 @@ CREATE TABLE IF NOT EXISTS fav_groups (
     dirty INTEGER DEFAULT 0,
     updated_at REAL
 );
+CREATE TABLE IF NOT EXISTS assocs (
+    path TEXT PRIMARY KEY,         -- 模型文件完整路径(normpath);主存储:本地↔Civitai 关联
+    model_id TEXT,
+    version_id TEXT,
+    name TEXT,                     -- Civitai 模型名(冗余,免解析 sidecar JSON)
+    cover TEXT,
+    updated_at REAL NOT NULL,      -- 首次写入时刻(对账豁免与"多处安装取最先"的排序键)
+    pending_export INTEGER DEFAULT 0  -- 1=DB 关联已立而 sidecar 导出失败:扫描对账跳过该行
+);
+CREATE INDEX IF NOT EXISTS idx_assocs_vid ON assocs(version_id);
 """
 
 
@@ -139,6 +149,10 @@ def _migrate(conn):
     if cols and "sc_size" not in cols:
         conn.execute("ALTER TABLE local_files ADD COLUMN sc_size INTEGER")
         conn.execute("ALTER TABLE local_files ADD COLUMN sc_mtime REAL")
+        conn.commit()
+    acols = {r[1] for r in conn.execute("PRAGMA table_info(assocs)")}
+    if acols and "pending_export" not in acols:
+        conn.execute("ALTER TABLE assocs ADD COLUMN pending_export INTEGER DEFAULT 0")
         conn.commit()
 
 
@@ -315,6 +329,147 @@ def sidecar_blob(path):
             return row[0] if row else None
         except sqlite3.Error:
             return None
+
+
+def sync_assocs(rows, alive_paths=None, clear_paths=None, pending=False, swept_before=None):
+    """批量对账「本地文件 ↔ Civitai 关联」表(用户数据域:配额淘汰/clear_cache 均不触及).
+
+    rows=[(path, model_id, version_id, name, cover)];clear_paths=本轮确认"无关联"的
+    path(外部删了 sidecar/清空字段),直接删行(**后于 rows 执行,同 path 时 clear 胜**;
+    pending_export=1 的行对本删除免疫——DB 关联已立仅导出失败,不得丢);
+    alive_paths 非 None 时另删除表内不在该集合的行(文件已消失/移走;truncated 扫描
+    传 None 保未扫到的行),swept_before 给出时豁免 updated_at≥该值的行(其他实例
+    在本轮 walk 期间新写入的行,下一轮再对账)。
+    pending=应用直写路径标记:True=本次关联 sidecar 导出失败(pending_export=1),
+    扫描回写恒为导出成功(pending_export=0)。updated_at 仅应用直写时刷新,
+    扫描回写保持首次写入时刻(作"多处安装取最先"的稳定排序键)。
+    """
+    init()
+    if _CONN is None:
+        return
+    now = time.time()
+    with _LOCK:
+        try:
+            if pending:
+                _CONN.executemany(
+                    "INSERT INTO assocs(path, model_id, version_id, name, cover, updated_at, pending_export)"
+                    " VALUES(?,?,?,?,?,?,1)"
+                    " ON CONFLICT(path) DO UPDATE SET model_id=excluded.model_id,"
+                    " version_id=excluded.version_id, name=excluded.name, cover=excluded.cover,"
+                    " updated_at=excluded.updated_at, pending_export=1",
+                    [(_norm(p), mi, vi, n, c, now) for (p, mi, vi, n, c) in rows],
+                )
+            else:
+                _CONN.executemany(
+                    "INSERT INTO assocs(path, model_id, version_id, name, cover, updated_at, pending_export)"
+                    " VALUES(?,?,?,?,?,?,0)"
+                    " ON CONFLICT(path) DO UPDATE SET model_id=excluded.model_id,"
+                    " version_id=excluded.version_id, name=excluded.name, cover=excluded.cover,"
+                    " pending_export=0",  # 扫描读到 meta=sidecar 在盘,导出成功;updated_at 保持原值
+                    [(_norm(p), mi, vi, n, c, now) for (p, mi, vi, n, c) in rows],
+                )
+            if alive_paths is not None:
+                _CONN.execute("CREATE TEMP TABLE IF NOT EXISTS _alive(path TEXT PRIMARY KEY)")
+                _CONN.execute("DELETE FROM _alive")
+                _CONN.executemany(
+                    "INSERT OR IGNORE INTO _alive VALUES(?)",
+                    ((_norm(p),) for p in alive_paths),
+                )
+                if swept_before is not None:
+                    _CONN.execute(
+                        "DELETE FROM assocs WHERE path NOT IN (SELECT path FROM _alive)"
+                        " AND pending_export=0 AND updated_at < ?",
+                        (swept_before,))
+                else:
+                    _CONN.execute(
+                        "DELETE FROM assocs WHERE path NOT IN (SELECT path FROM _alive)"
+                        " AND pending_export=0")
+                _CONN.execute("DELETE FROM _alive")
+            if clear_paths:
+                _CONN.executemany(
+                    "DELETE FROM assocs WHERE path=? AND pending_export=0",
+                    ((_norm(p),) for p in clear_paths))
+            _CONN.commit()
+        except (sqlite3.Error, ValueError) as e:
+            try:
+                _CONN.rollback()
+            except sqlite3.Error:
+                pass
+            print("[Civitai-Studio] 写关联表失败(下次扫描补齐):", e)
+
+
+def _assoc_row_dict(row):
+    return {"path": row[0], "model_id": row[1], "version_id": row[2],
+            "name": row[3], "cover": row[4], "updated_at": row[5]}
+
+
+def get_assoc(path):
+    """单查某文件的关联(无则 None)."""
+    init()
+    if _CONN is None:
+        return None
+    with _LOCK:
+        try:
+            row = _CONN.execute(
+                "SELECT path, model_id, version_id, name, cover, updated_at"
+                " FROM assocs WHERE path=?", (_norm(path),)
+            ).fetchone()
+        except sqlite3.Error:
+            return None
+    return _assoc_row_dict(row) if row else None
+
+
+def assoc_by_version(version_id):
+    """按 version_id 查已安装位置(多处安装取最先写入一条;「已安装」判断的主数据源)."""
+    init()
+    if _CONN is None:
+        return None
+    with _LOCK:
+        try:
+            row = _CONN.execute(
+                "SELECT path, model_id, version_id, name, cover, updated_at"
+                " FROM assocs WHERE version_id=? ORDER BY updated_at LIMIT 1",
+                (str(version_id),)
+            ).fetchone()
+        except sqlite3.Error:
+            return None
+    return _assoc_row_dict(row) if row else None
+
+
+def assoc_pending_paths():
+    """导出失败待补的关联路径集合(扫描对账跳过它们,防 DB 行被误清)."""
+    init()
+    if _CONN is None:
+        return set()
+    with _LOCK:
+        try:
+            return {r[0] for r in _CONN.execute(
+                "SELECT path FROM assocs WHERE pending_export=1")}
+        except sqlite3.Error:
+            return set()
+
+
+def rename_assoc(old_path, new_path, pending=False):
+    """移动/重命名模型文件后平移关联行(轻量,免全扫).
+
+    pending=True:目标位置无 sidecar(sidecar 迁移失败),行标记待导,
+    防下一轮扫描对账按"无关联"清掉;pending_export=1 的行不受对账删除影响。"""
+    init()
+    if _CONN is None:
+        return
+    with _LOCK:
+        try:
+            _CONN.execute("DELETE FROM assocs WHERE path=?", (_norm(new_path),))
+            _CONN.execute(
+                "UPDATE assocs SET path=?, pending_export=?, updated_at=? WHERE path=?",
+                (_norm(new_path), 1 if pending else 0, time.time(), _norm(old_path)))
+            _CONN.commit()
+        except sqlite3.Error as e:
+            try:
+                _CONN.rollback()
+            except sqlite3.Error:
+                pass
+            print("[Civitai-Studio] 关联行平移失败(下轮扫描自动对账):", e)
 
 
 def sync_fingerprints(changed_rows, seen_paths):

@@ -1112,6 +1112,8 @@ async def local_move(request):
                 os.remove(side)
             except OSError:
                 pass
+    # 关联行平移(DB 主存储):sidecar 迁移失败时标 pending,防扫描对账误清
+    cache_store.rename_assoc(src, final, pending=bool(warn))
     local_index.schedule_rescan()
     return web.json_response({"status": "ok", "path": final, "name": os.path.basename(final), "warning": warn})
 
@@ -1284,6 +1286,7 @@ async def local_rename(request):
             os.remove(old_sidecar)
         except OSError:
             pass
+    cache_store.rename_assoc(path, dest)  # 关联行平移(DB 主存储):重命名不丢关联
     await _scan_async(True)
     return _ok(new_name=new_name)
 
@@ -1355,10 +1358,16 @@ async def local_associate(request):
     # 网络等待期间文件可能已被重命名/删除,写盘前复验
     if not os.path.isfile(path):
         return _json_error("文件已移动或删除,请刷新本地库后重试", 409)
-    if not local_index.write_sidecar(path, meta):
-        return _json_error("写入 .civitai.json 失败(权限/磁盘?)", 500)
+    # DB 为主存储:sidecar 先写,成败决定 pending_export 标记(失败=仅导出未完成,
+    # 关联行已在库,扫描对账跳过;成功=导出完成)——两条路径关联都不丢
+    cover_url = next(
+        (i.get("url") for v in versions for i in (v.get("images") or []) if i.get("url")), None)
+    sidecar_ok = local_index.write_sidecar(path, meta)
+    cache_store.sync_assocs([(path, str(meta["model_id"]), str(meta["version_id"]),
+                              meta["model_name"], cover_url)], pending=not sidecar_ok)
     await _scan_async(True)
-    return _ok(associated=meta)
+    return _ok(associated=meta, warning=None if sidecar_ok
+               else "关联已保存,但 .civitai.json 导出失败(权限/磁盘?)——仅影响外部工具互操作")
 
 
 @_post("/civitai_studio/local/refresh_meta")
