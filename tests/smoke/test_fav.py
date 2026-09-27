@@ -171,6 +171,7 @@ for s in ("", "-wal", "-shm"):
 cache_store._CONN = None
 import civitai_studio.favorites_store as _fs_mod
 _fs_mod._gpushed_checked = False
+_fs_mod._ctype_checked = False
 cache_store.init()
 assert fs.toggle(fs.KIND_ASSET, "9999", {"name": "post-heal"}) is True, "重建库缺 gpushed 列"
 assert not (fs.get_item(fs.KIND_ASSET, "9999") or {}).get("deleted")
@@ -188,3 +189,23 @@ fs.mark_group_synced(g5["gid"], 777)
 g5d = fs.upsert_group("RemoteName2", gid=g5["gid"], civitai_id=777, updated_at=time.time())
 assert g5d["name"] == "RemoteName2" and g5d["dirty"] == 0, g5d
 print("改名守卫分流 OK")
+
+# ---- E2E 批1:ctype 列 + Legacy 哨兵组 + legacy 残留清理 ----
+g = fs.upsert_group("encoder", civitai_id=18036496, ctype="Model")
+assert g["ctype"] == "Model"
+g2 = fs.upsert_group("encoder-local-rename", gid=g["gid"])  # 不带 ctype 落地:须保留既有类型
+assert g2["ctype"] == "Model", g2
+lg = fs.ensure_legacy_group()
+assert lg and fs.ensure_legacy_group() == lg, "Legacy 组应幂等"
+lgrow = [x for x in fs.groups_list() if x["gid"] == lg][0]
+assert lgrow["ctype"] == "Legacy"
+fs.upsert_remote(fs.KIND_ASSET, "9001", name="legacy1", remote_updated=time.time())              # remote 未分组=残留
+fs.upsert_remote(fs.KIND_ASSET, "9002", name="grp", group_id=g["gid"], remote_updated=time.time())  # remote 带组=集合条目
+fs.toggle(fs.KIND_ASSET, "9003", {"name": "local-star"})                                          # local 未分组=用户★
+n = fs.purge_legacy_ungrouped()
+assert n >= 1, n
+assert fs.get_item(fs.KIND_ASSET, "9001") is None, "remote 未分组资产应被清理"
+assert fs.get_item(fs.KIND_ASSET, "9002") is not None, "集合条目不应被清理"
+assert fs.get_item(fs.KIND_ASSET, "9003") is not None, "本地★不应被清理"
+assert fs.purge_legacy_ungrouped() == 0, "清理应幂等"
+print("test_fav.py OK")

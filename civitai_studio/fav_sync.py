@@ -1,12 +1,14 @@
 """收藏双向同步引擎 — 能力矩阵与实测依据见 docs/research/favorites-api-research.md.
 
-矩阵:
-- 资产(图片)收藏:远端→本地 ✅(REST /images?favorites=true);本地→远端 ❌(无公开端点,
-  本地新增仅本地,同步时保留不推)
+矩阵(E2E 11.x 重构后):
+- 资产(图片)收藏:以集合为主通道 — tRPC collection.getAllUser + getAllCollectionItems
+  (条目键 collectionItems,实体在 data 字段,type=model/image);旧版 REST
+  /images?favorites=true 读路(web 已不可见)由 fav_pull_legacy 开关控制,默认关,
+  开启时落入 ctype='Legacy' 哨兵分组,关闭时同步清理其残留;本地→远端 ❌(无公开端点)
 - 模型收藏:双向 ✅(读 REST /models?favorites=true;写 tRPC user.toggleFavorite,
   需 key 勾选 SocialWrite — 缺作用域时返回 scope_hint,不中断下同步)
-- 集合/分组:读 tRPC collection.getAllUser + getAllCollectionItems;写 collection.saveItem
-  /removeFromCollection(需 CollectionsRead/写作用域)
+- 集合/分组:读 tRPC collection.getAllUser(type=Model/Image,Article 跳过)+getAllCollectionItems;
+  写 collection.upsert/saveItem(需 CollectionsRead/写作用域;ctype='Legacy' 组不上行)
 - 冲突:updated_at 新者胜(本地 dirty 视为最新,远端让位)
 
 同步是"尽力而为"的合并:任何单通道失败不阻塞其它通道;结果逐项计数返回给设置页展示。
@@ -17,11 +19,24 @@ import os
 import time
 from datetime import datetime
 
-from . import bg, cache_store, civitai_client, favorites_store as fs
+from . import bg, cache_store, civitai_client, config, favorites_store as fs
 
 _PAGE_LIMIT = 50
 _MAX_PAGES = 20  # 单方向单次同步最多 20 页(1000 条),够用且防失控
 _SYNC_LOCK_KEY = "fav:sync_inflight"
+
+# 集合条目里的 image.url 是裸文件 UUID(非完整 CDN 链接);桶名是站方常量。
+# 构造失败只影响封面显隐(onerror 隐藏),不影响收藏数据本身。
+_IMG_BUCKET = "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA"
+
+
+def _cover_url(d):
+    uuid = str((d or {}).get("url") or "")
+    if not uuid:
+        return None
+    if uuid.startswith("http://") or uuid.startswith("https://"):
+        return uuid
+    return f"{_IMG_BUCKET}/{uuid}/original=true/{uuid}.jpeg"
 
 
 def _ts(iso):
@@ -33,14 +48,14 @@ def _ts(iso):
 
 
 async def _trpc_paged(proc, base_input, item_key):
-    """tRPC 分页 query 包装:getAllCollectionItems 等 cursor 型端点."""
+    """tRPC 分页 query 包装:getAllCollectionItems(cursor 型,条目键 collectionItems)."""
     items, cursor, pages = [], None, 0
     while pages < _MAX_PAGES:
         js = dict(base_input or {})
         if cursor:
             js["cursor"] = cursor
         data = await civitai_client.trpc_query(proc, js)
-        page = data.get("items") if isinstance(data, dict) else data
+        page = data.get(item_key) if isinstance(data, dict) else data
         items.extend(page or [])
         cursor = (data or {}).get("nextCursor") if isinstance(data, dict) else None
         pages += 1
@@ -49,9 +64,9 @@ async def _trpc_paged(proc, base_input, item_key):
     return items
 
 
-async def _down_favorites(kind):
+async def _down_favorites(kind, group_id=None):
     """REST 收藏读。返回 {n, truncated, seen}:truncated=翻到页数上限;seen=本次远端
-    存在的 id 集(供缺席对账)。"""
+    存在的 id 集(供缺席对账)。group_id 非空时条目落入该组(legacy 下行 → Legacy 组)。"""
     path = "/images" if kind == fs.KIND_ASSET else "/models"
     cursor, pages, n = None, 0, 0
     seen = set()
@@ -69,13 +84,13 @@ async def _down_favorites(kind):
             seen.add(oid)
             if kind == fs.KIND_ASSET:
                 fs.upsert_remote(kind, oid, name=it.get("username") or None,
-                                 cover=it.get("url"),
+                                 cover=it.get("url"), group_id=group_id,
                                  extra={"modelVersionIds": it.get("modelVersionIds")},
                                  remote_updated=_ts(it.get("createdAt")))
             else:
                 versions = it.get("modelVersions") or []
                 cover = ((versions[0] or {}).get("images") or [{}])[0].get("url") if versions else None
-                fs.upsert_remote(kind, oid, name=it.get("name"), cover=cover,
+                fs.upsert_remote(kind, oid, name=it.get("name"), cover=cover, group_id=group_id,
                                  extra={"type": it.get("type")},
                                  remote_updated=_ts(it.get("lastVersionAt") or it.get("createdAt")))
             n += 1
@@ -89,39 +104,52 @@ async def _down_favorites(kind):
 
 
 async def _down_groups():
-    """集合 → 本地分组;集合内图片条目 → 本地资产收藏(group 挂钩)."""
+    """集合 → 本地分组;集合条目 → 本地收藏并挂钩分组。
+
+    实测(E2E 修复依据):getAllUser {} 返回集合数组,元素含 type(Model/Image/Article);
+    条目分页键是 collectionItems(不是 items);条目实体在 data 字段,
+    type="model"/"image" 对应模型/图片——旧实现读 items/image 键导致收藏夹全空。
+    返回 {"groups": 组数, "images": 图片条目数}。"""
     cols = await civitai_client.trpc_query("collection.getAllUser", {})
     if isinstance(cols, dict):
         cols = cols.get("collections") or cols.get("items") or []
-    n = 0
+    by_cid = {}
+    for g in fs.groups_list():
+        if g.get("civitai_id"):
+            by_cid[int(g["civitai_id"])] = g["gid"]
+    g_n = i_n = 0
     for c in cols or []:
-        cid = c.get("id")
-        name = c.get("name")
-        if not cid or not name:
-            continue
-        fs.upsert_group(str(name), civitai_id=int(cid),
+        cid, name, ctype = c.get("id"), c.get("name"), c.get("type")
+        if not cid or not name or ctype == "Article":
+            continue  # 文章书签集合与插件无关
+        fs.upsert_group(str(name), civitai_id=int(cid), ctype=ctype,
                         updated_at=_ts(c.get("updatedAt") or c.get("createdAt")) or None)
-        gid = None
-        for g in fs.groups_list():
-            if g["civitai_id"] == int(cid):
-                gid = g["gid"]
-                break
+        gid = by_cid.get(int(cid))
+        g_n += 1
         try:
             items = await _trpc_paged("collection.getAllCollectionItems",
-                                      {"collectionId": int(cid), "limit": 100}, "items")
+                                      {"collectionId": int(cid), "limit": 100}, "collectionItems")
         except civitai_client.CivitaiError:
             items = []
         for it in items:
-            img = it.get("image") or {}
-            iid = str(img.get("id") or it.get("imageId") or "")
-            if not iid:
+            et = str(it.get("type") or "")
+            d = it.get("data") or {}
+            oid = str(d.get("id") or "")
+            if not oid:
                 continue
-            fs.upsert_remote(fs.KIND_ASSET, iid, group_id=gid,
-                             cover=img.get("url"),
-                             extra={"modelVersionIds": img.get("modelVersionIds")},
-                             remote_updated=_ts(it.get("createdAt")))
-            n += 1
-    return n
+            if et == "image":
+                fs.upsert_remote(fs.KIND_ASSET, oid, group_id=gid,
+                                 cover=_cover_url(d),
+                                 extra={"modelVersionIds": d.get("modelVersionIds")
+                                        or d.get("modelVersionIdsManual")},
+                                 remote_updated=_ts(it.get("createdAt")))
+                i_n += 1
+            elif et == "model":
+                fs.upsert_remote(fs.KIND_MODEL, oid, group_id=gid, name=d.get("name"),
+                                 cover=_cover_url(((d.get("images") or [{}])[0] or {})),
+                                 extra={"type": d.get("type"), "baseModels": d.get("baseModels")},
+                                 remote_updated=_ts(d.get("lastVersionAt") or it.get("createdAt")))
+    return {"groups": g_n, "images": i_n}
 
 
 async def _upsync_models(result):
@@ -184,6 +212,8 @@ async def _upsync_groups(result):
         g = groups.get(gid)
         if not g:
             continue
+        if g.get("ctype") == fs.LEGACY_CTYPE:
+            continue  # legacy 残留组不上行(无对应远端集合,也绝不替它建)
         try:
             cid = await ensure_collection(g, it["kind"])
             if not cid or gid in (it.get("gpushed") or []):
@@ -204,21 +234,34 @@ async def _upsync_groups(result):
 
 
 async def sync_now():
-    """全量同步入口(设置页按钮/自动同步);返回计数供 UI 展示."""
+    """全量同步入口(设置页按钮/自动同步);返回计数供 UI 展示.
+
+    图片收藏下行以集合(collections)为准;旧版 /images?favorites=true 读路是 Civitai
+    改版前的遗留表,web 上已不可见(E2E 11.1"虚标1000"),由 fav_pull_legacy 开关控制,
+    默认关 + 落入 Legacy 分组;关闭时同步清理其残留(未分组 remote 资产行)。"""
     token = os.urandom(8).hex()
     if cache_store.kv_get(_SYNC_LOCK_KEY):
         return {"status": "busy"}
     cache_store.kv_put(_SYNC_LOCK_KEY, token, ttl=1800)  # 防重入;存量首推带 0.5s/条限速,最坏可达 30 分钟,finally 校验 token 再清
     result = {"assets_down": 0, "models_down": 0, "groups_down": 0, "groups_up": 0,
               "items_up": 0, "upsynced": 0, "upsync_failed": 0, "scope_hint": "",
+              "collection_images": 0, "legacy_purged": 0,
               "truncated": False, "errors": [], "at": time.time()}
     try:
-        try:
-            r = await _down_favorites(fs.KIND_ASSET)
-            result["assets_down"] = r["n"]
-            result["truncated"] = r["truncated"]
-        except Exception as e:
-            result["errors"].append("资产收藏读取: " + str(e)[:160])
+        legacy = bool(config.load().get("fav_pull_legacy"))
+        if legacy:
+            try:
+                legacy_gid = await bg.run_bg(fs.ensure_legacy_group)
+                r = await _down_favorites(fs.KIND_ASSET, group_id=legacy_gid)
+                result["assets_down"] = r["n"]
+                result["truncated"] = r["truncated"]
+            except Exception as e:
+                result["errors"].append("旧版图片收藏读取: " + str(e)[:160])
+        else:
+            try:
+                result["legacy_purged"] = await bg.run_bg(fs.purge_legacy_ungrouped)
+            except Exception as e:
+                result["errors"].append("legacy 残留清理: " + str(e)[:160])
         try:
             r = await _down_favorites(fs.KIND_MODEL)
             result["models_down"] = r["n"]
@@ -230,7 +273,9 @@ async def sync_now():
         except Exception as e:
             result["errors"].append("模型收藏读取: " + str(e)[:160])
         try:
-            result["groups_down"] = await _down_groups()
+            d = await _down_groups()
+            result["groups_down"] = d["groups"]
+            result["collection_images"] = d["images"]
         except Exception as e:
             result["errors"].append("集合读取: " + str(e)[:160])
         await _upsync_models(result)

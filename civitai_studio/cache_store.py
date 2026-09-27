@@ -66,7 +66,8 @@ CREATE TABLE IF NOT EXISTS fav_groups (
     name TEXT NOT NULL,
     civitai_id INTEGER,            -- 对齐 Civitai collection id(无则 NULL)
     dirty INTEGER DEFAULT 0,
-    updated_at REAL
+    updated_at REAL,
+    ctype TEXT                     -- Civitai 集合类型 Model/Image;本地哨兵 'Legacy'(E2E 11.3)
 );
 CREATE TABLE IF NOT EXISTS assocs (
     path TEXT PRIMARY KEY,         -- 模型文件完整路径(normpath);主存储:本地↔Civitai 关联

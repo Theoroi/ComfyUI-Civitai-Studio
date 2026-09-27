@@ -152,6 +152,8 @@ const STR = {
         favImport: "导入", favExport: "导出", favImported: "已导入 {items} 条 / {groups} 个分组",
         favImportFailed: "导入失败", favEmpty: "还没有收藏 — 在画廊、节点缩略图或大图浮层里点 ★",
         favAutoSync: "收藏自动同步(打开收藏夹时,冲突按最新修改时间覆盖;模型上推需 key 勾选 SocialWrite)",
+        favLegacyLabel: "下拉旧版图片收藏(Legacy,默认关)",
+        favLegacyHint: "图片收藏以 Civitai 集合为准。旧版收藏表(Civitai 改版前,网页上已不可见)默认不拉取,且同步时自动清理其本地残留;开启后拉取内容落入 Legacy 分组,不上传。",
         favRemoveTitle: "取消收藏", favSearchPh: "在收藏里搜索…",
         importAsset: "导入为资产", importAssetDone: "已导入 input/civitai_import/{name}", importAssetExists: "已存在,跳过重复导入: {name}",
         importFailed: "导入失败",
@@ -298,6 +300,8 @@ const STR = {
         favImport: "Import", favExport: "Export", favImported: "Imported {items} items / {groups} groups",
         favImportFailed: "Import failed", favEmpty: "No favorites yet — tap ★ in the gallery, node thumbnails or the image overlay",
         favAutoSync: "Auto-sync favorites with Civitai (on Favorites tab open; conflicts resolved by newest timestamp; model push requires the SocialWrite key scope)",
+        favLegacyLabel: "Pull legacy image favorites (pre-collections, default off)",
+        favLegacyHint: "Image favorites follow Civitai collections. The legacy favorites table (invisible on today's Civitai) is not pulled by default and its leftovers are purged locally on sync; when enabled, pulled items land in the Legacy group and are never uploaded.",
         favRemoveTitle: "Unfavorite", favSearchPh: "Search favorites…",
         importAsset: "Import as asset", importAssetDone: "Imported to input/civitai_import/{name}", importAssetExists: "Already imported, skipped: {name}",
         importFailed: "Import failed",
@@ -1578,6 +1582,8 @@ async function toggleFav(kind, oid, fields) {
     const setKey = kind === "model" ? "favModelIds" : "favs";
     S[setKey] = S[setKey] || new Set();
     if (r.fav) S[setKey].add(String(oid)); else S[setKey].delete(String(oid));
+    // 16:收藏 tab 正开着就即时重拉+重渲染,免"切一次 tab 才能看到"
+    if (S.ui.tab === "favorites" && S.favData) loadFavDataOnly().catch(() => {});
     return !!r.fav;
 }
 
@@ -2816,6 +2822,8 @@ async function openSettings() {
                 <div class="cs-set-group-head">${esc(t("setGrpSync"))}<span class="cs-set-caret">▾</span></div>
                 <div class="cs-set-group-body">
                     <label class="cs-check"><input id="cs-set-autosync" type="checkbox" ${cfg.fav_autosync ? "checked" : ""}/> ${esc(t("favAutoSync"))}</label>
+                    <label class="cs-check"><input id="cs-set-legacy" type="checkbox" ${cfg.fav_pull_legacy ? "checked" : ""}/> ${esc(t("favLegacyLabel"))}</label>
+                    <div class="cs-form-hint">${esc(t("favLegacyHint"))}</div>
                 </div>
             </div>
         </div>
@@ -2937,6 +2945,7 @@ async function openSettings() {
             tag_scrape: $("#cs-set-tscrape", m.box).checked,
             tag_and_mode: $("#cs-set-andmode", m.box).checked,
             fav_autosync: $("#cs-set-autosync", m.box).checked,
+            fav_pull_legacy: $("#cs-set-legacy", m.box).checked,
         };
         const key = $("#cs-set-key", m.box).value.trim();
         if (key) body.api_key = key;
@@ -3231,10 +3240,20 @@ function buildDownloadsView(root) {
 }
 
 // ---------- 收藏夹 tab(模型/资产两类 + 分组 + 同步/导入导出) ----------
+// 11.3:集合分 Model/Image 两类不能混放 → 分组下拉按当前 kind 过滤
+// (ctype 缺省=本地老组,两类都显示;Legacy 哨兵组只在资产下显示)
+function groupsForKind(groups, kind) {
+    const want = kind === "model" ? "Model" : "Image";
+    return (groups || []).filter((g) => {
+        if (g.ctype === "Legacy") return kind === "asset";
+        return !g.ctype || g.ctype === want;
+    });
+}
+
 function refreshFavGroupSel(view) {
     const sel = $("#cs-fav-group", view);
     if (!sel) return;
-    const groups = S.favData?.groups || [];
+    const groups = groupsForKind(S.favData?.groups, S.favUi.kind);
     sel.innerHTML = `<option value="all">${esc(t("favGroupAll"))}</option>`
         + `<option value="_">${esc(t("favGroupNone"))}</option>`
         + groups.map((g) => `<option value="${esc(g.gid)}">${esc(g.name)}</option>`).join("");
@@ -3301,13 +3320,13 @@ function renderFavGrid(view) {
             } catch (e) { toast("error", t("favFailed"), e.message); }
         };
         cell.appendChild(rm);
-        // 分组下拉
+        // 分组下拉(同样按条目 kind 过滤集合类型)
         const gs = document.createElement("select");
         gs.style.cssText = "position:absolute;right:2px;top:2px;width:78px;font-size:10px;padding:1px;"
             + "background:rgba(20,20,24,.85);color:#eee;border:1px solid #555;border-radius:4px;";
         gs.title = t("favGroupLabel");
         gs.innerHTML = `<option value="">${esc(t("favGroupNone"))}</option>`
-            + groups.map((g) => `<option value="${esc(g.gid)}"${g.gid === it.group_id ? " selected" : ""}>${esc(g.name)}</option>`).join("");
+            + groupsForKind(groups, it.kind).map((g) => `<option value="${esc(g.gid)}"${g.gid === it.group_id ? " selected" : ""}>${esc(g.name)}</option>`).join("");
         gs.onclick = (ev) => ev.stopPropagation();
         gs.onchange = async () => {
             try {
@@ -3355,9 +3374,11 @@ function setFavSyncLine(text, cls) {
 }
 
 function favSyncLineText(r) {
-    const rec = { ts: Date.now(), up: r.upsynced || 0, down: (r.assets_down || 0) + (r.models_down || 0) };
+    const rec = { ts: Date.now(), up: r.upsynced || 0,
+                  down: (r.assets_down || 0) + (r.models_down || 0) + (r.collection_images || 0) };
     try { localStorage.setItem("cs_fav_lastsync", JSON.stringify(rec)); } catch (_) {}
     let txt = t("favSyncLine", { time: new Date(rec.ts).toLocaleString(), up: rec.up, down: rec.down });
+    if (r.legacy_purged) txt += (S.lang === "zh" ? ` · 清理 legacy 残留 ${r.legacy_purged}` : ` · purged ${r.legacy_purged} legacy`);
     if (r.scope_hint) txt += " · " + r.scope_hint;
     if (r.errors && r.errors.length) txt += " · " + t("syncFailShort") + ": " + humanizeErr(String(r.errors[0]));
     return txt;
@@ -3534,18 +3555,32 @@ function maybeOnboard(root) {
 }
 
 let _sidebarRO = null;
+let _sidebarPinTimer = null;
 
 function pinSidebarHeight(root) {
     // ComfyUI 侧边栏 tab 的挂载容器高度是 auto,height:100% 解析不出 → 面板被内容撑高
     // (实测 1000 收藏时 root 4136px),滚动交给外层 .sidebar-content-container,
     // tab 栏与各视图筛选区随之滚走。这里把 root 钉到滚动容器的实测高度,
     // 让滚动回到面板内部的 .cs-scroll;ResizeObserver 跟随分栏拖动/窗口缩放。
-    const scroller = root.parentElement ? root.parentElement.closest(".sidebar-content-container") : null;
-    if (_sidebarRO) { _sidebarRO.disconnect(); _sidebarRO = null; } // 面板重建:先放上一棵树的 RO
-    if (!scroller) return; // 找不到容器时保持原 100% 布局,topbar 的 sticky 兜底
+    // 强刷后首开会落空:此刻 root 可能尚未挂进 ComfyUI 的容器树(closest 找不到),
+    // 旧实现直接放弃 → 全部筛选区跟着网格滚、切 tab 重建后才"自愈"。现改为重试。
+    const find = () => (root.parentElement ? root.parentElement.closest(".sidebar-content-container") : null);
+    if (_sidebarRO) { _sidebarRO.disconnect(); _sidebarRO = null; } // 面板重建:先放上一棵树的资源
+    if (_sidebarPinTimer) { clearInterval(_sidebarPinTimer); _sidebarPinTimer = null; }
+    if (!find()) {
+        const t0 = Date.now();
+        _sidebarPinTimer = setInterval(() => {
+            if (!root.isConnected || Date.now() - t0 > 20000) { clearInterval(_sidebarPinTimer); _sidebarPinTimer = null; return; }
+            if (find()) { clearInterval(_sidebarPinTimer); _sidebarPinTimer = null; pinSidebarHeight(root); }
+        }, 250);
+        return; // 找到容器前保持原 100% 布局,topbar 的 sticky 兜底
+    }
+    const scroller = find();
     const pin = () => {
         if (!root.isConnected) return;
-        root.style.height = scroller.clientHeight + "px";
+        const h = scroller.clientHeight;
+        if (h < 80) return; // 容器还没完成首次布局:等 ResizeObserver 回调
+        root.style.height = h + "px";
         root.style.overflow = "hidden";
     };
     pin();
