@@ -14,6 +14,7 @@ import folder_paths
 
 from . import cache_store
 from .bg import run_bg
+from .log import info, warn, error  # 统一日志(E2)
 
 # Civitai 模型类型 -> ComfyUI 模型目录 key(按优先级排列)
 TYPE_TO_FOLDERS = {

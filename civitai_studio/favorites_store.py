@@ -17,6 +17,7 @@ import time
 import folder_paths
 
 from . import cache_store
+from .log import info, warn, error  # 统一日志(E2)
 
 KIND_MODEL = "model"
 KIND_ASSET = "asset"
@@ -94,7 +95,7 @@ def _migrate_legacy():
             conn.commit()
         cache_store.kv_put("fav:migrated_v1", True)
     except Exception as e:  # 迁移失败不致命:旧文件还在,下轮再试
-        print("[Civitai-Studio] 旧收藏迁移失败(下轮重试):", e)
+        error("[Civitai-Studio] 旧收藏迁移失败(下轮重试):", e)
 
 
 def list_items(kind=None, group_id=None, include_deleted=False):
@@ -118,7 +119,7 @@ def list_items(kind=None, group_id=None, include_deleted=False):
             rows = conn.execute(sql + " ORDER BY updated_at DESC", args).fetchall()
             return [_row(r) for r in rows]
         except Exception as e:
-            print("[Civitai-Studio] 收藏读取失败:", e)
+            error("[Civitai-Studio] 收藏读取失败:", e)
             return []
 
 
@@ -167,7 +168,7 @@ def toggle(kind, oid, fields=None):
             conn.commit()
             return True
         except Exception as e:
-            print("[Civitai-Studio] 收藏切换失败:", e)
+            error("[Civitai-Studio] 收藏切换失败:", e)
             return False
 
 
@@ -203,7 +204,7 @@ def upsert_remote(kind, oid, *, name=None, cover=None, group_id=None, extra=None
             )
             conn.commit()
         except Exception as e:
-            print("[Civitai-Studio] 远端收藏写入失败:", e)
+            error("[Civitai-Studio] 远端收藏写入失败:", e)
 
 
 def set_group(kind, oid, group_id):
@@ -217,7 +218,7 @@ def set_group(kind, oid, group_id):
                          (group_id or None, kind, str(oid)))
             conn.commit()
         except Exception as e:
-            print("[Civitai-Studio] 收藏分组失败:", e)
+            error("[Civitai-Studio] 收藏分组失败:", e)
 
 
 def mark_synced(kind, oid, expected_updated=None):
@@ -257,7 +258,7 @@ def groups_list():
                 ).fetchall()
             ]
         except Exception as e:
-            print("[Civitai-Studio] 分组读取失败:", e)
+            error("[Civitai-Studio] 分组读取失败:", e)
             return []
 
 
@@ -301,7 +302,7 @@ def upsert_group(name, gid=None, civitai_id=None, dirty=0, updated_at=None):
             return {"gid": gid, "name": name, "civitai_id": civitai_id, "dirty": dirty,
                     "updated_at": updated_at or now}
         except Exception as e:
-            print("[Civitai-Studio] 分组写入失败:", e)
+            error("[Civitai-Studio] 分组写入失败:", e)
             return None
 
 
@@ -316,7 +317,7 @@ def delete_group(gid):
             conn.execute("DELETE FROM fav_groups WHERE gid=?", (gid,))
             conn.commit()
         except Exception as e:
-            print("[Civitai-Studio] 分组删除失败:", e)
+            error("[Civitai-Studio] 分组删除失败:", e)
 
 
 def mark_group_synced(gid, civitai_id):
@@ -390,7 +391,7 @@ def mark_remote_absent(kind, seen_oids, now=None):
                     n += 1
             conn.commit()
         except Exception as e:
-            print("[Civitai-Studio] 缺席对账失败:", e)
+            error("[Civitai-Studio] 缺席对账失败:", e)
     return n
 
 
@@ -456,5 +457,5 @@ def import_json(payload, replace=False):
                 conn.rollback()  # replace 模式清库后导入失败:回滚,防半截事务被无关 commit 落盘
             except Exception:
                 pass
-            print("[Civitai-Studio] 收藏导入失败:", e)
+            error("[Civitai-Studio] 收藏导入失败:", e)
             raise

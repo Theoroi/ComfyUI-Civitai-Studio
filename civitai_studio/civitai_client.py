@@ -19,6 +19,7 @@ from contextlib import asynccontextmanager
 import aiohttp
 
 from . import api_cache, config
+from .log import info, warn, error  # 统一日志(E2)
 
 # 主站用 civitai.red(与 docs/civitai/civitai_pull.py 实测一致):
 # API 与下载端点齐全,且不被 Cloudflare 盯;civitai.com 对代理出口 IP 经常弹网页挑战
@@ -276,9 +277,10 @@ _RETRYABLE_STATUS = (429, 500, 502, 503, 504)
 
 # 模型详情缓存:LRU+TTL,本地库展开详情/说明落盘复用,避免重复打 API
 # (磁盘 SWR 层见 api_cache — 重启后 6h 内免回源,旧值先回再后台刷)
-_model_cache = {}
+from .mem_lru import MemLru as _MemLru
+
+_model_cache = _MemLru(50)  # C-1:共享 MemLru,条目 TTL 10min
 _MODEL_TTL = 600.0
-_MODEL_CACHE_MAX = 50
 _MODEL_DISK_TTL = 6 * 3600.0
 _VERSION_DISK_TTL = 6 * 3600.0
 
@@ -292,7 +294,7 @@ async def _fetch_model(key):
         if items and str((items[0] or {}).get("id") or "") == key:
             return items[0]
     except (CivitaiError, asyncio.TimeoutError, aiohttp.ClientError) as e:
-        print(f"[Civitai-Studio] ?ids= 查询失败,回退 by-id: {e}")
+        error(f"[Civitai-Studio] ?ids= 查询失败,回退 by-id: {e}")
     return await get_json(f"/models/{key}")
 
 
@@ -300,16 +302,12 @@ async def get_model_cached(mid):
     """按 id 取模型详情:内存 10min LRU(上限50) → 磁盘 6h SWR → 回源."""
     key = str(mid)
     hit = _model_cache.get(key)
-    now = time.time()
-    if hit and now - hit[0] < _MODEL_TTL:
-        return hit[1]
+    if hit is not None:
+        return hit
     data = await api_cache.cached_json(
         "model:" + key, lambda: _fetch_model(key),
         ttl_mem=0, ttl_disk=_MODEL_DISK_TTL, swr=True)
-    if len(_model_cache) >= _MODEL_CACHE_MAX:
-        oldest = min(_model_cache, key=lambda k: _model_cache[k][0])
-        _model_cache.pop(oldest, None)
-    _model_cache[key] = (now, data)
+    _model_cache.put(key, data, expires_at=time.time() + _MODEL_TTL)
     return data
 
 
@@ -339,7 +337,7 @@ async def get_enums_cached():
 
 def prime_model_cache(mid, data):
     """外部刷新数据后回填缓存,让后续 /model/{id} 读取拿到新内容(内存+磁盘)."""
-    _model_cache[str(mid)] = (time.time(), data)
+    _model_cache.put(str(mid), data, expires_at=time.time() + _MODEL_TTL)
     api_cache.prime("model:" + str(mid), data, ttl_disk=_MODEL_DISK_TTL, ttl_mem=False)
 
 

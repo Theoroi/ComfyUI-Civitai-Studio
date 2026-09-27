@@ -15,20 +15,14 @@ import asyncio
 import time
 
 from . import bg, cache_store
+from .log import info, warn, error  # 统一日志(E2)
+from .mem_lru import MemLru
 
-_MEM = {}  # key -> (ts, data)
-_MEM_MAX = 200
 _SWR_CAP = 7 * 86400.0  # 磁盘旧值最多还能当 SWR 底牌 7 天
 _inflight = {}  # (id(loop), key) -> Task(当前全插件单主事件循环;loop 死亡残留属理论场景)
 _refreshing = set()  # SWR 后台刷新在途的 key
-_tasks = set()  # fire-and-forget 任务持强引用,防 GC 掉任务后 finally 不执行、_refreshing 卡死
-
-
-def _spawn(coro):
-    task = asyncio.ensure_future(coro)
-    _tasks.add(task)
-    task.add_done_callback(_tasks.discard)
-    return task
+_MEM = MemLru(200)  # 内存层(C-1:共享 MemLru;条目按 ttl_mem 定 expires_at)
+spawn = bg.spawn  # C-2:fire-and-forget 统一走 bg.spawn
 
 
 def clear_mem():
@@ -36,12 +30,8 @@ def clear_mem():
     _MEM.clear()
 
 
-def _mem_put(key, data):
-    now = time.time()
-    _MEM[key] = (now, data)
-    while len(_MEM) > _MEM_MAX:
-        oldest = min(_MEM, key=lambda k: _MEM[k][0])
-        _MEM.pop(oldest, None)
+def _mem_put(key, data, ttl=None):
+    _MEM.put(key, data, expires_at=time.time() + ttl if ttl else None)
 
 
 async def _singleflight(key, fetch):
@@ -67,16 +57,16 @@ def _kick_refresh(key, fetch, ttl_disk, ttl_mem):
         try:
             data = await _singleflight(key, fetch)  # 已有在途回源则直接共享
             if ttl_mem > 0:
-                _mem_put(key, data)
+                _mem_put(key, data, ttl_mem)
             await bg.run_bg(cache_store.kv_put, "api:" + key,
                             {"ts": time.time(), "data": data}, ttl_disk + _SWR_CAP)
         except Exception as e:  # 刷新失败保留旧值,不打扰用户
-            print("[Civitai-Studio] SWR 后台刷新失败(继续用旧值):", e)
+            error("[Civitai-Studio] SWR 后台刷新失败(继续用旧值):", e)
         finally:
             _refreshing.discard(key)
 
     _refreshing.add(key)
-    _spawn(_run())
+    spawn(_run())
 
 
 async def cached_json(key, fetch, ttl_mem=0.0, ttl_disk=None, swr=True):
@@ -86,8 +76,8 @@ async def cached_json(key, fetch, ttl_mem=0.0, ttl_disk=None, swr=True):
     """
     now = time.time()
     hit = _MEM.get(key)
-    if hit and now - hit[0] < ttl_mem:
-        return hit[1]
+    if hit is not None:
+        return hit  # MemLru 条目写入时已按 ttl_mem 定 expires_at,过期取不到
     disk_key = "api:" + key
     rec = None
     if ttl_disk:
@@ -100,16 +90,16 @@ async def cached_json(key, fetch, ttl_mem=0.0, ttl_disk=None, swr=True):
         data = rec["data"]
         if age < ttl_disk:
             if ttl_mem > 0:
-                _mem_put(key, data)
+                _mem_put(key, data, ttl_mem)
             return data
         if swr and age < _SWR_CAP:
             if ttl_mem > 0:
-                _mem_put(key, data)
+                _mem_put(key, data, ttl_mem)
             _kick_refresh(key, fetch, ttl_disk, ttl_mem)
             return data
     data = await _singleflight(key, fetch)
     if ttl_mem > 0:  # ttl_mem=0 表示调用方自管内存层(如 _model_cache),别双份驻留
-        _mem_put(key, data)
+        _mem_put(key, data, ttl_mem)
     if ttl_disk:
         try:
             await bg.run_bg(cache_store.kv_put, disk_key,
@@ -125,7 +115,7 @@ def prime(key, data, ttl_disk=None, ttl_mem=True):
     ttl_mem=False:调用方自管内存层(如 _model_cache),别往 _MEM 塞死条目.
     """
     if ttl_mem:
-        _mem_put(key, data)
+        _mem_put(key, data)  # prime:无过期(纯 LRU 驻留)
     if not ttl_disk:
         return
     payload = {"ts": time.time(), "data": data}
@@ -134,4 +124,4 @@ def prime(key, data, ttl_disk=None, ttl_mem=True):
     except RuntimeError:
         cache_store.kv_put("api:" + key, payload, ttl_disk + _SWR_CAP)
         return
-    _spawn(bg.run_bg(cache_store.kv_put, "api:" + key, payload, ttl_disk + _SWR_CAP))
+    spawn(bg.run_bg(cache_store.kv_put, "api:" + key, payload, ttl_disk + _SWR_CAP))
