@@ -133,7 +133,12 @@ async def _down_groups():
     g_n = i_n = 0
     m_seen, any_tr = set(), False
     new_cache = {}
-    for c in cols or []:
+    if not cols:
+        # 空结果保守处理:要么用户真清空了全部集合,要么响应异常——都按"枚举不完整"
+        # 跳过本轮对账(墓碑终局,误杀不可自愈;窄域复审 O1)
+        cache_store.kv_put(_COLMODELS_KEY, {})
+        return {"groups": 0, "images": 0, "model_ids": set(), "truncated": True}
+    for c in cols:
         cid, name, ctype = c.get("id"), c.get("name"), c.get("type")
         if not cid or not name or ctype == "Article":
             continue  # 文章书签集合与插件无关
@@ -157,7 +162,12 @@ async def _down_groups():
             any_tr = any_tr or tr
         except civitai_client.CivitaiError:
             items = []
+            tr = True  # 与截断同路:不写缓存,下轮强制重拉
             any_tr = True  # 单集合失败=枚举不完整,防缺席对账误杀其模型(评审R1 D2-3)
+        if tr:
+            # 截断/失败:条目仍入库(有多少算多少),但不写缓存——下轮 cache miss 强制
+            # 重拉,防"空/部分 id 集"被当成完整集参与下轮对账(窄域复审 H1)
+            continue
         ids = []
         for it in items:
             et = str(it.get("type") or "")

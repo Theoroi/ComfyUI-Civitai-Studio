@@ -109,6 +109,30 @@ d3 = asyncio.run(fav_sync._down_groups())
 assert _STATE["items_calls"] == [111], "只应变更的集合重拉"
 assert d3["model_ids"] == {"9001"}, d3
 
+# ---- 2b) 失败/截断不写缓存:下轮同 updatedAt 仍强制重拉(窄域复审 H1) ----
+_calls2b = []
+
+
+async def trpc_111_fails_first(proc, js):
+    if proc == "collection.getAllUser":
+        return _cols_payload()
+    if proc == "collection.getAllCollectionItems":
+        if js["collectionId"] == 111 and len(_calls2b) == 0:
+            _calls2b.append(js["collectionId"])
+            raise CivitaiError("first burst")
+        _calls2b.append(js["collectionId"])
+        return _items_payload(js)
+    raise CivitaiError(proc)
+
+
+fav_sync.civitai_client.trpc_query = trpc_111_fails_first
+cache_store.kv_delete(fav_sync._COLMODELS_KEY)
+dA = asyncio.run(fav_sync._down_groups())
+assert dA["truncated"] is True, dA
+dB = asyncio.run(fav_sync._down_groups())
+assert dB["truncated"] is False and dB["model_ids"] == {"9001"}, dB
+assert [c for c in _calls2b if c == 111] == [111, 111], "失败集合下轮必须重拉(H1)"
+
 # ---- 3) _trpc_paged:条目键缺失 → truncated;页数上限 → truncated ----
 async def _fake_nokey(proc, js):
     return {"nextCursor": None}  # 无条目键(站方改键名场景)
@@ -148,7 +172,9 @@ fs.mark_remote_absent = _spy_absent
 fs.upsert_remote(fs.KIND_MODEL, "777", name="star", remote_updated=1.0)
 fs.upsert_remote(fs.KIND_MODEL, "888", name="will-die", remote_updated=1.0)
 
-_set_trpc({"collection.getAllUser": lambda js: [],
+# O1 守卫后"空集合列表"按不完整处理;这里给一个真实存在但无条目的集合,让两通道完整
+_set_trpc({"collection.getAllUser": lambda js: [
+               {"id": 444, "name": "tmp", "type": "Model", "updatedAt": ISO, "createdAt": ISO}],
            "collection.getAllCollectionItems": _items_payload})
 _set_get_json(lambda path, params: {"items": [{"id": 777, "name": "star"}], "metadata": {}})
 r = asyncio.run(fav_sync.sync_now())
