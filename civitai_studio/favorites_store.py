@@ -297,7 +297,9 @@ def upsert_group(name, gid=None, civitai_id=None, dirty=0, updated_at=None, ctyp
                 if r:
                     gid = r[0]
             if not gid:
-                gid = "g_" + str(int(now * 1000))
+                # 毫秒时间戳+随机后缀:同毫秒连建多组(新集合批量首下)时纯时间戳会主键碰撞,
+                # 后组静默覆盖前组(refine R1 新增桩测试逮到的真 bug)
+                gid = "g_%d_%s" % (int(now * 1000), os.urandom(2).hex())
             else:
                 # 保留既有联动字段:按 gid 改名不抹 civitai_id(防下次同步分叉)
                 r = conn.execute("SELECT civitai_id, dirty, name, ctype FROM fav_groups WHERE gid=?", (gid,)).fetchone()
@@ -338,9 +340,10 @@ def ensure_legacy_group():
     for g in groups_list():
         if g.get("ctype") == LEGACY_CTYPE:
             return g["gid"]
-    # 用户早建过同名普通组:收编补 ctype,防双 "Legacy" 并存(审计 F-7)
+    # 用户早建过同名普通组:仅收编"干净"的(dirty=0 且未绑定集合)——dirty 组正等上推
+    # 建远端集合,已绑定组有归属语义,改 ctype 会静默冻结其上行(评审R1 F4)
     for g in groups_list():
-        if g["name"] == "Legacy" and not g.get("civitai_id") and not g.get("ctype"):
+        if g["name"] == "Legacy" and not g.get("civitai_id") and not g.get("ctype") and not g["dirty"]:
             conn = _conn()
             if conn is not None:
                 with _LOCK:
@@ -474,6 +477,15 @@ def export_json():
     }
 
 
+def _import_src(it):
+    """导入行 src 归一:未分组 remote 资产改标 local——该签名行与 legacy 残留一次性
+    清理(purge_legacy_ungrouped)的删除条件完全重合,导入的数据不应被同步吞掉(评审R1 F3)."""
+    src = it.get("src") or "local"
+    if it.get("kind") == KIND_ASSET and src == "remote" and not it.get("group_id"):
+        return "local"
+    return src
+
+
 def import_json(payload, replace=False):
     """导入导出文件:replace=True 先清库(整库迁移);否则合并(dirty 保留本地改动)."""
     if not isinstance(payload, dict):
@@ -512,7 +524,7 @@ def import_json(payload, replace=False):
                     _INS,
                     (it["kind"], str(it["oid"]), it.get("group_id"), it.get("name"),
                      it.get("cover"), float(it.get("added_at") or now),
-                     float(it.get("updated_at") or now), it.get("src") or "local",
+                     float(it.get("updated_at") or now), _import_src(it),
                      dirty, deleted,
                      json.dumps(it["extra"], ensure_ascii=False) if it.get("extra") else None,
                      json.dumps(it["gpushed"], ensure_ascii=False)

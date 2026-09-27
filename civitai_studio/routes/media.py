@@ -157,6 +157,15 @@ async def cache_clear(request):
 
 _GEN_DATA_CACHE = MemLru(300)
 _GEN_DATA_TTL = 3600
+_GEN_FAIL = {"fails": 0, "paused_until": 0.0}  # 与 image_tags 同款熔断:连败 3 次暂停 600s(评审R1 F6)
+
+
+def _gen_fail():
+    st = _GEN_FAIL
+    st["fails"] += 1
+    if st["fails"] >= 3:
+        st["paused_until"] = time.time() + 600
+        st["fails"] = 0
 
 
 @_get("/civitai_studio/image_gen_data/{image_id}")
@@ -168,16 +177,26 @@ async def image_gen_data(request):
     image_id = request.match_info["image_id"]
     if not (image_id.isascii() and image_id.isdigit()):
         return _json_error("image id 必须是数字", 400)
-    key = "imgendata:" + image_id
+    remain = _GEN_FAIL["paused_until"] - time.time()
+    if remain > 0:  # 熔断期:空 payload(前端无感降级)+ 重试提示
+        return web.json_response({"meta": None, "resources": [], "tools": [], "techniques": [],
+                                  "paused": True, "retryAfterSec": int(remain)})
+    if len(image_id) > 18:  # 挡超长数字串进 URL(评审R1 F5)
+        return _json_error("image id 过长", 400)
+    key = "imgendata:" + str(int(image_id))  # 归一化前导零,同图单缓存键
     hit = _GEN_DATA_CACHE.get(key)
     if hit is not None:
         return web.json_response(hit)
     try:
         d = await civitai_client.trpc_query("image.getGenerationData", {"id": int(image_id)})
     except civitai_client.CivitaiError as e:
+        _gen_fail()
         return _json_error(e, 502)
     except Exception as e:
+        _gen_fail()
         return _json_error(civitai_client.net_error_message(e), 502)
+    _GEN_FAIL["fails"] = 0
+    _GEN_FAIL["paused_until"] = 0.0
     payload = {
         "meta": d.get("meta") if isinstance(d, dict) else None,
         "resources": (d.get("resources") or []) if isinstance(d, dict) else [],

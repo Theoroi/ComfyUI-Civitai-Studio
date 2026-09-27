@@ -4,7 +4,7 @@
 - 资产(图片)收藏:以集合为主通道 — tRPC collection.getAllUser + getAllCollectionItems
   (条目键 collectionItems,实体在 data 字段,type=model/image);旧版 REST
   /images?favorites=true 读路(web 已不可见)由 fav_pull_legacy 开关控制,默认关,
-  开启时落入 ctype='Legacy' 哨兵分组,关闭时同步清理其残留;本地→远端 ❌(无公开端点)
+  开启时落入 ctype='Legacy' 哨兵分组,关闭状态下首次同步一次性清理其残留;本地→远端 ❌(无公开端点)
 - 模型收藏:双向 ✅(读 REST /models?favorites=true;写 tRPC user.toggleFavorite,
   需 key 勾选 SocialWrite — 缺作用域时返回 scope_hint,不中断下同步)
 - 集合/分组:读 tRPC collection.getAllUser(type=Model/Image,Article 跳过)+getAllCollectionItems;
@@ -15,6 +15,7 @@
 """
 
 import asyncio
+import json
 import os
 import time
 from datetime import datetime
@@ -24,6 +25,7 @@ from . import bg, cache_store, civitai_client, config, favorites_store as fs
 _PAGE_LIMIT = 50
 _MAX_PAGES = 20  # 单方向单次同步最多 20 页(1000 条),够用且防失控
 _SYNC_LOCK_KEY = "fav:sync_inflight"
+_COLMODELS_KEY = "fav:colmodels"  # cid → 集合内模型 id 集(增量跳过用)
 
 # 集合条目里的 image.url 是裸文件 UUID(非完整 CDN 链接);桶名是站方常量。
 # 构造失败只影响封面显隐(onerror 隐藏),不影响收藏数据本身。
@@ -57,6 +59,9 @@ async def _trpc_paged(proc, base_input, item_key):
             js["cursor"] = cursor
         data = await civitai_client.trpc_query(proc, js)
         page = data.get(item_key) if isinstance(data, dict) else data
+        if page is None:
+            # 条目键缺失(站方若再改键名):按不完整处理,防下游对账误杀(评审R1 D2-5)
+            return items, True
         items.extend(page or [])
         cursor = (data or {}).get("nextCursor") if isinstance(data, dict) else None
         pages += 1
@@ -105,37 +110,55 @@ async def _down_favorites(kind, group_id=None):
 
 
 async def _down_groups():
-    """集合 → 本地分组;集合条目 → 本地收藏并挂钩分组。
+    """集合 → 本地分组;集合条目 → 本地收藏并挂钩分组.
 
     实测(E2E 修复依据):getAllUser {} 返回集合数组,元素含 type(Model/Image/Article);
     条目分页键是 collectionItems(不是 items);条目实体在 data 字段,
-    type="model"/"image" 对应模型/图片——旧实现读 items/image 键导致收藏夹全空。
-    返回 {"groups": 组数, "images": 图片条目数}。"""
+    type="model"/"image" 对应模型/图片——旧实现读 items/image 键导致收藏夹全空.
+    增量(评审R1 P1):集合 updatedAt 未变 → 条目集不变,复用 kv 缓存的模型 id 集
+    跳过全量翻页(重户同步从每轮几十请求降到 1+N_变更);集合被删时其缓存随
+    本轮重建自然淘汰;本地手动改组不被远端重置.
+    返回 {"groups": 组数, "images": 本轮实拉图片条目数, "model_ids": 全量模型 id 集,
+    "truncated": 任一通道枚举不完整}."""
     cols = await civitai_client.trpc_query("collection.getAllUser", {})
     if isinstance(cols, dict):
         cols = cols.get("collections") or cols.get("items") or []
-    by_cid = {}
+    prev = {}
     for g in fs.groups_list():
         if g.get("civitai_id"):
-            by_cid[int(g["civitai_id"])] = g["gid"]
+            prev[int(g["civitai_id"])] = g
+    cache = cache_store.kv_get(_COLMODELS_KEY)  # kv_get 返回已解码对象
+    if not isinstance(cache, dict):
+        cache = {}
     g_n = i_n = 0
     m_seen, any_tr = set(), False
+    new_cache = {}
     for c in cols or []:
         cid, name, ctype = c.get("id"), c.get("name"), c.get("type")
         if not cid or not name or ctype == "Article":
             continue  # 文章书签集合与插件无关
-        # 新集合首次落地 by_cid 里还没有映射:必须用 upsert 返回的 gid,
+        cid = int(cid)
+        ts = _ts(c.get("updatedAt") or c.get("createdAt"))
+        # 新集合首次落地 prev 里还没有映射:必须用 upsert 返回的 gid,
         # 否则本轮条目全部挂不上组(集合"看似同步了但空")
-        g = fs.upsert_group(str(name), civitai_id=int(cid), ctype=ctype,
-                            updated_at=_ts(c.get("updatedAt") or c.get("createdAt")) or None)
-        gid = (g or {}).get("gid") or by_cid.get(int(cid))
+        g = fs.upsert_group(str(name), civitai_id=cid, ctype=ctype, updated_at=ts or None)
+        gid = (g or {}).get("gid") or (prev.get(cid) or {}).get("gid")
         g_n += 1
+        p = prev.get(cid)
+        cached = cache.get(str(cid))
+        if p is not None and cached is not None and abs((p.get("updated_at") or 0) - ts) < 1:
+            # 集合未变:复用上轮模型 id 集,跳过全量翻页(评审R1 P1)
+            new_cache[str(cid)] = cached
+            m_seen.update(str(x) for x in cached)
+            continue
         try:
             items, tr = await _trpc_paged("collection.getAllCollectionItems",
-                                          {"collectionId": int(cid), "limit": 100}, "collectionItems")
+                                          {"collectionId": cid, "limit": 100}, "collectionItems")
             any_tr = any_tr or tr
         except civitai_client.CivitaiError:
             items = []
+            any_tr = True  # 单集合失败=枚举不完整,防缺席对账误杀其模型(评审R1 D2-3)
+        ids = []
         for it in items:
             et = str(it.get("type") or "")
             d = it.get("data") or {}
@@ -150,11 +173,14 @@ async def _down_groups():
                                  remote_updated=_ts(it.get("createdAt")))
                 i_n += 1
             elif et == "model":
+                ids.append(oid)
                 m_seen.add(oid)
                 fs.upsert_remote(fs.KIND_MODEL, oid, group_id=gid, name=d.get("name"),
                                  cover=_cover_url(((d.get("images") or [{}])[0] or {})),
                                  extra={"type": d.get("type"), "baseModels": d.get("baseModels")},
                                  remote_updated=_ts(d.get("lastVersionAt") or it.get("createdAt")))
+        new_cache[str(cid)] = ids
+    cache_store.kv_put(_COLMODELS_KEY, new_cache)
     return {"groups": g_n, "images": i_n, "model_ids": m_seen, "truncated": any_tr}
 
 
@@ -246,9 +272,8 @@ async def sync_now():
     改版前的遗留表,web 上已不可见(E2E 11.1"虚标1000"),由 fav_pull_legacy 开关控制,
     默认关 + 落入 Legacy 分组;关闭时同步清理其残留(未分组 remote 资产行)。"""
     token = os.urandom(8).hex()
-    if cache_store.kv_get(_SYNC_LOCK_KEY):
+    if not cache_store.kv_putnx(_SYNC_LOCK_KEY, token, ttl=1800):  # 原子占位防 TOCTOU(评审R1 F2);存量首推 0.5s/条限速,finally 校验 token 再清
         return {"status": "busy"}
-    cache_store.kv_put(_SYNC_LOCK_KEY, token, ttl=1800)  # 防重入;存量首推带 0.5s/条限速,最坏可达 30 分钟,finally 校验 token 再清
     result = {"assets_down": 0, "models_down": 0, "groups_down": 0, "groups_up": 0,
               "items_up": 0, "upsynced": 0, "upsync_failed": 0, "scope_hint": "",
               "collection_images": 0, "legacy_purged": 0,
@@ -270,28 +295,30 @@ async def sync_now():
                 cache_store.kv_put("legacy_purged_v1", True)
             except Exception as e:
                 result["errors"].append("legacy 残留清理: " + str(e)[:160])
+        # 模型 ★ 下行:full=完整枚举才允许缺席对账(评审R1 D2-1:失败路径若以空 seen
+        # 参与对账,一次瞬时 429/WAF 就会把全部 ★ 模型误杀成墓碑)
+        models_seen, models_full = set(), False
         try:
             r = await _down_favorites(fs.KIND_MODEL)
             result["models_down"] = r["n"]
-            models_truncated = r["truncated"]
             models_seen = r["seen"]
+            models_full = not r["truncated"]
+            if r["truncated"]:
+                result["truncated"] = True  # 仅真实翻页截断才提示"仅同步前 1000 条"
         except Exception as e:
-            result["errors"].append("模型收藏读取: " + str(e)[:160])
-            models_truncated, models_seen = False, set()
+            result["errors"].append("模型收藏读取(本轮跳过缺席对账): " + str(e)[:160])
+        d = {"model_ids": set(), "truncated": True}
         try:
             d = await _down_groups()
             result["groups_down"] = d["groups"]
             result["collection_images"] = d["images"]
+            if d["truncated"]:
+                result["truncated"] = True
         except Exception as e:
-            result["errors"].append("集合读取: " + str(e)[:160])
-            d = {"groups": 0, "images": 0, "model_ids": set(), "truncated": False}
-        # 缺席对账口径 = REST ★ 收藏 ∪ 集合 model 条目(审计 F-3:只收进集合未★的
-        # 模型不在 REST 收藏表,单用 REST seen 会每轮误杀);任一通道截断则跳过(缺席
-        # 可能只是翻页上限,会误杀)
-        if not models_truncated and not d["truncated"]:
+            result["errors"].append("集合读取(本轮跳过缺席对账): " + str(e)[:160])
+        # 缺席对账口径 = REST ★ 收藏 ∪ 集合 model 条目(审计 F-3);两通道都完整枚举才执行
+        if models_full and not d["truncated"]:
             await bg.run_bg(fs.mark_remote_absent, fs.KIND_MODEL, models_seen | d["model_ids"])
-        elif models_truncated or d["truncated"]:
-            result["truncated"] = True
         await _upsync_models(result)
         await _upsync_groups(result)
         await bg.run_bg(fs.purge_tombstones)

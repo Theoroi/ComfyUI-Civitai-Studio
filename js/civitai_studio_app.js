@@ -205,11 +205,11 @@ const STR = {
         pdescTip: "关联元数据始终存本地数据库;开启后额外把说明/标签/封面导出为模型旁的 .civitai.json(供外部工具)",
         settingsMsg: "API Key 在 Civitai 账户设置页生成,仅保存在本机 ComfyUI user 目录;Key 只会下发给官方站点,不会发给镜像。",
         settingsSaved: "设置已保存", saveFailed: "保存失败",
-        readCfgFailed: "读取配置失败", clearFailed: "清除失败",
+        readCfgFailed: "读取配置失败",
         route405: "服务端尚未加载该功能 — 请重启一次 ComfyUI 后重试",
         presetHotWeek: "🔥 本周热门", presetHotMonth: "📈 本月热门", presetBestMonth: "⭐ 本月高分",
         saveBtn: "存图", saveBtnTitle: "保存到 ComfyUI output 目录",
-        saveOk: "已保存到 output: {name}", saveFailed: "保存失败",
+        saveOk: "已保存到 output: {name}",
         applyBtn: "应用到工作流", applyNoKs: "未找到 KSampler 节点", applyFail: "应用失败",
         applyDone: "已应用:提示词 ✓{lora}", applyLoraPart: ",LoRA ×{n}", loraMissing: "本地未找到: {names}",
         galleryTab: "🖼 画廊", gallerySortNewest: "最新发布", gallerySortReactions: "最多互动", gallerySortComments: "最多评论",
@@ -363,11 +363,11 @@ const STR = {
         pdescTip: "Association metadata always lives in the local DB; when on, also export description/tags/cover next to the model file for external tools",
         settingsMsg: "Generate the key on the Civitai account page; it is stored locally in the ComfyUI user directory and only ever sent to official hosts.",
         settingsSaved: "Settings saved", saveFailed: "Save failed",
-        readCfgFailed: "Failed to read settings", clearFailed: "Clear failed",
+        readCfgFailed: "Failed to read settings",
         route405: "The server has not loaded this feature — restart ComfyUI once and retry",
         presetHotWeek: "🔥 Hot this week", presetHotMonth: "📈 Hot this month", presetBestMonth: "⭐ Top rated this month",
         saveBtn: "⬇ Save", saveBtnTitle: "Save to the ComfyUI output folder",
-        saveOk: "Saved to output: {name}", saveFailed: "Save failed",
+        saveOk: "Saved to output: {name}",
         applyBtn: "Apply to workflow", applyNoKs: "No KSampler node found", applyFail: "Apply failed",
         applyDone: "Applied: prompts ✓{lora}", applyLoraPart: ", {n} LoRA(s)", loraMissing: "Local LoRAs not found: {names}",
         galleryTab: "🖼 Gallery", gallerySortNewest: "Newest", gallerySortReactions: "Most reactions", gallerySortComments: "Most comments",
@@ -545,7 +545,7 @@ function sanitizeHtml(html) {
     const div = document.createElement("div");
     div.innerHTML = String(html || "");
     // template 的子节点不在 querySelectorAll 范围内,会整体绕过净化:直接移除
-    $$("script,style,iframe,object,embed,link,meta,form,base,svg,math,template", div).forEach((n) => n.remove());
+    $$("script,style,iframe,object,embed,link,meta,form,base,svg,math,template,noscript,noembed,noframes,xmp,plaintext,textarea,title", div).forEach((n) => n.remove()); // 后 7 个=原始文本元素,mXSS 双语境解析面(评审R1 D4-1)
     $$("*", div).forEach((n) => {
         for (const attr of Array.from(n.attributes)) {
             const name = attr.name.toLowerCase();
@@ -4333,8 +4333,10 @@ function mediaViewerHtml(item) {
     const src = esc(item.url || "");
     if (isVideoItem(item)) {
         // 高度随宽高比自适应(E2E c:固定 64vh 让横屏视频上下长黑边);
-        // aspect-ratio 用接口给到的 width/height 预置,元数据加载前后盒子尺寸不变(防抖动)
-        const ar = item.width && item.height ? `aspect-ratio:${item.width} / ${item.height};` : "";
+        // aspect-ratio 用接口给到的 width/height 预置,元数据加载前后盒子尺寸不变(防抖动);
+        // 依赖接口带 width/height,缺失时退化为浏览器默认尺寸(评审R1 F-4);数值经 Number 收敛防注入
+        const vw = Number(item.width), vh = Number(item.height);
+        const ar = vw > 0 && vh > 0 ? `aspect-ratio:${vw} / ${vh};` : "";
         return `<video src="${esc(imgSrc(item.url || ""))}" controls autoplay loop muted playsinline`
             + ` style="height:auto;width:auto;max-width:100%;max-height:64vh;${ar}border-radius:8px;display:block;margin:0 auto;background:#000"></video>`;
     }
@@ -4355,7 +4357,6 @@ function renderNodeThumbs(node) {
     strip.querySelectorAll(".cs-thumb,.cs-thumb-msg,.cs-thumb-bar,.cs-thumb-more")
         .forEach((el) => el.remove());
     const st = node.csFetch || {};
-    const total = (node.csResults || []).length;
     const idw = (node.widgets || []).find((w) => w.name === "image_id");
     renderSelInfo(node); // 顶部信息面板(独立 widget,随选择刷新)
 
