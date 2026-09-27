@@ -28,6 +28,35 @@ const BASE_MODELS = [
 ];
 const SORTS = ["Most Downloaded", "Highest Rated", "Newest"];
 const PERIODS = ["AllTime", "Month", "Week", "Day"];
+// 画廊快捷栏(E2E 6):images API 无 Highest Rated,高分用 Most Collected 近似
+const GAL_PRESETS = [
+    ["new-day", "Day", "Newest"],
+    ["hot-day", "Day", "Most Reactions"],
+    ["hot-week", "Week", "Most Reactions"],
+    ["best-week", "Week", "Most Collected"],
+    ["hot-month", "Month", "Most Reactions"],
+    ["best-month", "Month", "Most Collected"],
+];
+// 文件格式推导(E2E 7/e):jpg 提示无内嵌工作流;视频看 url 扩展名
+function fmtOf(it) {
+    const u = String((it && it.url) || "");
+    if (isVideoItem(it) || /\.(mp4|webm|mov)$/i.test(u)) return "video";
+    const m = u.match(/\.(jpe?g|png|webp|gif)$/i);
+    if (!m) return "";
+    return m[1].toLowerCase() === "jpeg" ? "jpg" : m[1].toLowerCase();
+}
+
+function fmtBadgeHtml(it) {
+    const f = fmtOf(it);
+    if (!f) return "";
+    const label = f === "video" ? (/\.webm$/i.test(String(it.url || "")) ? "WEBM" : "MP4") : f.toUpperCase();
+    return `<span class="cs-fmt">${label}</span>`;
+}
+
+function fmtSelHtml(cur) {
+    return ["all", "jpg", "png", "webp", "gif", "video"].map((f) =>
+        `<option value="${f}" ${(cur || "all") === f ? "selected" : ""}>${f === "all" ? esc(t("fmtAll")) : f === "video" ? esc(t("fmtVideo")) : f.toUpperCase()}</option>`).join("");
+}
 const NSFW_LEVELS = [0, 1, 2];
 
 const JS_VERSION = "0.7.0";
@@ -177,6 +206,10 @@ const STR = {
         applyBtn: "应用到工作流", applyNoKs: "未找到 KSampler 节点", applyFail: "应用失败",
         applyDone: "已应用:提示词 ✓{lora}", applyLoraPart: ",LoRA ×{n}", loraMissing: "本地未找到: {names}",
         galleryTab: "🖼 画廊", gallerySortNewest: "最新发布", gallerySortReactions: "最多互动", gallerySortComments: "最多评论",
+        gallerySortCollected: "最多收藏", gallerySortOldest: "最早发布", gallerySortRandom: "随机",
+        galPresetNewDay: "🌅 今日最新", galPresetHotDay: "🔥 今日热门", galPresetHotWeek: "🔥 本周热门",
+        galPresetBestWeek: "⭐ 本周高分", galPresetHotMonth: "📈 本月热门", galPresetBestMonth: "⭐ 本月高分",
+        fmtAll: "全部格式", fmtVideo: "视频", fmtTip: "客户端筛选,只作用于已加载条目",
         galBase: "底模", loadMore: "加载更多", useAsOutput: "选为输出", selectedAsOutput: "已选为输出",
         sfwLabel: "全年龄", nsfwLabel: "包含 NSFW", galTagId: "Tag ID 或名称(逗号分隔)",
         noTags: "无标签", tagsPaused: "标签抓取已暂停({sec} 秒后恢复)", noSelectionHint: "未选择(点击缩略图选择)",
@@ -328,6 +361,10 @@ const STR = {
         applyBtn: "Apply to workflow", applyNoKs: "No KSampler node found", applyFail: "Apply failed",
         applyDone: "Applied: prompts ✓{lora}", applyLoraPart: ", {n} LoRA(s)", loraMissing: "Local LoRAs not found: {names}",
         galleryTab: "🖼 Gallery", gallerySortNewest: "Newest", gallerySortReactions: "Most reactions", gallerySortComments: "Most comments",
+        gallerySortCollected: "Most collected", gallerySortOldest: "Oldest", gallerySortRandom: "Random",
+        galPresetNewDay: "🌅 New today", galPresetHotDay: "🔥 Hot today", galPresetHotWeek: "🔥 Hot this week",
+        galPresetBestWeek: "⭐ Top this week", galPresetHotMonth: "📈 Hot this month", galPresetBestMonth: "⭐ Top this month",
+        fmtAll: "All formats", fmtVideo: "Video", fmtTip: "Client-side filter, applies to loaded items only",
         galBase: "Base model", loadMore: "Load more", useAsOutput: "Use as output", selectedAsOutput: "Selected as output",
         sfwLabel: "SFW only", nsfwLabel: "Include NSFW", galTagId: "Tag ID or name, comma-separated",
         noTags: "No tags", tagsPaused: "Tag fetch paused ({sec}s), retrying later", noSelectionHint: "Nothing selected (click a thumbnail)",
@@ -2353,7 +2390,7 @@ async function idbTrimThumbs(cap) {
 
 const GAL_SNAPSHOT_KEY = "gal_snapshot";
 function galleryFilters(st) {
-    return { sort: st.sort, period: st.period, nsfwLevel: st.nsfwLevel, base: st.base, tag: st.tag, imageId: st.imageId || "" };
+    return { sort: st.sort, period: st.period, nsfwLevel: st.nsfwLevel, base: st.base, tag: st.tag, imageId: st.imageId || "", fmt: st.fmt || "all" };
 }
 async function saveGallerySnapshot() {
     const st = S.gal;
@@ -2380,6 +2417,7 @@ async function restoreGallerySnapshot(view) {
     st.base = f.base || "";
     st.tag = f.tag || "";
     st.imageId = f.imageId || "";
+    st.fmt = f.fmt || "all";
     st.items = snap.items.map((x) => { const c = { ...x }; delete c.__rendered; return c; });
     st.next = Array.isArray(snap.next) ? snap.next : [];
     st.__restored = true; // 首次切到画廊页时渲染 + 静默刷新(隐藏态不渲染,clientWidth 为 0)
@@ -2390,6 +2428,7 @@ async function restoreGallerySnapshot(view) {
     setVal("#cs-gal-nsfw", String(st.nsfwLevel));
     setVal("#cs-gal-base", st.base);
     setVal("#cs-gal-imgid", st.imageId);
+    setVal("#cs-gal-fmt", st.fmt);
     if (view.__galTagPicker) view.__galTagPicker.set(String(st.tag || "").split(",").map((s) => s.trim()).filter(Boolean));
 }
 
@@ -2481,7 +2520,9 @@ function renderGallery(reset) {
         }
         st.jrow = []; st.jrowAr = 0;
     };
+    const fmtWant = st.fmt && st.fmt !== "all" ? st.fmt : null;
     for (const img of st.items) {
+        if (fmtWant && fmtOf(img) !== fmtWant) continue; // 格式筛选(E2E e)
         if (img.__rendered) continue;
         img.__rendered = true;
         const item = document.createElement("div");
@@ -2491,11 +2532,11 @@ function renderGallery(reset) {
             + `<button class="cs-save-btn" style="right:auto;left:4px;${favOn ? "color:#ffd75e;" : ""}" title="${esc(t("favBtnTitle"))}" data-fav="${esc(img.id)}">★</button>`;
         if (isVideoItem(img)) {
             // 视频条目:静音取首帧作封面,点击悬浮层播放
-            item.innerHTML = `${save}<video muted loop playsinline preload="metadata"
+            item.innerHTML = `${save}${fmtBadgeHtml(img)}<video muted loop playsinline preload="metadata"
                     src="${esc(imgSrc(img.url))}#t=0.001" data-direct="${esc(img.url)}"
                     onerror="this.style.display='none'"></video>`;
         } else {
-            item.innerHTML = `${save}<img loading="lazy" src="${esc(imgSrc(cdnThumb(img.url)))}" data-direct="${esc(img.url)}"
+            item.innerHTML = `${save}${fmtBadgeHtml(img)}<img loading="lazy" src="${esc(imgSrc(cdnThumb(img.url)))}" data-direct="${esc(img.url)}"
                     onerror="this.style.display='none'"/>`;
         }
         const mediaEl = item.querySelector("img,video");
@@ -2533,6 +2574,9 @@ function buildGalleryView(root) {
     view.dataset.view = "gallery";
     view.innerHTML = `
         <div class="cs-fwrap">
+            <div class="cs-presets">
+                ${GAL_PRESETS.map(([k]) => `<button class="cs-chip" data-gpreset="${k}">${esc(t("galPreset" + k.replace(/(^|-)([a-z])/g, (_, _s, c) => c.toUpperCase())))}</button>`).join("")}
+            </div>
             <div class="cs-filters cs-filters-gal">
                 <input id="cs-gal-base" class="cs-span-full" type="text" placeholder="${esc(t("basePlaceholder"))}" value="${esc(st.base)}"/>
                 <input id="cs-gal-imgid" class="cs-span-full" type="text" placeholder="${esc(S.lang === "zh" ? "图片 ID 精确搜索(回车)" : "Image ID exact search (Enter)")}" value="${esc(st.imageId || "")}" autocomplete="off"/>
@@ -2540,10 +2584,14 @@ function buildGalleryView(root) {
                 <select id="cs-gal-period">${PERIODS.map((p) => `<option value="${p}" ${st.period === p ? "selected" : ""}>${esc(periodLabel(p))}</option>`).join("")}</select>
                 <select id="cs-gal-sort">
                     <option value="Newest">${esc(t("gallerySortNewest"))}</option>
+                    <option value="Oldest">${esc(t("gallerySortOldest"))}</option>
                     <option value="Most Reactions">${esc(t("gallerySortReactions"))}</option>
                     <option value="Most Comments">${esc(t("gallerySortComments"))}</option>
+                    <option value="Most Collected">${esc(t("gallerySortCollected"))}</option>
+                    <option value="Random">${esc(t("gallerySortRandom"))}</option>
                 </select>
                 <select id="cs-gal-nsfw"><option value="0" ${!st.nsfwLevel ? "selected" : ""}>${esc(t("sfwLabel"))}</option><option value="1" ${st.nsfwLevel ? "selected" : ""}>${esc(t("nsfwLabel"))}</option></select>
+                <select id="cs-gal-fmt" title="${esc(t("fmtTip"))}">${fmtSelHtml(st.fmt)}</select>
                 <select id="cs-gal-size" title="${esc(S.lang === "zh" ? "缩略图大小" : "Thumbnail size")}">${[128, 256, 512].map((px) => `<option value="${px}" ${st.thumbSize === px ? "selected" : ""}>${px}px</option>`).join("")}</select>
                 <button class="cs-btn" id="cs-gal-fav" title="${esc(t("favOnlyTitle"))}" style="${st.favOnly ? "background:var(--accent-color,#4a90e2);color:#fff;border-color:transparent;" : ""}">★</button>
             </div>
@@ -2566,6 +2614,19 @@ function buildGalleryView(root) {
     $("#cs-gal-sort", view).addEventListener("change", (e) => { st.sort = e.target.value; fetchGallery(true); });
     $("#cs-gal-period", view).addEventListener("change", (e) => { st.period = e.target.value; fetchGallery(true); });
     $("#cs-gal-nsfw", view).addEventListener("change", (e) => { st.nsfwLevel = parseInt(e.target.value, 10); fetchGallery(true); });
+    // 格式筛选:纯客户端,只过滤已加载条目,不触发重拉(E2E e:API 无类型/格式参数)
+    $("#cs-gal-fmt", view).addEventListener("change", (e) => { st.fmt = e.target.value; renderGallery(true); });
+    // 快捷栏(E2E 6):映射 period+sort,回写 select 后重拉
+    $$(".cs-presets [data-gpreset]", view).forEach((chip) => {
+        chip.onclick = () => {
+            const preset = GAL_PRESETS.find(([k]) => k === chip.dataset.gpreset);
+            if (!preset) return;
+            st.period = preset[1]; st.sort = preset[2];
+            $("#cs-gal-period", view).value = st.period;
+            $("#cs-gal-sort", view).value = st.sort;
+            fetchGallery(true);
+        };
+    });
     // 缩略图大小:不重新拉取,清渲染标记后整版重排
     $("#cs-gal-size", view).addEventListener("change", (e) => {
         st.thumbSize = parseInt(e.target.value, 10);
@@ -3755,6 +3816,8 @@ function injectStyles() {
 .cs-gal-grid { display:flex; flex-wrap:wrap; gap:6px; padding-bottom:20px; align-content:flex-start; }
 .cs-gal-item { position:relative; border-radius:6px; overflow:hidden; background:#222; box-sizing:border-box; }
 .cs-gal-item img, .cs-gal-item video { width:100%; height:100%; object-fit:cover; display:block; cursor:pointer; }
+/* 文件格式角标(E2E 7):★ 占左上,角标顺移其右 */
+.cs-fmt { position:absolute; left:26px; top:4px; background:rgba(0,0,0,.7); color:#cfe3ff; font-size:9px; line-height:1; padding:2px 4px; border-radius:3px; z-index:2; pointer-events:none; }
 .cs-gal-item img:hover, .cs-gal-item video:hover { outline:2px solid var(--accent-color,#4a90e2); }
 .cs-dim { color:var(--desc-text-color,#999); font-size:11px; }
 .cs-dl-row { background:var(--comfy-box-bg, var(--comfy-input-bg,#333)); border-radius:6px; padding:8px; margin-bottom:6px; display:flex; gap:8px; align-items:center; }
@@ -3828,7 +3891,7 @@ function injectStyles() {
 .cs-gal-filters { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:8px; }
 .cs-gal-filters > * { width:100%; min-width:0; }
 .cs-media-view img, .cs-media-view video { max-width:100%; max-height:64vh; border-radius:8px; display:block; margin:0 auto; background:rgba(0,0,0,.35); }
-.cs-media-view video { height:64vh; object-fit:contain; }
+.cs-media-view video { height:auto; max-height:64vh; object-fit:contain; } /* E2E c:横屏视频去固定高 */
 .cs-thumb video { pointer-events:none; }
 `;
     document.head.appendChild(style);
@@ -4178,9 +4241,11 @@ function refreshTagCombos() {
 function mediaViewerHtml(item) {
     const src = esc(item.url || "");
     if (isVideoItem(item)) {
-        // 高度固定(不随控制条显隐/元数据加载变化),否则浮窗会抖动变大变小
+        // 高度随宽高比自适应(E2E c:固定 64vh 让横屏视频上下长黑边);
+        // aspect-ratio 用接口给到的 width/height 预置,元数据加载前后盒子尺寸不变(防抖动)
+        const ar = item.width && item.height ? `aspect-ratio:${item.width} / ${item.height};` : "";
         return `<video src="${esc(imgSrc(item.url || ""))}" controls autoplay loop muted playsinline`
-            + ` style="height:64vh;width:auto;max-width:100%;border-radius:8px;display:block;margin:0 auto;background:#000"></video>`;
+            + ` style="height:auto;width:auto;max-width:100%;max-height:64vh;${ar}border-radius:8px;display:block;margin:0 auto;background:#000"></video>`;
     }
     return `<img src="${esc(imgSrc(item.url || ""))}" data-direct="${src}"`
         + ` style="max-width:100%;max-height:64vh;border-radius:8px;display:block;margin:0 auto"`
@@ -4218,9 +4283,17 @@ function renderNodeThumbs(node) {
         bar.appendChild(sp);
         bar.appendChild(lt);
     }
+    { // 格式筛选 select(E2E e):运行时状态不入工作流序列化
+        const fmtSel = document.createElement("select");
+        fmtSel.style.cssText = "font-size:11px;background:var(--comfy-input-bg,#333);color:#eee;border:1px solid #555;border-radius:4px;padding:1px 3px;";
+        fmtSel.innerHTML = fmtSelHtml(node.__fmt);
+        fmtSel.onchange = () => { node.__fmt = fmtSel.value; renderNodeThumbs(node); };
+        bar.appendChild(fmtSel);
+    }
     strip.appendChild(bar);
 
-    const items = (node.csResults || []).slice(0, 100);
+    const fmtWant = node.__fmt && node.__fmt !== "all" ? node.__fmt : null;
+    const items = (node.csResults || []).filter((it) => !fmtWant || fmtOf(it) === fmtWant).slice(0, 100);
     if (!items.length && !st.loading) {
         const msg = document.createElement("div");
         msg.className = "cs-thumb-msg";
@@ -4275,6 +4348,7 @@ function renderNodeThumbs(node) {
             } catch (e) { toast("error", t("favFailed"), e.message); }
         };
         cell.appendChild(favBtn);
+        cell.insertAdjacentHTML("afterbegin", fmtBadgeHtml(c.it)); // 格式角标(E2E 7)
         cell.onclick = () => showNodeImageFloat(node, c.it);
         strip.appendChild(cell);
     }
