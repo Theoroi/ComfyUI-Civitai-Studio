@@ -105,12 +105,9 @@ def _legacy_state_path():
 
 
 def _persist():
-    path = _state_path()
-    if not path:
-        return
+    """任务落库(sqlite dl_jobs 表,行级 upsert;阶段2 主存储)。高频调用但量小(~百行)."""
     try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        snap = []
+        jobs = []
         for j in _jobs.values():
             rec = {k: j.get(k) for k in JOB_PUBLIC_FIELDS}
             rec["payload"] = j.get("payload") or {}  # retry 重新入队需要原始载荷
@@ -118,27 +115,28 @@ def _persist():
             rec["root"] = j.get("root")
             rec["subfolder"] = j.get("subfolder")
             rec["file_index"] = j.get("file_index", 0)
-            snap.append(rec)
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(snap, f, ensure_ascii=False)
-        os.replace(tmp, path)
-    except OSError:
-        pass  # 磁盘异常不打断下载主流程
+            jobs.append((str(j["id"]), json.dumps(rec, ensure_ascii=False)))
+        cache_store.dl_jobs_put(jobs, keep_ids=[i for (i, _) in jobs])
+    except Exception:
+        pass  # 磁盘异常不打断下载主流程(下次状态变更再落)
 
 
 def _load_persisted():
-    path = _state_path()
-    if not path or not os.path.exists(path):
-        path = _legacy_state_path()  # 升级首启:新位置还没有文件,读旧位置
-    if not path or not os.path.exists(path):
-        return
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            snap = json.load(f)
-    except (OSError, ValueError):
-        return
-    for rec in snap or []:
+    """启动恢复:DB 优先;DB 空且 0.7.x JSON 快照存在 → 一次性导入(落库,文件只读保留)."""
+    recs = cache_store.dl_jobs_all()
+    from_legacy = False
+    if not recs:
+        for path in (_state_path(), _legacy_state_path()):
+            if not path or not os.path.exists(path):
+                continue
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    recs = json.load(f)
+                from_legacy = True
+                break
+            except (OSError, ValueError):
+                pass
+    for rec in recs or []:
         if not isinstance(rec, dict) or not rec.get("id"):
             continue
         job = dict(rec)
@@ -149,6 +147,8 @@ def _load_persisted():
             job["error"] = "服务器重启导致下载中断,点击重试可从断点续传"
             job["finished"] = time.time()
         _jobs[str(job["id"])] = job
+    if from_legacy and _jobs:
+        _persist()  # legacy JSON 导入完成态:落库,此后 DB 为唯一持久层
 
 
 _load_persisted()
