@@ -142,23 +142,27 @@ def _tag_fetch_paused():
 
 
 def _load_tag_mapping():
+    """读 tag 映射(DB 真值);首调把 0.7.x 的 tag_mapping.json 一次性导入(文件只读保留)."""
+    mapping = cache_store.tag_map_all()
+    if mapping or cache_store.kv_get("tagmap:migrated_v1"):
+        return mapping
     try:
         with open(_TAG_MAPPING_FILE, encoding="utf-8") as f:
             data = json.load(f)
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
-
-
-def _save_tag_mapping(mapping):
-    try:
-        os.makedirs(os.path.dirname(_TAG_MAPPING_FILE), exist_ok=True)
-        tmp = _TAG_MAPPING_FILE + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(mapping, f, ensure_ascii=False, indent=0, sort_keys=True)
-        os.replace(tmp, _TAG_MAPPING_FILE)
+        if isinstance(data, dict) and data:
+            pairs = [(str(k), int(v)) for k, v in data.items()
+                     if str(k).strip() and str(v).lstrip("-").isdigit()]
+            cache_store.tag_map_put(pairs)
+            mapping = cache_store.tag_map_all()
     except Exception as e:
-        print(f"[Civitai-Studio] tag 映射文件写入失败: {e}")
+        print(f"[Civitai-Studio] 旧 tag 映射文件读取失败(跳过迁移): {e}")
+    cache_store.kv_put("tagmap:migrated_v1", True)
+    return mapping
+
+
+def _save_tag_pairs(pairs):
+    """增量 upsert 新映射(不再整文件重写;多实例 WAL 安全)."""
+    cache_store.tag_map_put(pairs)
 
 
 @_get("/civitai_studio/image_tags/{image_id}")
@@ -207,11 +211,9 @@ async def image_tags(request):
         return _json_error(civitai_client.net_error_message(e), 502)
     _TAG_FETCH_STATE["fails"] = 0
     _TAG_FETCH_STATE["paused_until"] = 0.0
-    mapping = _load_tag_mapping()
-    for t in tags:
-        mapping[t["name"]] = t["id"]
     if tags:
-        _save_tag_mapping(mapping)
+        _save_tag_pairs([(t["name"], t["id"]) for t in tags])
+    mapping = _load_tag_mapping()
     return web.json_response({"imageId": int(image_id), "tags": tags, "mappingCount": len(mapping)})
 
 

@@ -78,6 +78,11 @@ CREATE TABLE IF NOT EXISTS assocs (
     meta TEXT                         -- 完整元数据 JSON(DB=真值;快照/节点功能由此恢复)
 );
 CREATE INDEX IF NOT EXISTS idx_assocs_vid ON assocs(version_id);
+CREATE TABLE IF NOT EXISTS tag_map (
+    name TEXT PRIMARY KEY,         -- 图片分类 tag 名(用户策展数据:durable 域)
+    tid INTEGER NOT NULL,          -- Civitai tag id
+    updated_at REAL NOT NULL
+);
 """
 
 
@@ -506,6 +511,39 @@ def rename_assoc(old_path, new_path, pending=False):
             except sqlite3.Error:
                 pass
             print("[Civitai-Studio] 关联行平移失败(下轮扫描自动对账):", e)
+
+
+def tag_map_all():
+    """全量 {tag名: tag id}(用户策展数据;durable 域,配额/清缓存不触及)."""
+    init()
+    if _CONN is None:
+        return {}
+    with _LOCK:
+        try:
+            return {r[0]: r[1] for r in _CONN.execute("SELECT name, tid FROM tag_map")}
+        except sqlite3.Error:
+            return {}
+
+
+def tag_map_put(pairs):
+    """增量 upsert [(tag名, id)];多实例安全(WAL)."""
+    init()
+    if _CONN is None or not pairs:
+        return
+    now = time.time()
+    with _LOCK:
+        try:
+            _CONN.executemany(
+                "INSERT INTO tag_map(name, tid, updated_at) VALUES(?,?,?)"
+                " ON CONFLICT(name) DO UPDATE SET tid=excluded.tid, updated_at=excluded.updated_at",
+                [(str(n), int(i), now) for (n, i) in pairs])
+            _CONN.commit()
+        except (sqlite3.Error, ValueError) as e:
+            try:
+                _CONN.rollback()
+            except sqlite3.Error:
+                pass
+            print("[Civitai-Studio] tag 映射写入失败(下次重试):", e)
 
 
 def sync_fingerprints(changed_rows, seen_paths):
