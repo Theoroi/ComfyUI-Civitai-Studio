@@ -54,10 +54,11 @@ assert s3["stats"]["reused"] == 1 and s3["stats"]["read"] == 0, s3["stats"]
 local_index.write_sidecar(mfile, dict(sidecar2, model_name="C"))
 s4 = local_index.scan(force=True)
 assert s4["models"][0]["civitai"]["model_name"] == "C"
-# 删 sidecar → 重读为 None
+# 删 sidecar → 重读;阶段2 主存储:元数据由 assocs.meta 补源,不随 sidecar 消失
 os.remove(mfile + ".civitai.json")
 s5 = local_index.scan(force=True)
-assert s5["models"][0]["civitai"] is None and s5["stats"]["read"] == 1
+assert s5["stats"]["read"] == 1
+assert s5["models"][0]["civitai"] is not None and s5["models"][0]["civitai"]["model_name"] == "C",     "sidecar 缺席时快照应从 DB meta 补源(assocs 主存储语义)"
 # 深度重扫 + 删文件清指纹
 s6 = local_index.scan(force=True, deep=True)
 assert s6["stats"]["deep"] is True

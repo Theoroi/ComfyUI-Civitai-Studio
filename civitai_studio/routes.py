@@ -1358,13 +1358,19 @@ async def local_associate(request):
     # 网络等待期间文件可能已被重命名/删除,写盘前复验
     if not os.path.isfile(path):
         return _json_error("文件已移动或删除,请刷新本地库后重试", 409)
-    # DB 为主存储:sidecar 先写,成败决定 pending_export 标记(失败=仅导出未完成,
-    # 关联行已在库,扫描对账跳过;成功=导出完成)——两条路径关联都不丢
+    # 阶段2 完整导出语义:DB 恒为关联主存储(完整元数据入库,快照恢复不依赖 sidecar);
+    # .civitai.json 仅在 persist_description 开时导出,失败仅影响互操作(关联不丢)
+    persist = config.load().get("persist_description")
+    sidecar_ok = True
+    if persist:
+        sidecar_ok = local_index.write_sidecar(path, meta)
     cover_url = next(
         (i.get("url") for v in versions for i in (v.get("images") or []) if i.get("url")), None)
-    sidecar_ok = local_index.write_sidecar(path, meta)
-    cache_store.sync_assocs([(path, str(meta["model_id"]), str(meta["version_id"]),
-                              meta["model_name"], cover_url)], pending=not sidecar_ok)
+    cache_store.sync_assocs(
+        [(path, str(meta["model_id"]), str(meta["version_id"]),
+          meta["model_name"], cover_url,
+          json.dumps(meta, ensure_ascii=False))],
+        pending=(persist and not sidecar_ok))
     await _scan_async(True)
     return _ok(associated=meta, warning=None if sidecar_ok
                else "关联已保存,但 .civitai.json 导出失败(权限/磁盘?)——仅影响外部工具互操作")
@@ -1380,9 +1386,16 @@ async def local_refresh_meta(request):
     path = local_index.resolve(body.get("category"), body.get("rel"))
     if not path or not os.path.isfile(path):
         return _json_error("文件不存在或不在模型目录内", 404)
+    # 关联身份:sidecar 优先,缺席回退 DB meta(阶段2 主存储:persist 关的文件无 sidecar)
     meta = local_index.read_sidecar(path)
+    if not isinstance(meta, dict) or not meta.get("model_id"):
+        assoc = cache_store.get_assoc(path)
+        meta = (json.loads(assoc["meta"]) if assoc and assoc.get("meta")
+                and isinstance(assoc["meta"], str) else None)
+        if not isinstance(meta, dict):
+            meta = None
     if not meta or not meta.get("model_id"):
-        return _json_error("该文件未关联 Civitai(缺少 .civitai.json)", 400)
+        return _json_error("该文件未关联 Civitai(本地数据库与 .civitai.json 均无关联)", 400)
     meta["model_id"] = str(meta.get("model_id"))
     if not meta["model_id"].isdigit():
         return _json_error("sidecar 中的 model_id 无效,请重新关联", 400)
@@ -1409,11 +1422,19 @@ async def local_refresh_meta(request):
     # 网络等待期间文件可能已被重命名/删除,写盘前复验
     if not os.path.isfile(path):
         return _json_error("文件已移动或删除,请刷新本地库后重试", 409)
-    if not local_index.write_sidecar(path, meta):
-        return _json_error("写入 .civitai.json 失败(权限/磁盘?)", 500)
+    # DB 恒为真值:刷新结果直接落库(不依赖 sidecar 写盘成败);sidecar 按 persist 口径导出
+    cache_store.sync_assocs(
+        [(path, str(meta["model_id"]), str(meta.get("version_id") or ""),
+          meta.get("model_name"), meta.get("cover_url"),
+          json.dumps(meta, ensure_ascii=False))])
+    persist = config.load().get("persist_description")
+    sidecar_ok = True
+    if persist:
+        sidecar_ok = local_index.write_sidecar(path, meta)
     civitai_client.prime_model_cache(meta["model_id"], data)  # 让随后的 /model/{id} 读到新数据
     await _scan_async(True)
-    return _ok()
+    return _ok(warning=None if sidecar_ok
+               else "元数据已更新,但 .civitai.json 导出失败(权限/磁盘?)——仅影响外部工具互操作")
 
 
 @_get("/civitai_studio/version/{vid}")

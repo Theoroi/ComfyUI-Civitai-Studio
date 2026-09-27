@@ -74,7 +74,8 @@ CREATE TABLE IF NOT EXISTS assocs (
     name TEXT,                     -- Civitai 模型名(冗余,免解析 sidecar JSON)
     cover TEXT,
     updated_at REAL NOT NULL,      -- 首次写入时刻(对账豁免与"多处安装取最先"的排序键)
-    pending_export INTEGER DEFAULT 0  -- 1=DB 关联已立而 sidecar 导出失败:扫描对账跳过该行
+    pending_export INTEGER DEFAULT 0, -- 1=sidecar 导出失败:导出通道的事,不影响关联有效性
+    meta TEXT                         -- 完整元数据 JSON(DB=真值;快照/节点功能由此恢复)
 );
 CREATE INDEX IF NOT EXISTS idx_assocs_vid ON assocs(version_id);
 """
@@ -154,6 +155,9 @@ def _migrate(conn):
     if acols and "pending_export" not in acols:
         conn.execute("ALTER TABLE assocs ADD COLUMN pending_export INTEGER DEFAULT 0")
         conn.commit()
+    if acols and "meta" not in acols:
+        conn.execute("ALTER TABLE assocs ADD COLUMN meta TEXT")
+        conn.commit()
 
 
 def _connect(conn):
@@ -168,6 +172,18 @@ def _connect(conn):
     _migrate(conn)
     conn.commit()
     return mode
+
+
+def close():
+    """关闭连接(测试删库重建/进程退出钩子用).下次 init() 重连."""
+    global _CONN
+    with _LOCK:
+        if _CONN is not None:
+            try:
+                _CONN.close()
+            except sqlite3.Error:
+                pass
+            _CONN = None
 
 
 def init():
@@ -331,17 +347,17 @@ def sidecar_blob(path):
             return None
 
 
-def sync_assocs(rows, alive_paths=None, clear_paths=None, pending=False, swept_before=None):
+def sync_assocs(rows, alive_paths=None, swept_before=None, pending=False):
     """批量对账「本地文件 ↔ Civitai 关联」表(用户数据域:配额淘汰/clear_cache 均不触及).
 
-    rows=[(path, model_id, version_id, name, cover)];clear_paths=本轮确认"无关联"的
-    path(外部删了 sidecar/清空字段),直接删行(**后于 rows 执行,同 path 时 clear 胜**;
-    pending_export=1 的行对本删除免疫——DB 关联已立仅导出失败,不得丢);
-    alive_paths 非 None 时另删除表内不在该集合的行(文件已消失/移走;truncated 扫描
+    阶段2 终态语义:DB 是关联真值。rows=[(path, model_id, version_id, name, cover,
+    meta_json)] 有 sidecar/应用直写的行全量 upsert(含完整 meta JSON);
+    **sidecar 缺席不再清行**(外部删 sidecar ≠ 取消关联;DB 行由 alive 对账管辖)。
+    alive_paths 非 None 时删除表内不在该集合的行(文件已消失/移走;truncated 扫描
     传 None 保未扫到的行),swept_before 给出时豁免 updated_at≥该值的行(其他实例
     在本轮 walk 期间新写入的行,下一轮再对账)。
-    pending=应用直写路径标记:True=本次关联 sidecar 导出失败(pending_export=1),
-    扫描回写恒为导出成功(pending_export=0)。updated_at 仅应用直写时刷新,
+    pending=应用直写路径标记:True=本次关联的 sidecar 导出失败(pending_export=1,
+    仅记录导出通道待补,不影响关联有效性与快照恢复);应用直写刷新 updated_at,
     扫描回写保持首次写入时刻(作"多处安装取最先"的稳定排序键)。
     """
     init()
@@ -352,21 +368,21 @@ def sync_assocs(rows, alive_paths=None, clear_paths=None, pending=False, swept_b
         try:
             if pending:
                 _CONN.executemany(
-                    "INSERT INTO assocs(path, model_id, version_id, name, cover, updated_at, pending_export)"
-                    " VALUES(?,?,?,?,?,?,1)"
+                    "INSERT INTO assocs(path, model_id, version_id, name, cover, updated_at, pending_export, meta)"
+                    " VALUES(?,?,?,?,?,?,1,?)"
                     " ON CONFLICT(path) DO UPDATE SET model_id=excluded.model_id,"
                     " version_id=excluded.version_id, name=excluded.name, cover=excluded.cover,"
-                    " updated_at=excluded.updated_at, pending_export=1",
-                    [(_norm(p), mi, vi, n, c, now) for (p, mi, vi, n, c) in rows],
+                    " updated_at=excluded.updated_at, pending_export=1, meta=excluded.meta",
+                    [(_norm(p), mi, vi, n, c, now, mj) for (p, mi, vi, n, c, mj) in rows],
                 )
             else:
                 _CONN.executemany(
-                    "INSERT INTO assocs(path, model_id, version_id, name, cover, updated_at, pending_export)"
-                    " VALUES(?,?,?,?,?,?,0)"
+                    "INSERT INTO assocs(path, model_id, version_id, name, cover, updated_at, pending_export, meta)"
+                    " VALUES(?,?,?,?,?,?,0,?)"
                     " ON CONFLICT(path) DO UPDATE SET model_id=excluded.model_id,"
                     " version_id=excluded.version_id, name=excluded.name, cover=excluded.cover,"
-                    " pending_export=0",  # 扫描读到 meta=sidecar 在盘,导出成功;updated_at 保持原值
-                    [(_norm(p), mi, vi, n, c, now) for (p, mi, vi, n, c) in rows],
+                    " meta=excluded.meta, pending_export=0",  # 扫描读到 meta=导出在盘;updated_at 保持
+                    [(_norm(p), mi, vi, n, c, now, mj) for (p, mi, vi, n, c, mj) in rows],
                 )
             if alive_paths is not None:
                 _CONN.execute("CREATE TEMP TABLE IF NOT EXISTS _alive(path TEXT PRIMARY KEY)")
@@ -385,10 +401,6 @@ def sync_assocs(rows, alive_paths=None, clear_paths=None, pending=False, swept_b
                         "DELETE FROM assocs WHERE path NOT IN (SELECT path FROM _alive)"
                         " AND pending_export=0")
                 _CONN.execute("DELETE FROM _alive")
-            if clear_paths:
-                _CONN.executemany(
-                    "DELETE FROM assocs WHERE path=? AND pending_export=0",
-                    ((_norm(p),) for p in clear_paths))
             _CONN.commit()
         except (sqlite3.Error, ValueError) as e:
             try:
@@ -399,8 +411,11 @@ def sync_assocs(rows, alive_paths=None, clear_paths=None, pending=False, swept_b
 
 
 def _assoc_row_dict(row):
-    return {"path": row[0], "model_id": row[1], "version_id": row[2],
-            "name": row[3], "cover": row[4], "updated_at": row[5]}
+    d = {"path": row[0], "model_id": row[1], "version_id": row[2],
+         "name": row[3], "cover": row[4], "updated_at": row[5]}
+    if len(row) > 6:
+        d["meta"] = row[6]
+    return d
 
 
 def get_assoc(path):
@@ -411,7 +426,7 @@ def get_assoc(path):
     with _LOCK:
         try:
             row = _CONN.execute(
-                "SELECT path, model_id, version_id, name, cover, updated_at"
+                "SELECT path, model_id, version_id, name, cover, updated_at, meta"
                 " FROM assocs WHERE path=?", (_norm(path),)
             ).fetchone()
         except sqlite3.Error:
@@ -427,13 +442,34 @@ def assoc_by_version(version_id):
     with _LOCK:
         try:
             row = _CONN.execute(
-                "SELECT path, model_id, version_id, name, cover, updated_at"
+                "SELECT path, model_id, version_id, name, cover, updated_at, meta"
                 " FROM assocs WHERE version_id=? ORDER BY updated_at LIMIT 1",
                 (str(version_id),)
             ).fetchone()
         except sqlite3.Error:
             return None
     return _assoc_row_dict(row) if row else None
+
+
+def assocs_meta_for(paths):
+    """按 path 批量取 {path: meta_json}(分批 IN 点查,不整表载入;缺行不在返回中)."""
+    init()
+    if _CONN is None or not paths:
+        return {}
+    uniq = list({_norm(p): None for p in paths}.keys())
+    out = {}
+    with _LOCK:
+        try:
+            for i in range(0, len(uniq), 400):
+                chunk = uniq[i:i + 400]
+                marks = ",".join("?" * len(chunk))
+                for r in _CONN.execute(
+                        f"SELECT path, meta FROM assocs WHERE path IN ({marks}) AND meta IS NOT NULL",
+                        chunk):
+                    out[r[0]] = r[1]
+        except sqlite3.Error:
+            return {}
+    return out
 
 
 def assoc_pending_paths():
@@ -452,8 +488,8 @@ def assoc_pending_paths():
 def rename_assoc(old_path, new_path, pending=False):
     """移动/重命名模型文件后平移关联行(轻量,免全扫).
 
-    pending=True:目标位置无 sidecar(sidecar 迁移失败),行标记待导,
-    防下一轮扫描对账按"无关联"清掉;pending_export=1 的行不受对账删除影响。"""
+    pending=True:目标位置无 sidecar(sidecar 迁移失败),行标记待导;
+    pending_export=1 的行对 alive 对账与导出失败均免疫,仅记录导出通道待补。"""
     init()
     if _CONN is None:
         return
