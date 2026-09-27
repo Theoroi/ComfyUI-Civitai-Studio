@@ -55,9 +55,14 @@ async def _download_asset_bytes(url):
             ctype = (resp.content_type or "").split(";")[0]
             if not (ctype.startswith("image/") or ctype.startswith("video/")):
                 return None, "上游返回的不是图片/视频(可能被 WAF 拦截),可尝试更换代理节点"
-            body = await resp.content.read(_ASSET_MAX_BYTES + 1)
+            # 响应级全量读(至 Content-Length/EOF)。content.read(N) 是 readany 语义:
+            # 有一个 buffer 的数据就短读返回 → 半截文件被当成功落盘(实测 1.9KB~8KB 截断 PNG)
+            body = await resp.read()
             if len(body) > _ASSET_MAX_BYTES:
                 return None, "文件超过 100MB 上限"
+            cl = resp.headers.get("Content-Length")
+            if cl and cl.isdigit() and len(body) != int(cl):
+                return None, f"下载不完整({len(body)}/{cl} 字节),请重试"
             return body, None
     return None, "重定向次数过多"
 
@@ -77,6 +82,15 @@ def _asset_save(image_id, ext, data):
     """civitai_<id> 命名 + hash 去重 + 落盘,一把锁内完成(同步实现,走 bg 线程池).
     同名同 SHA256 → 幂等跳过;同 id 内容不同 → civitai_<id>_x 递增;不同 id 互不影响."""
     import hashlib
+    if ext in (".png", ".jpg", ".jpeg", ".webp", ".gif"):
+        import io as _io
+        from PIL import Image
+        try:
+            im = Image.open(_io.BytesIO(data))
+            im.load()  # 截断 PNG 会在解码时抛 OSError,挡在落盘前
+            im.close()
+        except Exception:
+            raise ValueError("下载的图片不完整(解码失败,CDN/网络截断),请重试")
     h = hashlib.sha256(data).hexdigest()
     base = folder_paths.get_input_directory()
     d = os.path.join(base, "civitai_import")
