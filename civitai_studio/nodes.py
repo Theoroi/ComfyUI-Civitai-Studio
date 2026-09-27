@@ -61,7 +61,7 @@ class CivitaiImageSearch:
             # 旧版单个 tag COMBO 已删除,由本字段承担全部筛选语义(OR/实验 AND)
             "tags_selected": ("STRING", {"default": ""}),
             "period": (["AllTime", "Month", "Week", "Day"],),
-            "sort": (["Newest", "Most Reactions", "Most Comments"],),
+            "sort": (["Newest", "Most Reactions", "Most Comments", "Most Collected", "Oldest", "Random"],),
             "limit": ("INT", {"default": 50, "min": 10, "max": 100, "step": 10}),
             "index": ("INT", {"default": 0, "min": 0, "max": 199}),
         },

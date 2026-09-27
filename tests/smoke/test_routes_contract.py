@@ -1,4 +1,4 @@
-"""路由契约测试:45 端点注册快照(防意外删路由)+请求形状抽样(400/404/缺 key 降级)."""
+"""路由契约测试:46 端点注册快照(防意外删路由)+请求形状抽样(400/404/缺 key 降级)."""
 import os, sys, tempfile, types
 
 tmp = tempfile.mkdtemp(prefix="cs_contract_")
@@ -15,7 +15,8 @@ EXPECTED = sorted([
     ("GET", "/civitai_studio/destinations"), ("GET", "/civitai_studio/downloads"),
     ("GET", "/civitai_studio/enums"), ("GET", "/civitai_studio/favorites"),
     ("GET", "/civitai_studio/favorites/export"), ("GET", "/civitai_studio/image"),
-    ("GET", "/civitai_studio/image_tags/{image_id}"), ("GET", "/civitai_studio/images"),
+    ("GET", "/civitai_studio/image_tags/{image_id}"),
+    ("GET", "/civitai_studio/image_gen_data/{image_id}"), ("GET", "/civitai_studio/images"),
     ("GET", "/civitai_studio/local"), ("GET", "/civitai_studio/local/subdirs"),
     ("GET", "/civitai_studio/model/{mid}"), ("GET", "/civitai_studio/resolve_versions"),
     ("GET", "/civitai_studio/search"), ("GET", "/civitai_studio/tag_mapping"),
@@ -42,11 +43,11 @@ if routes.ROUTES is None:
     print("PASS test_routes_contract (production branch, snapshot N/A)")
     raise SystemExit(0)
 got = sorted(routes.ROUTES)
-assert len(got) == 45, f"路由数变化: {len(got)} (期望 45) — 若有意增删请同步更新本快照"
+assert len(got) == 46, f"路由数变化: {len(got)} (期望 46) — 若有意增删请同步更新本快照"
 assert got == EXPECTED, set(got) ^ set(EXPECTED)
 
 # 请求形状抽样:错误体形状一致({"error": str})
 err = routes._json_error(" boom ", 400)
 assert err.status == 400 and err.content_type == "application/json"
 
-print("PASS test_routes_contract (45 endpoints)")
+print("PASS test_routes_contract (46 endpoints)")

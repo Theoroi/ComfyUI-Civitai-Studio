@@ -182,6 +182,7 @@ async def get_config(request):
         "tag_and_mode": cfg.get("tag_and_mode", False),
         "cache_max_mb": cfg.get("cache_max_mb", 500),
         "fav_autosync": cfg.get("fav_autosync", False),
+        "fav_pull_legacy": cfg.get("fav_pull_legacy", False),
     })
 
 
@@ -208,7 +209,7 @@ async def set_config(request):
                 return _json_error(f"{key} 必须是整数", 400)
             partial[key] = max(lo, min(hi, value))
     for key in ("proxy_images", "verify_hash", "persist_description", "tag_scrape", "tag_and_mode",
-                "fav_autosync"):
+                "fav_autosync", "fav_pull_legacy"):
         if key in body:
             partial[key] = bool(body.get(key))
     cfg = config.update(partial)

@@ -17,12 +17,13 @@ def _fmt(msg, args):
 
 
 def info(msg, *args):
-    log.info("[Civitai-Studio] " + _fmt(msg, args))
+    # 等级字段在前(E2E 18):[INFO] [Civitai-Studio] 消息
+    log.info("[INFO] [Civitai-Studio] " + _fmt(msg, args))
 
 
 def warn(msg, *args):
-    log.warning("[Civitai-Studio] " + _fmt(msg, args))
+    log.warning("[WARNING] [Civitai-Studio] " + _fmt(msg, args))
 
 
 def error(msg, *args):
-    log.error("[Civitai-Studio] " + _fmt(msg, args))
+    log.error("[ERROR] [Civitai-Studio] " + _fmt(msg, args))

@@ -16,6 +16,7 @@ from yarl import URL
 
 from .. import (api_cache, cache_store, civitai_client, config, downloader, fav_sync,
                 favorites_store as fs, local_index, media_meta)
+from ..mem_lru import MemLru
 from ..bg import spawn as bg_spawn
 from ..version import VERSION, build
 from ..log import info, warn, error
@@ -154,4 +155,34 @@ async def cache_clear(request):
         "max_mb": cfg.get("cache_max_mb", 500),
     })
 
+_GEN_DATA_CACHE = MemLru(300)
+_GEN_DATA_TTL = 3600
 
+
+@_get("/civitai_studio/image_gen_data/{image_id}")
+async def image_gen_data(request):
+    """非公开 API 生成数据回退(E2E d):REST /images 与文件内嵌参数都拿不到时,
+    复刻站方图片页的 tRPC image.getGenerationData 读路(与 tag 抓取同链路)。
+    meta=null 的图(无生成参数)仍能给出 resources(底模/LoRA 链路)与 tools/techniques。
+    MemLru 缓存 1h,不落盘、不受配额淘汰影响。"""
+    image_id = request.match_info["image_id"]
+    if not (image_id.isascii() and image_id.isdigit()):
+        return _json_error("image id 必须是数字", 400)
+    key = "imgendata:" + image_id
+    hit = _GEN_DATA_CACHE.get(key)
+    if hit is not None:
+        return web.json_response(hit)
+    try:
+        d = await civitai_client.trpc_query("image.getGenerationData", {"id": int(image_id)})
+    except civitai_client.CivitaiError as e:
+        return _json_error(e, 502)
+    except Exception as e:
+        return _json_error(civitai_client.net_error_message(e), 502)
+    payload = {
+        "meta": d.get("meta") if isinstance(d, dict) else None,
+        "resources": (d.get("resources") or []) if isinstance(d, dict) else [],
+        "tools": (d.get("tools") or []) if isinstance(d, dict) else [],
+        "techniques": (d.get("techniques") or []) if isinstance(d, dict) else [],
+    }
+    _GEN_DATA_CACHE.put(key, payload, expires_at=time.time() + _GEN_DATA_TTL)
+    return web.json_response(payload)

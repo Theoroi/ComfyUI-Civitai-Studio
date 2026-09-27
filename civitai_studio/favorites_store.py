@@ -52,6 +52,7 @@ def _conn():
     conn = cache_store._CONN
     if conn is not None:
         _ensure_gpushed(conn)
+        _ensure_ctype(conn)
     return conn
 
 
@@ -68,6 +69,24 @@ def _ensure_gpushed(conn):
         _gpushed_checked = True
     except sqlite3.Error:
         pass  # 列已存在/库暂不可用:下次再查
+
+
+_ctype_checked = False
+
+
+def _ensure_ctype(conn):
+    """fav_groups.ctype 列(Civitai 集合类型 Model/Image;本地哨兵值 'Legacy')."""
+    global _ctype_checked
+    if _ctype_checked:
+        return
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(fav_groups)")}
+        if cols and "ctype" not in cols:
+            conn.execute("ALTER TABLE fav_groups ADD COLUMN ctype TEXT")
+            conn.commit()
+        _ctype_checked = True
+    except sqlite3.Error:
+        pass
 
 
 def _migrate_legacy():
@@ -252,9 +271,11 @@ def groups_list():
     with _LOCK:
         try:
             return [
-                {"gid": r[0], "name": r[1], "civitai_id": r[2], "dirty": r[3], "updated_at": r[4]}
+                {"gid": r[0], "name": r[1], "civitai_id": r[2], "dirty": r[3], "updated_at": r[4],
+                 "ctype": r[5]}
                 for r in conn.execute(
-                    "SELECT gid, name, civitai_id, dirty, updated_at FROM fav_groups ORDER BY updated_at DESC"
+                    "SELECT gid, name, civitai_id, dirty, updated_at, ctype"
+                    " FROM fav_groups ORDER BY updated_at DESC"
                 ).fetchall()
             ]
         except Exception as e:
@@ -262,7 +283,7 @@ def groups_list():
             return []
 
 
-def upsert_group(name, gid=None, civitai_id=None, dirty=0, updated_at=None):
+def upsert_group(name, gid=None, civitai_id=None, dirty=0, updated_at=None, ctype=None):
     conn = _conn()
     if conn is None:
         return None
@@ -279,31 +300,78 @@ def upsert_group(name, gid=None, civitai_id=None, dirty=0, updated_at=None):
                 gid = "g_" + str(int(now * 1000))
             else:
                 # 保留既有联动字段:按 gid 改名不抹 civitai_id(防下次同步分叉)
-                r = conn.execute("SELECT civitai_id, dirty, name FROM fav_groups WHERE gid=?", (gid,)).fetchone()
+                r = conn.execute("SELECT civitai_id, dirty, name, ctype FROM fav_groups WHERE gid=?", (gid,)).fetchone()
                 if r and civitai_id is None:
                     civitai_id = r[0]
+                if r and ctype is None:
+                    ctype = r[3]
                 if r and r[1] == 1 and civitai_id is not None:
                     # 守卫仅限下行落地路径(civitai_id 非空):本地改名(civitai_id=None)一律写新名,
                     # 否则"建组(即 dirty)后未同步前改名"会被旧名吞掉
                     new_cid = int(civitai_id) if civitai_id else r[0]
                     conn.execute(
-                        "UPDATE fav_groups SET civitai_id=?, updated_at=? WHERE gid=?",
-                        (new_cid, updated_at or now, gid),
+                        "UPDATE fav_groups SET civitai_id=?, updated_at=?, ctype=? WHERE gid=?",
+                        (new_cid, updated_at or now, ctype, gid),  # ctype 透传(审计 F-5)
                     )
                     conn.commit()
                     return {"gid": gid, "name": r[2], "civitai_id": new_cid,
-                            "dirty": 1, "updated_at": updated_at or now}
+                            "dirty": 1, "updated_at": updated_at or now, "ctype": ctype}
             conn.execute(
-                "INSERT OR REPLACE INTO fav_groups(gid, name, civitai_id, dirty, updated_at)"
-                " VALUES(?,?,?,?,?)",
-                (gid, name, civitai_id, dirty, updated_at or now),
+                "INSERT OR REPLACE INTO fav_groups(gid, name, civitai_id, dirty, updated_at, ctype)"
+                " VALUES(?,?,?,?,?,?)",
+                (gid, name, civitai_id, dirty, updated_at or now, ctype),
             )
             conn.commit()
             return {"gid": gid, "name": name, "civitai_id": civitai_id, "dirty": dirty,
-                    "updated_at": updated_at or now}
+                    "updated_at": updated_at or now, "ctype": ctype}
         except Exception as e:
             error("[Civitai-Studio] 分组写入失败:", e)
             return None
+
+
+LEGACY_CTYPE = "Legacy"
+
+
+def ensure_legacy_group():
+    """Legacy 分组(旧版图片收藏专用落点):ctype='Legacy' 哨兵 — 上行引擎跳过它,
+    永不建远端集合/推条目;分组下拉只在资产 kind 下展示。幂等。"""
+    for g in groups_list():
+        if g.get("ctype") == LEGACY_CTYPE:
+            return g["gid"]
+    # 用户早建过同名普通组:收编补 ctype,防双 "Legacy" 并存(审计 F-7)
+    for g in groups_list():
+        if g["name"] == "Legacy" and not g.get("civitai_id") and not g.get("ctype"):
+            conn = _conn()
+            if conn is not None:
+                with _LOCK:
+                    try:
+                        conn.execute("UPDATE fav_groups SET ctype=? WHERE gid=?",
+                                     (LEGACY_CTYPE, g["gid"]))
+                        conn.commit()
+                    except sqlite3.Error:
+                        pass
+            return g["gid"]
+    g = upsert_group("Legacy", dirty=0, ctype=LEGACY_CTYPE)
+    return g["gid"] if g else None
+
+
+def purge_legacy_ungrouped():
+    """清空 legacy 拉取残留:src=remote + 未分组 + 未 dirty 的资产行只可能来自
+    旧版 /images?favorites=true 下行(集合条目必带 group_id,本地★必为 src=local),
+    关闭 legacy 下行后它们在 Civitai web 上已不可见 → 物理删除。返回删除行数。"""
+    conn = _conn()
+    if conn is None:
+        return 0
+    with _LOCK:
+        try:
+            cur = conn.execute(
+                "DELETE FROM fav_items WHERE kind=? AND src='remote' AND group_id IS NULL"
+                " AND dirty=0 AND deleted=0", (KIND_ASSET,))
+            conn.commit()
+            return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        except Exception as e:
+            error("[Civitai-Studio] legacy 残留清理失败:", e)
+            return 0
 
 
 def delete_group(gid):
@@ -425,10 +493,11 @@ def import_json(payload, replace=False):
                 if not isinstance(g, dict) or not g.get("name"):
                     continue
                 conn.execute(
-                    "INSERT OR REPLACE INTO fav_groups(gid, name, civitai_id, dirty, updated_at)"
-                    " VALUES(?,?,?,?,?)",
+                    "INSERT OR REPLACE INTO fav_groups(gid, name, civitai_id, dirty, updated_at, ctype)"
+                    " VALUES(?,?,?,?,?,?)",
                     (str(g.get("gid") or "g_" + str(int(now * 1000))), str(g["name"]),
-                     g.get("civitai_id"), 1, float(g.get("updated_at") or now)),
+                     g.get("civitai_id"), 1, float(g.get("updated_at") or now),
+                     g.get("ctype")),
                 )
             n = 0
             for it in items:

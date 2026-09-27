@@ -5,6 +5,14 @@
 ## [Unreleased]
 
 ### 新增
+- 图片收藏同步改以 Civitai 集合为准：集合内模型与图片条目都入库并挂对应分组（修复旧版"收藏夹全空"）；分组带集合类型（Model/Image），收藏页分组下拉按当前类别过滤
+- 旧版图片收藏（Civitai 改版前遗留表，网页已不可见）下行改为默认关，可在设置页开启；开启后落入 Legacy 分组且永不上传，关闭状态下同步一次性清理其本地残留
+- 画廊/图像搜索：排序补全六项（最多互动/最多评论/最多收藏/最新/最早/随机）；画廊快捷栏六预设（今日最新/今日热门/本周热门/本周高分/本月热门/本月高分，高分≈最多收藏）
+- 图片卡文件格式角标（JPG/PNG/WEBP/GIF/MP4/WEBM，★ 右侧；jpg 即无内嵌工作流的提示）；画廊与图像搜索的格式筛选（客户端过滤已加载条目，API 无该参数）
+- 详情页许可徽章区：需付费(allowNoCredit)/已购授权(hasActivePaidAccess)/商用范围(allowCommercialUse)/衍生(allowDerivatives)/可换许可(allowDifferentLicenses)/NSFW 等级位解码（PG/PG-13/R/X/XXX，取自站方源码枚举）/全版本 baseModel 汇总
+- 详情页【关于这个版本】：版本自带说明渲染为独立方框（缩略图与模型说明之间），外链图走代理开关
+- 非公开 API 生成数据回退：无生成参数的图片（如部分 jpg）在大图浮层自动探 tRPC image.getGenerationData——命中 meta 带参重开，否则补底模/LoRA 资源链与工具/技法（服务端 MemLru 缓存 1h，新端点 `GET /civitai_studio/image_gen_data/{image_id}`）
+- 收藏页排序筛选（最近更新/最近收藏/按名称）
 - 阶段 3 补全·缩略图 blob 缓存（IndexedDB）：画廊与节点缩略图命中本地 blob 免 CDN 拉取（objectURL 会话内复用防泄漏，800 张容量上限按键序近似裁剪；拉取失败自动回退原路径）
 - 分组上行：本地分组同步时接入 Civitai 集合——已绑定集合改名走 `collection.upsert`，本地新建组在首条条目推送时按条目类型（Image/Model）建集，组内条目走 `collection.saveItem` 并以 gpushed 标记防重推（需 Key 勾选 CollectionsWrite 作用域，缺失时同步结果提示）
 - 冒烟测试入库 `tests/smoke/`（8 个离线用例：存储/索引增量化/损坏自愈/媒体缓存/API 单飞 SWR/内嵌元数据/旧库迁移/资产命名去重/收藏数据面，自带 folder_paths 桩，无需运行中的 ComfyUI）
@@ -25,6 +33,11 @@
 - 支持 `CIVITAI_API_KEY` 环境变量兜底：设置页未配置 key 时自动读取（云部署/容器场景）
 
 ### 变更
+- 设置页说明全部改为标题旁 ⓘ 悬浮显示；删除代理长说明；API Key 区按「标题/输入框/功能/获取方式/安全设置页链接」重排
+- 筛选区折叠按钮折叠态改为拉宽的 »»»（原单字符 chevron 不显眼）
+- 移动对话框【目标目录】置顶加入「▶ 当前目录」（配合子文件夹即可移入同目录子文件夹）；同位置空子夹给予提示
+- 批量【检查更新】按钮暂时隐藏（比对逻辑待真机验证后恢复；单模型详情内的检查不受影响）
+- 日志格式改为 `[INFO] [Civitai-Studio] 消息`（等级字段前置）
 - 下载队列持久化文件迁至 `user/civitai_studio/cache/download_jobs.json`（旧位置文件只读兜底，升级首启自动读取）
 - sidecar 写入（关联/刷新元数据）后自动作废对应指纹，下次扫描强制重读
 - 共享后台线程池抽为 `bg.py`（2→4 线程，sqlite 缓存 IO 与扫描/哈希共用）；`prime_model_cache` 回填同时落磁盘缓存
@@ -33,6 +46,13 @@
 - **BREAKING**:全部节点注册键迁移到 `CivitaiStudio_` 前缀(`CivitaiStudio_ImageSearch / _LoraRecipe / _ShowText / _SaveImage`)——**旧工作流里的节点会显示缺失,需重新摆放节点**;显示名不变
 - API key 读取统一走 `civitai_client.api_key()`（设置页优先 → 环境变量兜底），涉及请求头/下载 token/401 提示三处
 
+### 修复
+- 收藏同步三根因：集合条目分页键 collectionItems（旧代码读 items）、条目实体在 data 字段（旧代码读 image）、模型条目被丢弃——三者叠加导致"同步显示成功但收藏夹全空"；新集合首次落地条目挂不上组的问题一并修复
+- 集合 model 条目不再被模型缺席对账反复误杀成墓碑（对账口径并入集合条目；任一通道翻页截断即跳过对账）
+- 强刷后首次打开侧边栏所有 tab 筛选区跟随网格滚动：pinSidebarHeight 改重试式（容器未挂载时轮询直至可钉扎）
+- 收藏后收藏 tab 即时刷新（原需切换 tab 才可见）
+- 浮层视频播放器横屏视频上下长黑边（固定 64vh 高改为按宽高比自适应）
+- 导入为资产 重定向死循环/半截文件落盘（resp.read() 全量 + Content-Length 对账 + PIL 解码校验）
 ### 清理
 - 移除死代码 `_recent_image_ids()`、`used_url` 死变量、`_slot()` 重复 global 声明
 
