@@ -388,6 +388,54 @@ async def set_config(request):
 
 # ---------- 在线浏览(代理 Civitai API) ----------
 
+@_post("/civitai_studio/key_probe")
+async def key_probe(request):
+    """设置页「测试连接」:key 有效性 + 收藏写权限探测;不落库不改收藏状态.
+
+    body 可带 {"api_key": "<候选 key>"}:只探测本次给的 key(保存仍由 /config 负责);
+    缺省探测已配置 key(含 CIVITAI_API_KEY 环境变量兜底)。
+    - GET <api_root>/me:401=无效,200=有效(open_stream 自带代理分支与重试退避)
+    - tRPC user.toggleFavorite(modelId=0, setTo=false):仅过 TokenScope 闸,
+      modelId=0 不存在,即使通过也是 no-op;scope 错误=social_write False,
+      网络/其它错误=null(未知,不误报通过)
+    """
+    body = await _read_json_dict(request)
+    cand = str((body or {}).get("api_key") or "").strip()
+    key = cand or civitai_client.api_key().strip()
+    if not key:
+        return web.json_response({"ok": False, "reason": "no_key"})
+    auth = {"Authorization": "Bearer " + key}
+    # 1) 有效性:轻量只读
+    try:
+        timeout = aiohttp.ClientTimeout(total=20, connect=10)
+        async with await civitai_client.open_stream(
+                civitai_client.api_root() + "/me", extra_headers=auth, timeout=timeout) as resp:
+            if resp.status == 401:
+                return web.json_response({"ok": False, "reason": "invalid"})
+            if resp.status != 200:
+                return web.json_response({"ok": False, "reason": "http_" + str(resp.status)})
+            me = await resp.json(content_type=None)
+            username = str((me or {}).get("username") or "")
+    except asyncio.TimeoutError:
+        return web.json_response({"ok": False, "reason": "timeout"})
+    except Exception as e:
+        return web.json_response({"ok": False, "reason": "network",
+                                  "message": civitai_client.net_error_message(e)})
+    # 2) 写权限:15s 超时防"测试中…"挂满 session 默认 120s
+    social = None
+    try:
+        await asyncio.wait_for(
+            civitai_client.trpc_mutation("user.toggleFavorite", {"modelId": 0, "setTo": False},
+                                         extra_headers=auth),
+            timeout=15)
+        social = True
+    except civitai_client.TrpcScopeError:
+        social = False
+    except Exception:
+        social = None  # 网络/WAF/入参校验等:写权限未知,如实上报
+    return web.json_response({"ok": True, "username": username, "social_write": social})
+
+
 @_get("/civitai_studio/search")
 async def search_models(request):
     q = request.query
