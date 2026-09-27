@@ -85,6 +85,9 @@ const STR = {
         back: "← 返回", backList: "返回列表", openOnCivitai: "在 Civitai 打开 ↗",
         by: "by", unknown: "未知", unknownCreator: "未知作者", versionLabel: "版本",
         installed: "已安装", installedMark: " ✔已装", modelDesc: "模型说明",
+        verDescTitle: "关于这个版本", paidReq: "需付费", paidFree: "无需付费", paidActive: "已购授权",
+        commercial: "商用:", none: "无", derivNo: "禁衍生", derivYes: "允许衍生", relic: "可换许可",
+        nsfwLevelLabel: "NSFW:",
         triggerWords: "触发词", copyAll: "复制全部", files: "文件", primaryFile: "主文件",
         noFiles: "该版本没有文件", previews: "预览图 ({n}) — 点击查看生成参数",
         genParams: "生成参数", noGenParams: "这张图没有公开生成参数。",
@@ -241,6 +244,9 @@ const STR = {
         back: "← Back", backList: "Back to list", openOnCivitai: "Open on Civitai ↗",
         by: "by", unknown: "unknown", unknownCreator: "unknown creator", versionLabel: "Version",
         installed: "Installed", installedMark: " ✔ installed", modelDesc: "Model description",
+        verDescTitle: "About this version", paidReq: "Paid required", paidFree: "No payment required", paidActive: "Paid access",
+        commercial: "Commercial:", none: "none", derivNo: "No derivatives", derivYes: "Derivatives OK", relic: "Relicensable",
+        nsfwLevelLabel: "NSFW:",
         triggerWords: "Trigger words", copyAll: "Copy all", files: "Files", primaryFile: "primary file",
         noFiles: "No files for this version", previews: "Previews ({n}) — click for generation params",
         genParams: "Generation params", noGenParams: "This image has no public generation params.",
@@ -1108,6 +1114,29 @@ async function openBrowseFloat(modelId, opts = {}) {
 }
 
 // ---------- 详情页 ----------
+// 许可/NSFW/底模徽章(E2E a)。nsfwLevel 位值取自 civitai 源码 enums.ts:
+// PG=1 PG-13=2 R=4 X=8 XXX=16 Blocked=32(位掩码,显示解码后的等级标签)
+const NSFW_LEVEL_LABELS = { 1: "PG", 2: "PG-13", 4: "R", 8: "X", 16: "XXX", 32: "Blocked" };
+function modelBadgesHtml(model) {
+    const chips = [];
+    if (model.allowNoCredit === false) chips.push([t("paidReq"), "warn"]);
+    else if (model.allowNoCredit === true) chips.push([t("paidFree"), "ok"]);
+    if (model.hasActivePaidAccess) chips.push([t("paidActive"), "ok"]);
+    const cu = Array.isArray(model.allowCommercialUse) ? model.allowCommercialUse : [];
+    chips.push([t("commercial") + " " + (cu.length ? cu.join("/") : t("none")), cu.length ? "ok" : "warn"]);
+    if (model.allowDerivatives === false) chips.push([t("derivNo"), "warn"]);
+    else if (model.allowDerivatives === true) chips.push([t("derivYes"), "ok"]);
+    if (model.allowDifferentLicenses) chips.push([t("relic"), "ok"]);
+    if (typeof model.nsfwLevel === "number" && model.nsfwLevel > 0) {
+        const labels = Object.entries(NSFW_LEVEL_LABELS).filter(([bit]) => model.nsfwLevel & Number(bit)).map(([, lb]) => lb);
+        if (labels.length) chips.push([t("nsfwLevelLabel") + " " + labels.join("/"), /X|Blocked/.test(labels.join("/")) ? "warn" : "ok"]);
+    }
+    const bases = [...new Set((model.modelVersions || []).map((v) => v.baseModel).filter(Boolean))];
+    const html = chips.map(([txt, cls]) => `<span class="cs-badge2 cs-badge2-${cls}">${esc(txt)}</span>`).join("")
+        + bases.map((b) => `<span class="cs-badge2 cs-badge2-base" title="${esc(t("basePlaceholder"))}">${esc(b)}</span>`).join("");
+    return html ? `<div class="cs-detail-badges">${html}</div>` : "";
+}
+
 function renderDetail(model, container, opts = {}) {
     const box = container;
     if (!box) return;
@@ -1123,6 +1152,7 @@ function renderDetail(model, container, opts = {}) {
             ${esc(t("by"))} ${esc(model.creator?.username || t("unknown"))} · ${esc(typeLabel(model.type))}
             · ⬇ ${fmtNum(model.stats?.downloadCount)} · 👍 ${fmtNum(model.stats?.thumbsUpCount)}
         </div>
+        ${modelBadgesHtml(model)}
         ${model.tags?.length ? `<div class="cs-tags">${model.tags.slice(0, 10).map((tg) => `<span class="cs-tag">${esc(tg)}</span>`).join("")}</div>` : ""}
         <div class="cs-detail-row">
             <label>${esc(t("versionLabel"))}</label>
@@ -1265,7 +1295,13 @@ async function renderVersion(version, model, box, opts = {}) {
             <div class="cs-gallery">${images.map(galleryItemHtml).join("")}
             </div>
         </div>` : ""}
+        ${version.description ? `
+        <div class="cs-section">
+            <div class="cs-section-title">${esc(t("verDescTitle"))}</div>
+            <div class="cs-ver-desc-box"><div class="cs-desc-body">${sanitizeHtml(version.description)}</div></div>
+        </div>` : ""}
     `;
+    rewriteDescImages(body); // 版本说明里的外链图走代理开关(模型说明同款处理)
     $("#cs-copy-triggers", body)?.addEventListener("click", (e) => copyText(triggers.join(", "), e.target));
     $$(".cs-trigger", body).forEach((el) => { el.onclick = () => copyText(el.textContent, el); });
     $$("[data-file-idx]", body).forEach((btn) => {
@@ -3750,6 +3786,12 @@ function injectStyles() {
 .cs-detail-head { display:flex; gap:6px; padding:8px 0 4px; }
 .cs-detail-title { margin:4px 0; font-size:15px; }
 .cs-detail-meta { font-size:11px; color:var(--desc-text-color,#999); margin-bottom:6px; }
+.cs-detail-badges { display:flex; flex-wrap:wrap; gap:4px; margin:6px 0; }
+.cs-badge2 { font-size:10px; padding:1px 6px; border-radius:8px; border:1px solid var(--border-color,#444); color:var(--desc-text-color,#bbb); white-space:nowrap; }
+.cs-badge2-ok { color:#9fdca0; border-color:rgba(140,200,140,.45); }
+.cs-badge2-warn { color:#f0c67e; border-color:rgba(240,198,126,.45); }
+.cs-badge2-base { background:var(--comfy-input-bg,#333); }
+.cs-ver-desc-box { border:1px solid var(--border-color,#444); border-radius:6px; padding:8px; background:rgba(255,255,255,.03); max-height:320px; overflow-y:auto; }
 .cs-detail-row { display:flex; gap:8px; align-items:center; margin:8px 0; }
 .cs-detail-row label { flex-shrink:0; font-size:12px; }
 .cs-detail-row select { flex:1; padding:3px; }
