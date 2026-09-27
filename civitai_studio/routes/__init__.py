@@ -14,6 +14,7 @@ from .cfg import _load_tag_mapping, _save_tag_pairs  # noqa: F401 — 测试引�
 from .asset_extract import _asset_save  # noqa: F401 — 测试引用
 from .media import _meta_roots, _META_EXTS  # noqa: F401 — 测试引用
 
+from aiohttp import web  # noqa: E402 — 尾部路由需要
 import os  # noqa: E402 — 尾部路由需要
 from .common import _routes  # noqa: E402
 from ..log import warn  # noqa: E402
