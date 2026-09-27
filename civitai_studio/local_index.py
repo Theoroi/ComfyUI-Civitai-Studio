@@ -168,22 +168,31 @@ def _scan_unlocked(deep=False):
         except Exception:
             all_roots_ok = False
             break
-    # 关联表对账(DB 为主存储):每个扫到的模型都有行(有 meta)或清除请求(无 meta);
-    # pending_export=1 的行(sidecar 导出失败但 DB 关联已立)仅在"本轮仍无 meta"时
-    # 跳过清除;一旦扫到 meta(=sidecar 已恢复/补导成功)则正常写入并清零标记
-    assoc_rows, assoc_clear = [], []
-    pending = cache_store.assoc_pending_paths()
+    # 关联表对账(阶段2 终态:DB 是关联真值)。有 sidecar/有 meta 的文件全量 upsert
+    # (含完整 meta JSON);sidecar 缺席不再清行(外部删 sidecar ≠ 取消关联,由 alive
+    # 对账管辖文件消失);无 meta 且 DB 也无行的文件自然无行,不需要显式清
+    assoc_rows = []
     for m in models:
         meta = m.get("civitai")
         if meta and (meta.get("model_id") or meta.get("version_id")):
             assoc_rows.append((m["path"], str(meta.get("model_id") or ""),
                                str(meta.get("version_id") or ""), meta.get("model_name"),
-                               meta.get("cover_url")))
-        elif m["path"] not in pending:
-            assoc_clear.append(m["path"])
+                               meta.get("cover_url"), _sidecar_blob(meta)))
     cache_store.sync_assocs(assoc_rows,
                             alive if (not truncated and all_roots_ok) else None,
-                            assoc_clear, swept_before=t0)
+                            swept_before=t0)
+    # DB 补源(主存储的核心收益):sidecar 缺失/未导出的文件,元数据从 assocs.meta
+    # 恢复——「已安装」标注、节点三级匹配、触发词等功能不依赖 sidecar 在盘
+    meta_map = cache_store.assocs_meta_map()
+    if meta_map:
+        for m in models:
+            if not m.get("civitai"):
+                blob = meta_map.get(m["path"])
+                if blob:
+                    try:
+                        m["civitai"] = json.loads(blob)
+                    except ValueError:
+                        pass
     by_version = {}
     by_name = {}
     by_id = {}
