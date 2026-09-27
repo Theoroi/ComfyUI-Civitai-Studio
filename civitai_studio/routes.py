@@ -62,6 +62,13 @@ try:
             return resp
 
         PromptServer.instance.app.middlewares.append(_no_cache_ext_middleware)
+
+        async def _shutdown_close(_app):
+            # 退出清理(裁决①):关共享 aiohttp session;短暂让步给 retire 延迟关闭
+            await civitai_client.close_session()
+            await asyncio.sleep(0.15)
+
+        PromptServer.instance.app.on_shutdown.append(_shutdown_close)
 except Exception:
     _routes = None
 
@@ -961,13 +968,23 @@ def _meta_roots():
 async def embedded_meta(request):
     """读本地图片/视频的内嵌生成数据(PNG tEXt/iTXt、MP4 mdta;结果随 mtime 缓存).
 
-    body {path}:须位于 output/input/temp 或已注册模型根之下。
+    body {path} 或 {filename}(output 目录,画廊存图后的浮层回读):
+    须位于 output/input/temp 或已注册模型根之下。
     meta 形状:{prompt|workflow: dict|str, parameters|encoder: str} 或 null(无内嵌数据)。
     """
     body = await _read_json_dict(request)
     if body is None:
         return _json_error("请求体必须是 JSON 对象", 400)
     raw = str(body.get("path") or "")
+    if not raw and body.get("filename"):
+        # 画廊「存图到本地」后的浮层回读:前端只有文件名,服务端拼 output 全路径
+        try:
+            out_dir = folder_paths.get_output_directory()
+        except Exception:
+            out_dir = None
+        if out_dir:
+            sub = str(body.get("subfolder") or "")
+            raw = os.path.join(out_dir, sub, str(body["filename"]))
     if os.path.splitext(raw)[1].lower() not in _META_EXTS:
         return _json_error("仅支持 PNG/MP4/MOV 文件", 400)
     if not os.path.isfile(raw):
@@ -1119,11 +1136,6 @@ async def local_move(request):
 
 
 # ---------- 收藏:sqlite 存储(fav_items/fav_groups)+ 双向同步;旧 favorites.json 已迁移 ----------
-
-
-def _fav_path():
-    """0.7.x 旧文件位置(迁移源,只读保留)."""
-    return os.path.join(folder_paths.get_user_directory(), "civitai_studio", "favorites.json")
 
 
 @_get("/civitai_studio/favorites")

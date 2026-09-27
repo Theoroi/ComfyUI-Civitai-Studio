@@ -136,11 +136,6 @@ def get_item(kind, oid):
             return None
 
 
-def is_active(kind, oid):
-    it = get_item(kind, oid)
-    return bool(it and not it["deleted"])
-
-
 def toggle(kind, oid, fields=None):
     """本地★切换;返回切换后的状态(True=已收藏).oid 必须非空."""
     conn = _conn()
@@ -249,13 +244,6 @@ def mark_synced(kind, oid, expected_updated=None):
             pass
 
 
-def assign_group_many(oids, kind, group_id):
-    for oid in oids:
-        set_group(kind, oid, group_id)
-
-
-# ---------- 分组 ----------
-
 def groups_list():
     conn = _conn()
     if conn is None:
@@ -329,13 +317,6 @@ def delete_group(gid):
             conn.commit()
         except Exception as e:
             print("[Civitai-Studio] 分组删除失败:", e)
-
-
-def get_group(gid):
-    for g in groups_list():
-        if g["gid"] == gid:
-            return g
-    return None
 
 
 def mark_group_synced(gid, civitai_id):

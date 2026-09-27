@@ -132,7 +132,6 @@ const STR = {
         proxyPh: "http://127.0.0.1:10808 或 socks5://127.0.0.1:10808,留空 = 直连",
         proxyHint: "填 127.0.0.1 而非 localhost。v2rayN 混合端口 10808:优先填 socks5://127.0.0.1:10808(实测最稳),http://127.0.0.1:10808 亦可;API、下载、图片全部走此代理。",
         mirrorLabel: "API 站点(默认 civitai.com)", siteCustom: "自定义",
-        mirrorPh: "留空 = https://civitai.red",
         concLabel: "下载并发数(1-4)",
         cacheMaxLabel: "磁盘缓存上限 MB(50-2000)",
         cacheUsageFmt: "缓存占用:{mb} MB / 上限 {max} MB", cacheUsageLoading: "缓存占用:统计中…",
@@ -168,9 +167,8 @@ const STR = {
         saveOk: "已保存到 output: {name}", saveFailed: "保存失败",
         applyBtn: "应用到工作流", applyNoKs: "未找到 KSampler 节点", applyFail: "应用失败",
         applyDone: "已应用:提示词 ✓{lora}", applyLoraPart: ",LoRA ×{n}", loraMissing: "本地未找到: {names}",
-        noTextNode: "未找到 CLIPTextEncode 文本节点",
         galleryTab: "🖼 画廊", gallerySortNewest: "最新发布", gallerySortReactions: "最多互动", gallerySortComments: "最多评论",
-        galTag: "Tag", galBase: "底模", loadMore: "加载更多", useAsOutput: "选为输出", selectedAsOutput: "已选为输出",
+        galBase: "底模", loadMore: "加载更多", useAsOutput: "选为输出", selectedAsOutput: "已选为输出",
         sfwLabel: "全年龄", nsfwLabel: "包含 NSFW", galTagId: "Tag ID 或名称(逗号分隔)",
         noTags: "无标签", tagsPaused: "标签抓取已暂停({sec} 秒后恢复)", noSelectionHint: "未选择(点击缩略图选择)",
         tagScrapeLabel: "读取非公开 API 获取图片分类标签，需要Civitai API Key", tagsLoading: "标签加载中…",
@@ -277,7 +275,6 @@ const STR = {
         proxyPh: "http://127.0.0.1:10808 or socks5://127.0.0.1:10808, empty = direct",
         proxyHint: "Use 127.0.0.1 instead of localhost. API, downloads and previews all go through this proxy.",
         mirrorLabel: "API site (default civitai.com)", siteCustom: "Custom",
-        mirrorPh: "empty = https://civitai.red",
         concLabel: "Download concurrency (1-4)",
         cacheMaxLabel: "Disk cache limit MB (50-2000)",
         cacheUsageFmt: "Cache usage: {mb} MB / limit {max} MB", cacheUsageLoading: "Cache usage: calculating…",
@@ -313,9 +310,8 @@ const STR = {
         saveOk: "Saved to output: {name}", saveFailed: "Save failed",
         applyBtn: "Apply to workflow", applyNoKs: "No KSampler node found", applyFail: "Apply failed",
         applyDone: "Applied: prompts ✓{lora}", applyLoraPart: ", {n} LoRA(s)", loraMissing: "Local LoRAs not found: {names}",
-        noTextNode: "No CLIPTextEncode text node found",
         galleryTab: "🖼 Gallery", gallerySortNewest: "Newest", gallerySortReactions: "Most reactions", gallerySortComments: "Most comments",
-        galTag: "Tag", galBase: "Base model", loadMore: "Load more", useAsOutput: "Use as output", selectedAsOutput: "Selected as output",
+        galBase: "Base model", loadMore: "Load more", useAsOutput: "Use as output", selectedAsOutput: "Selected as output",
         sfwLabel: "SFW only", nsfwLabel: "Include NSFW", galTagId: "Tag ID or name, comma-separated",
         noTags: "No tags", tagsPaused: "Tag fetch paused ({sec}s), retrying later", noSelectionHint: "Nothing selected (click a thumbnail)",
         tagScrapeLabel: "Fetch image category tags (unofficial API), requires Civitai API Key", tagsLoading: "Loading tags…", tagsOff: "Tag scraping disabled in settings", capHint: "Display cap reached (100)",
@@ -1154,10 +1150,11 @@ function galleryItemHtml(img) {
                 onerror="this.style.display='none'"/></div>`;
 }
 
-async function saveImageToOutput(url, btn) {
+async function saveImageToOutput(url, btn, item) {
     if (btn) btn.disabled = true;
     try {
         const res = await apiPost("/civitai_studio/save_image", { url });
+        if (item && res.filename) item.saved_filename = res.filename; // 供浮层内嵌参数回读
         toast("success", t("saveOk", { name: res.filename }), "");
     } catch (e) {
         toast("error", t("saveFailed"), e.message);
@@ -1233,7 +1230,8 @@ async function renderVersion(version, model, box, opts = {}) {
     $$("[data-save-url]", body).forEach((btn) => {
         btn.onclick = (ev) => {
             ev.stopPropagation();
-            saveImageToOutput(btn.dataset.saveUrl, btn);
+            const direct = btn.dataset.saveUrl || "";
+            saveImageToOutput(direct, btn, images.find((i) => i.url === direct));
         };
     });
 }
@@ -1407,6 +1405,18 @@ function openImageDetail(item, opts = {}) {
     let meta = item.meta || {};
     meta = unwrapMeta(meta);
     const hasMeta = !!(meta && (meta.prompt || meta.seed != null));
+    // 内嵌参数回读(接线 embedded_meta):存图到本地后的大图浮层,首次无 meta 时
+    // 后台读 output 文件的内嵌生成数据,命中则带 meta 重开浮层(单实例自动替换)
+    if (!hasMeta && item.saved_filename && !opts.__embedRetry) {
+        apiPost("/civitai_studio/embedded_meta", {
+            filename: item.saved_filename,
+            subfolder: item.saved_subfolder || "",
+        }).then((r) => {
+            if (r && r.meta && (r.meta.prompt || r.meta.parameters || r.meta.workflow)) {
+                openImageDetail({ ...item, meta: r.meta }, { ...opts, __embedRetry: true });
+            }
+        }).catch(() => {});
+    }
     const kv = hasMeta
         ? [["Checkpoint", meta["Model"] || (meta.hashes || {}).model], ["Base Model", item.baseModel], [t("kvSampler"), meta.sampler], [t("kvSteps"), meta.steps],
            ["CFG", meta.cfgScale], ["Seed", meta.seed], [t("kvSize"), (meta.width || "") + (meta.width ? "×" + meta.height : "")]]
@@ -2476,7 +2486,7 @@ function renderGallery(reset) {
         appendMissingMarks(item, img); // 缺失生成参数的三色感叹号(与节点条共用)
         item.querySelector(".cs-save-btn").onclick = (ev) => {
             ev.stopPropagation();
-            saveImageToOutput(img.url, ev.target);
+            saveImageToOutput(img.url, ev.target, img);
         };
         item.querySelector("[data-fav]").onclick = async (ev) => {
             ev.stopPropagation();
@@ -3612,7 +3622,6 @@ function injectStyles() {
 .cs-expand-cover { width:110px; aspect-ratio:3/4; object-fit:cover; border-radius:6px; flex-shrink:0; align-self:flex-start; }
 .cs-expand-main { flex:1; min-width:0; }
 .cs-expand-desc { font-size:12px; background:rgba(0,0,0,.2); border-radius:6px; padding:8px; margin-top:6px; overflow-wrap:break-word; }
-.cs-expand-desc.cs-clamped { max-height:180px; overflow:hidden; }
 .cs-expand-desc img { max-width:100%; height:auto; }
 .cs-expand-actions { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; }
 .cs-expand-loading { padding:10px; color:var(--desc-text-color,#999); font-size:12px; text-align:center; }
@@ -3630,7 +3639,6 @@ function injectStyles() {
 .cs-as-thumb { width:36px; height:48px; object-fit:cover; border-radius:4px; flex-shrink:0; border:1px solid var(--border-color,#444); }
 .cs-local-detail .cs-expand-body { flex-direction:column; }
 .cs-local-detail .cs-expand-cover { width:100%; }
-.cs-local-row-active { border-color:var(--accent-color,#4a90e2) !important; }
 .cs-local-update { font-size:11px; margin-top:4px; color:#e2a23f; display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
 .cs-local-update.cs-ok { color:#4caf50; }
 .cs-gal-grid { display:flex; flex-wrap:wrap; gap:6px; padding-bottom:20px; align-content:flex-start; }
@@ -4075,7 +4083,7 @@ function renderNodeThumbs(node) {
     const rowH = Math.max(64, parseInt(wv("thumbs_height"), 10) || 256);
     const panelH = Math.max(160, parseInt(wv("panel_h"), 10) || 420);
     strip.style.maxHeight = panelH + "px";
-    strip.querySelectorAll(".cs-thumb,.cs-thumb-msg,.cs-thumb-bar,.cs-thumb-more,.cs-selinfo")
+    strip.querySelectorAll(".cs-thumb,.cs-thumb-msg,.cs-thumb-bar,.cs-thumb-more")
         .forEach((el) => el.remove());
     const st = node.csFetch || {};
     const total = (node.csResults || []).length;

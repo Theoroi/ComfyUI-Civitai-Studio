@@ -15,7 +15,7 @@
 import asyncio
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 
 from . import bg, cache_store, civitai_client, favorites_store as fs
 
