@@ -157,17 +157,33 @@ def _scan_unlocked(deep=False):
             break
     # truncated 时 alive 不完整:不清库,保住没扫到文件的指纹(下轮接着增量)
     cache_store.sync_fingerprints(changed, None if truncated else alive)
-    # 关联表对账(DB 为主存储的第一步):每个扫到的模型都有行(有 meta)或清除请求(无 meta)
+    # 根不可达(网络盘掉线/外置盘未挂载)时按 truncated 语义对账:alive 集不完整,
+    # 不清关联行——assocs 是用户数据域,不能因盘暂时看不见而整体丢失
+    all_roots_ok = True
+    for key in categories():
+        try:
+            if any(r and not os.path.isdir(r) for r in folder_paths.get_folder_paths(key)):
+                all_roots_ok = False
+                break
+        except Exception:
+            all_roots_ok = False
+            break
+    # 关联表对账(DB 为主存储):每个扫到的模型都有行(有 meta)或清除请求(无 meta);
+    # pending_export=1 的行(sidecar 导出失败但 DB 关联已立)仅在"本轮仍无 meta"时
+    # 跳过清除;一旦扫到 meta(=sidecar 已恢复/补导成功)则正常写入并清零标记
     assoc_rows, assoc_clear = [], []
+    pending = cache_store.assoc_pending_paths()
     for m in models:
         meta = m.get("civitai")
         if meta and (meta.get("model_id") or meta.get("version_id")):
             assoc_rows.append((m["path"], str(meta.get("model_id") or ""),
                                str(meta.get("version_id") or ""), meta.get("model_name"),
                                meta.get("cover_url")))
-        else:
+        elif m["path"] not in pending:
             assoc_clear.append(m["path"])
-    cache_store.sync_assocs(assoc_rows, None if truncated else alive, assoc_clear)
+    cache_store.sync_assocs(assoc_rows,
+                            alive if (not truncated and all_roots_ok) else None,
+                            assoc_clear, swept_before=t0)
     by_version = {}
     by_name = {}
     by_id = {}
