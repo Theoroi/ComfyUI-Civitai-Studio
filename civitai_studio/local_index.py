@@ -13,7 +13,7 @@ import time
 import folder_paths
 
 from . import cache_store
-from .bg import _EXECUTOR, run_bg  # 包级共享池(downloader 直接引用 _EXECUTOR 做 hash)
+from .bg import run_bg
 
 # Civitai 模型类型 -> ComfyUI 模型目录 key(按优先级排列)
 TYPE_TO_FOLDERS = {

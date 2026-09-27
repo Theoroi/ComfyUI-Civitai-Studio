@@ -153,7 +153,7 @@ assert g3["gid"] in (it960.get("gpushed") or [])
 # mark_group_synced 绑定 civitai_id 并清 dirty
 g4 = fs.upsert_group("待上行", dirty=1)
 fs.mark_group_synced(g4["gid"], 424242)
-g4b = fs.get_group(g4["gid"])
+g4b = next(g for g in fs.groups_list() if g["gid"] == g4["gid"])
 assert g4b["civitai_id"] == 424242 and g4b["dirty"] == 0
 # 同 civitai_id 再 upsert 不新增行(分组膨胀修复)
 fs.upsert_group("重名集合", civitai_id=424242)
@@ -173,7 +173,7 @@ import civitai_studio.favorites_store as _fs_mod
 _fs_mod._gpushed_checked = False
 cache_store.init()
 assert fs.toggle(fs.KIND_ASSET, "9999", {"name": "post-heal"}) is True, "重建库缺 gpushed 列"
-assert fs.is_active(fs.KIND_ASSET, "9999")
+assert not (fs.get_item(fs.KIND_ASSET, "9999") or {}).get("deleted")
 print("自愈后 gpushed 列 OK")
 
 # ===== 守卫仅限下行路径:本地改名(civitai_id=None)不被 dirty 守卫吞掉 =====

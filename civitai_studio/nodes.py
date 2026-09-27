@@ -14,7 +14,6 @@ import re
 import urllib.parse
 import urllib.request
 
-import aiohttp
 import folder_paths
 
 from . import civitai_client, local_index
