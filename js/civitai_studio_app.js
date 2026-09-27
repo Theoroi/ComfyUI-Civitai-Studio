@@ -189,6 +189,7 @@ const STR = {
         favLegacyLabel: "下拉旧版图片收藏(Legacy,默认关)",
         favLegacyHint: "图片收藏以 Civitai 集合为准。旧版收藏表(Civitai 改版前,网页上已不可见)默认不拉取,且同步时自动清理其本地残留;开启后拉取内容落入 Legacy 分组,不上传。",
         favRemoveTitle: "取消收藏", favSearchPh: "在收藏里搜索…",
+        favSortTitle: "排序", favSortUpdated: "最近更新", favSortAdded: "最近收藏", favSortName: "按名称",
         importAsset: "导入为资产", importAssetDone: "已导入 input/civitai_import/{name}", importAssetExists: "已存在,跳过重复导入: {name}",
         importFailed: "导入失败",
         extractWf: "提取工作流", extractDone: "已存为工作流模板: {name}", extractNone: "该文件未内嵌 ComfyUI 工作流", extractFail: "提取失败",
@@ -347,6 +348,7 @@ const STR = {
         favLegacyLabel: "Pull legacy image favorites (pre-collections, default off)",
         favLegacyHint: "Image favorites follow Civitai collections. The legacy favorites table (invisible on today's Civitai) is not pulled by default and its leftovers are purged locally on sync; when enabled, pulled items land in the Legacy group and are never uploaded.",
         favRemoveTitle: "Unfavorite", favSearchPh: "Search favorites…",
+        favSortTitle: "Sort", favSortUpdated: "Recently updated", favSortAdded: "Recently added", favSortName: "By name",
         importAsset: "Import as asset", importAssetDone: "Imported to input/civitai_import/{name}", importAssetExists: "Already imported, skipped: {name}",
         importFailed: "Import failed",
         extractWf: "Extract workflow", extractDone: "Saved as workflow: {name}", extractNone: "No embedded ComfyUI workflow in this file", extractFail: "Extract failed",
@@ -1600,6 +1602,35 @@ function openImageDetail(item, opts = {}) {
     attachIdAndTags(m.box, item); // ID 行 + 标签行(插在 kv 网格之前)
     // 资源流水线:解析(vid→模型信息) → 与 meta.hashes 前缀比对 → 本地索引匹配 → chips 渲染
     renderResourceList(m.box, item, rawRes, civRes, [...vidSet], meta.hashes || {}, rec);
+    // 非公开 API 生成数据回退(E2E d):meta 缺失时探 tRPC image.getGenerationData;
+    // 命中 meta → 带参重开浮层;无 meta → 至少把 resources(底模/LoRA)+ tools/techniques 补进本浮层
+    if (!hasMeta && item.id != null && !opts.__genRetry) {
+        apiGet(`/civitai_studio/image_gen_data/${encodeURIComponent(String(item.id))}`).then((gd) => {
+            if (!m.box.isConnected) return; // 浮层已被关闭
+            if (gd && gd.meta && (gd.meta.prompt || gd.meta.seed != null)) {
+                openImageDetail({ ...item, meta: gd.meta }, { ...opts, __genRetry: true });
+                return;
+            }
+            const res = ((gd && gd.resources) || []).filter((r) => r.modelVersionId || r.modelName);
+            if (res.length) {
+                const block = $("[data-res-block]", m.box);
+                if (block) block.style.display = "";
+                const conv = res.map((r) => ({
+                    name: r.modelName || "?", weight: r.strength, type: r.modelType || "",
+                    modelId: r.modelId || null, modelVersionId: r.versionId || r.modelVersionId || null,
+                }));
+                renderResourceList(m.box, item, conv, [], conv.map((r) => r.modelVersionId).filter(Boolean), {}, rec);
+            }
+            const tools = ((gd && gd.tools) || []).map((x) => x.name).filter(Boolean);
+            const techs = ((gd && gd.techniques) || []).map((x) => x.name).filter(Boolean);
+            const kvGrid = $(".cs-kv-grid", m.box);
+            if (kvGrid && (tools.length || techs.length)) {
+                kvGrid.insertAdjacentHTML("beforeend",
+                    (tools.length ? `<div><b>${esc(S.lang === "zh" ? "工具" : "Tools")}</b><span>${esc(tools.join(", "))}</span></div>` : "")
+                    + (techs.length ? `<div><b>${esc(S.lang === "zh" ? "技法" : "Techniques")}</b><span>${esc(techs.join(", "))}</span></div>` : ""));
+            }
+        }).catch(() => {});
+    }
 
     $$("[data-copy]", m.box).forEach((btn) => {
         btn.onclick = () => {
@@ -3390,7 +3421,12 @@ function renderFavGrid(view) {
     const items = (S.favData?.items || [])
         .filter((it) => it.kind === S.favUi.kind)
         .filter((it) => S.favUi.group === "all" || (S.favUi.group === "_" ? !it.group_id : it.group_id === S.favUi.group))
-        .filter((it) => !q || String(it.name || it.oid).toLowerCase().includes(q));
+        .filter((it) => !q || String(it.name || it.oid).toLowerCase().includes(q))
+        .sort((a, b) => { // 详细筛选 v1(E2E f):排序维度
+            if (S.favUi.sort === "name") return String(a.name || a.oid).localeCompare(String(b.name || b.oid));
+            if (S.favUi.sort === "added") return (b.added_at || 0) - (a.added_at || 0);
+            return (b.updated_at || 0) - (a.updated_at || 0);
+        });
     if (!items.length) {
         grid.innerHTML = `<div class="cs-empty">${esc(t("favEmpty"))}</div>`;
         return;
@@ -3550,6 +3586,11 @@ function buildFavoritesView(root) {
                 <option value="model">${esc(t("favKindModel"))}</option>
             </select>
             <select id="cs-fav-group"></select>
+            <select id="cs-fav-sort" title="${esc(t("favSortTitle"))}">
+                <option value="updated">${esc(t("favSortUpdated"))}</option>
+                <option value="added">${esc(t("favSortAdded"))}</option>
+                <option value="name">${esc(t("favSortName"))}</option>
+            </select>
             <input id="cs-fav-search" type="text" placeholder="${esc(t("favSearchPh"))}" style="flex:1;min-width:90px"/>
             <button class="cs-btn" id="cs-fav-sync">${esc(t("favSync"))}</button>
             <button class="cs-btn" id="cs-fav-import">${esc(t("favImport"))}</button>
@@ -3565,6 +3606,8 @@ function buildFavoritesView(root) {
         const rec = JSON.parse(localStorage.getItem("cs_fav_lastsync") || "null");
         if (rec && rec.ts) setFavSyncLine(t("favSyncLine", { time: new Date(rec.ts).toLocaleString(), up: rec.up || 0, down: rec.down || 0 }), "");
     } catch (_) {}
+    $("#cs-fav-sort", view).value = S.favUi.sort || "updated";
+    $("#cs-fav-sort", view).onchange = (e) => { S.favUi.sort = e.target.value; S.favUi.page = 1; renderFavGrid(view); };
     $("#cs-fav-kind", view).onchange = (e) => { S.favUi.kind = e.target.value; S.favUi.page = 1; refreshFavGroupSel(view); renderFavGrid(view); };
     $("#cs-fav-group", view).onchange = (e) => { S.favUi.group = e.target.value; S.favUi.page = 1; renderFavGrid(view); };
     let debSearch;
