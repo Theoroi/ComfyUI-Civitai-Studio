@@ -116,6 +116,13 @@ const STR = {
         revealFile: "查看本地文件", toLocal: "本地库", moveBtn: "移动",
         moveTitle: "移动 — {name}", movedToast: "已移动", moveFailed: "移动失败",
         settingsTitle: "⚙ Civitai Studio 设置",
+        setGrpAccount: "🔑 账户与连接", setGrpDownload: "⬇ 下载", setGrpSearch: "🖼 图片与搜索",
+        setGrpStorage: "💾 存储与缓存", setGrpSync: "🔄 收藏同步",
+        testKeyBtn: "测试连接", testKeying: "测试中…",
+        probeOk: "Key 有效", probeNoSocial: "缺 Social→Write 权限，收藏上推不可用",
+        probeNoKey: "未配置 API Key", probeInvalid: "Key 无效或已被吊销",
+        probeTimeout: "连接超时（检查网络/代理）", probeFailUnknown: "测试失败",
+        expBadge: "实验",
         keyLabel: "Civitai API Key(可选,下载受限模型/提高限额/提取tag)",
         keySetPh: "已设置(尾号 {tail}),留空保持不变", keyPh: "粘贴 API Key",
         keyHowTo: "获取方式:登录 Civitai → 右上角头像 Account Settings → Security & Apps → Add API Key → 勾选 READ ONLY → Save,把生成的 Key 粘贴到上面。",
@@ -250,6 +257,13 @@ const STR = {
         revealFile: "Show in folder", toLocal: "Local library", moveBtn: "Move",
         moveTitle: "Move — {name}", movedToast: "Moved", moveFailed: "Move failed",
         settingsTitle: "⚙ Civitai Studio settings",
+        setGrpAccount: "🔑 Account & connection", setGrpDownload: "⬇ Download", setGrpSearch: "🖼 Images & search",
+        setGrpStorage: "💾 Storage & cache", setGrpSync: "🔄 Favorites sync",
+        testKeyBtn: "Test connection", testKeying: "Testing…",
+        probeOk: "Key is valid", probeNoSocial: "Missing Social→Write scope — favorites upsync unavailable",
+        probeNoKey: "No API key configured", probeInvalid: "Key invalid or revoked",
+        probeTimeout: "Connection timeout (check network/proxy)", probeFailUnknown: "Test failed",
+        expBadge: "Experimental",
         keyLabel: "Civitai API key (optional, for gated models / higher rate limits / tag scraping)",
         keySetPh: "Set (ends with {tail}) — leave empty to keep", keyPh: "Paste API key",
         keyHowTo: "How to get one: log in to Civitai → Account Settings (avatar menu) → Security & Apps → Add API Key → check READ ONLY → Save, then paste the generated key above.",
@@ -2681,52 +2695,97 @@ async function openSettings() {
     try { cfg = await apiGet("/civitai_studio/config"); }
     catch (e) { toast("error", t("readCfgFailed"), e.message); return; }
     const oldProxyImages = !!cfg.proxy_images;
+    let fold = {};
+    try { fold = JSON.parse(localStorage.getItem("cs_set_fold") || "{}") || {}; } catch (_) {}
     const m = showModal(`
         <h3 class="cs-modal-title">${esc(t("settingsTitle"))}</h3>
-        <div class="cs-form">
-            <label>${esc(t("keyLabel"))}
-                <input id="cs-set-key" type="password" placeholder="${cfg.api_key_set ? esc(t("keySetPh", { tail: cfg.api_key_tail || "" })) : esc(t("keyPh"))}"/>
-                <span class="cs-form-hint">${esc(t("keyHowTo"))}
-                    <a href="https://civitai.com/user/account/security" target="_blank" rel="noopener noreferrer"
-                       style="color:var(--accent-color,#4a90e2);">${esc(t("keyLink"))}</a></span>
-            </label>
-            <label>${esc(t("proxyLabel"))}
-                <input id="cs-set-proxy" type="text" value="${esc(cfg.proxy || "")}" placeholder="${esc(t("proxyPh"))}"/>
-                <span class="cs-form-hint">${esc(t("proxyHint"))}</span>
-            </label>
-            <label>${esc(t("mirrorLabel"))}
-                <select id="cs-set-site">
-                    <option value="https://civitai.com">civitai.com</option>
-                    <option value="https://civitai.red">civitai.red [NSFW]</option>
-                    <option value="__custom__">${esc(t("siteCustom"))}</option>
-                </select>
-                <input id="cs-set-mirror" type="text" value="${esc(cfg.mirror || "")}" placeholder="https://…" style="display:none;margin-top:4px"/>
-            </label>
-            <label>${esc(t("concLabel"))}
-                <input id="cs-set-conc" type="number" min="1" max="4" value="${cfg.max_concurrent || 1}"/>
-            </label>
-            <label>${esc(t("cacheMaxLabel"))}
-                <input id="cs-set-cachemb" type="number" min="50" max="2000" value="${cfg.cache_max_mb || 500}"/>
-                <span class="cs-form-hint" id="cs-cache-usage">${esc(t("cacheUsageLoading"))}</span>
-            </label>
-            <div class="cs-form-hint" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                <button class="cs-btn" id="cs-set-clearcache" type="button">${esc(t("clearCacheBtn"))}</button>
-                <button class="cs-btn" id="cs-set-deepscan" type="button">${esc(t("deepScanBtn"))}</button>
-                <span id="cs-set-maint-msg"></span>
+        <div class="cs-set-body cs-form">
+            <div class="cs-set-group${fold.account ? " closed" : ""}" data-fold="account">
+                <div class="cs-set-group-head">${esc(t("setGrpAccount"))}<span class="cs-set-caret">▾</span></div>
+                <div class="cs-set-group-body">
+                    <label>${esc(t("keyLabel"))}
+                        <input id="cs-set-key" type="password" placeholder="${cfg.api_key_set ? esc(t("keySetPh", { tail: cfg.api_key_tail || "" })) : esc(t("keyPh"))}"/>
+                        <span class="cs-form-hint">${esc(t("keyHowTo"))}
+                            <a href="https://civitai.com/user/account/security" target="_blank" rel="noopener noreferrer"
+                               style="color:var(--accent-color,#4a90e2);">${esc(t("keyLink"))}</a></span>
+                    </label>
+                    <div class="cs-set-keyrow">
+                        <button class="cs-btn" id="cs-set-test" type="button">${esc(t("testKeyBtn"))}</button>
+                        <span id="cs-set-keybadge" class="cs-set-badge" style="display:none"></span>
+                    </div>
+                    <label>${esc(t("mirrorLabel"))}
+                        <select id="cs-set-site">
+                            <option value="https://civitai.com">civitai.com</option>
+                            <option value="https://civitai.red">civitai.red [NSFW]</option>
+                            <option value="__custom__">${esc(t("siteCustom"))}</option>
+                        </select>
+                        <input id="cs-set-mirror" type="text" value="${esc(cfg.mirror || "")}" placeholder="https://…" style="display:none;margin-top:4px"/>
+                    </label>
+                    <label>${esc(t("proxyLabel"))}
+                        <input id="cs-set-proxy" type="text" value="${esc(cfg.proxy || "")}" placeholder="${esc(t("proxyPh"))}"/>
+                        <span class="cs-form-hint">${esc(t("proxyHint"))}</span>
+                    </label>
+                </div>
             </div>
-            <label class="cs-check"><input id="cs-set-pimg" type="checkbox" ${cfg.proxy_images ? "checked" : ""}/> ${esc(t("pimgLabel"))}</label>
-            <label class="cs-check"><input id="cs-set-hash" type="checkbox" ${cfg.verify_hash ? "checked" : ""}/> ${esc(t("hashLabel"))}</label>
-            <label class="cs-check"><input id="cs-set-pdesc" type="checkbox" ${cfg.persist_description ? "checked" : ""}/> ${esc(t("pdescLabel"))}</label>
-            <label class="cs-check"><input id="cs-set-tscrape" type="checkbox" ${cfg.tag_scrape !== false ? "checked" : ""}/> ${esc(t("tagScrapeLabel"))}</label>
-            <label class="cs-check"><input id="cs-set-andmode" type="checkbox" ${cfg.tag_and_mode ? "checked" : ""}/> ${esc(t("tagAndLabel"))}</label>
-            <label class="cs-check"><input id="cs-set-autosync" type="checkbox" ${cfg.fav_autosync ? "checked" : ""}/> ${esc(t("favAutoSync"))}</label>
-            <div class="cs-modal-msg">${esc(t("settingsMsg"))}</div>
-            <div class="cs-modal-actions">
-                <button class="cs-btn" data-act="cancel">${esc(t("cancel"))}</button>
-                <button class="cs-btn cs-btn-primary" data-act="ok">${esc(t("save"))}</button>
+            <div class="cs-set-group${fold.download ? " closed" : ""}" data-fold="download">
+                <div class="cs-set-group-head">${esc(t("setGrpDownload"))}<span class="cs-set-caret">▾</span></div>
+                <div class="cs-set-group-body">
+                    <label>${esc(t("concLabel"))}
+                        <input id="cs-set-conc" type="number" min="1" max="4" value="${cfg.max_concurrent || 1}"/>
+                    </label>
+                    <label class="cs-check"><input id="cs-set-hash" type="checkbox" ${cfg.verify_hash ? "checked" : ""}/> ${esc(t("hashLabel"))}</label>
+                    <label class="cs-check"><input id="cs-set-pdesc" type="checkbox" ${cfg.persist_description ? "checked" : ""}/> ${esc(t("pdescLabel"))}</label>
+                </div>
             </div>
-        </div>`);
+            <div class="cs-set-group${fold.search ? " closed" : ""}" data-fold="search">
+                <div class="cs-set-group-head">${esc(t("setGrpSearch"))}<span class="cs-set-caret">▾</span></div>
+                <div class="cs-set-group-body">
+                    <label class="cs-check"><input id="cs-set-pimg" type="checkbox" ${cfg.proxy_images ? "checked" : ""}/> ${esc(t("pimgLabel"))}</label>
+                    <label class="cs-check"><input id="cs-set-tscrape" type="checkbox" ${cfg.tag_scrape !== false ? "checked" : ""}/> ${esc(t("tagScrapeLabel"))}</label>
+                    <label class="cs-check"><input id="cs-set-andmode" type="checkbox" ${cfg.tag_and_mode ? "checked" : ""}/> ${esc(t("tagAndLabel"))}<span class="cs-set-exp">${esc(t("expBadge"))}</span></label>
+                </div>
+            </div>
+            <div class="cs-set-group${fold.storage ? " closed" : ""}" data-fold="storage">
+                <div class="cs-set-group-head">${esc(t("setGrpStorage"))}<span class="cs-set-caret">▾</span></div>
+                <div class="cs-set-group-body">
+                    <label>${esc(t("cacheMaxLabel"))}
+                        <div class="cs-set-sliderrow">
+                            <input id="cs-set-cachemb-range" type="range" min="50" max="2000" step="10" value="${cfg.cache_max_mb || 500}"/>
+                            <input id="cs-set-cachemb" type="number" min="50" max="2000" value="${cfg.cache_max_mb || 500}"/>
+                        </div>
+                        <div class="cs-set-progress"><div id="cs-cache-fill" class="cs-set-progress-fill"></div></div>
+                        <span class="cs-form-hint" id="cs-cache-usage">${esc(t("cacheUsageLoading"))}</span>
+                    </label>
+                    <div class="cs-set-btnrow">
+                        <button class="cs-btn" id="cs-set-clearcache" type="button">${esc(t("clearCacheBtn"))}</button>
+                        <button class="cs-btn" id="cs-set-deepscan" type="button">${esc(t("deepScanBtn"))}</button>
+                        <span id="cs-set-maint-msg"></span>
+                    </div>
+                </div>
+            </div>
+            <div class="cs-set-group${fold.sync ? " closed" : ""}" data-fold="sync">
+                <div class="cs-set-group-head">${esc(t("setGrpSync"))}<span class="cs-set-caret">▾</span></div>
+                <div class="cs-set-group-body">
+                    <label class="cs-check"><input id="cs-set-autosync" type="checkbox" ${cfg.fav_autosync ? "checked" : ""}/> ${esc(t("favAutoSync"))}</label>
+                </div>
+            </div>
+        </div>
+        <div class="cs-modal-msg">${esc(t("settingsMsg"))}</div>
+        <div class="cs-modal-actions cs-set-actions">
+            <button class="cs-btn" data-act="cancel">${esc(t("cancel"))}</button>
+            <button class="cs-btn cs-btn-primary" data-act="ok">${esc(t("save"))}</button>
+        </div>`, "cs-settings-modal");
     $("[data-act=cancel]", m.box).onclick = m.close;
+    // 分组折叠:点击小节头切换,状态记 localStorage(下次打开还原)
+    let foldState = fold;
+    $$(".cs-set-group-head", m.box).forEach((h) => {
+        h.onclick = () => {
+            const g = h.parentElement;
+            g.classList.toggle("closed");
+            foldState[g.dataset.fold] = g.classList.contains("closed");
+            try { localStorage.setItem("cs_set_fold", JSON.stringify(foldState)); } catch (_) {}
+        };
+    });
     // API 站点四选一:预设回显;自定义时展开输入框
     const siteSel = $("#cs-set-site", m.box);
     const mirrorInput = $("#cs-set-mirror", m.box);
@@ -2739,21 +2798,36 @@ async function openSettings() {
     siteSel.addEventListener("change", () => {
         mirrorInput.style.display = siteSel.value === "__custom__" ? "block" : "none";
     });
-    // 缓存占用 + 维护按钮(清空缓存/深度重扫)
-    const usageFmt = (d) => t("cacheUsageFmt", { mb: ((d.used_bytes || 0) / 1048576).toFixed(1), max: d.max_mb || 500 });
-    apiGet("/civitai_studio/cache_usage").then((d) => {
+    // 缓存占用进度条 + slider/数值双向联动
+    const applyUsage = (d) => {
         const el = $("#cs-cache-usage", m.box);
         if (el) el.textContent = usageFmt(d);
-    }).catch((e) => {
+        const fill = $("#cs-cache-fill", m.box);
+        if (fill) {
+            const max = Math.max(1, d.max_mb || 500);
+            const pct = Math.min(100, Math.round((d.used_bytes || 0) / 1048576 / max * 100));
+            fill.style.width = pct + "%";
+            fill.classList.toggle("warn", pct >= 70 && pct < 90);
+            fill.classList.toggle("bad", pct >= 90);
+        }
+    };
+    const usageFmt = (d) => t("cacheUsageFmt", { mb: ((d.used_bytes || 0) / 1048576).toFixed(1), max: d.max_mb || 500 });
+    apiGet("/civitai_studio/cache_usage").then(applyUsage).catch((e) => {
         const el = $("#cs-cache-usage", m.box);
         if (el) el.textContent = t("readCfgFailed") + ": " + e.message;
+    });
+    const range = $("#cs-set-cachemb-range", m.box);
+    const numIn = $("#cs-set-cachemb", m.box);
+    range.addEventListener("input", () => { numIn.value = range.value; });
+    numIn.addEventListener("input", () => {
+        const v = parseInt(numIn.value, 10);
+        if (v >= 50 && v <= 2000) range.value = String(v);
     });
     const maintMsg = $("#cs-set-maint-msg", m.box);
     $("#cs-set-clearcache", m.box).onclick = async () => {
         try {
             const d = await apiPost("/civitai_studio/cache_clear");
-            const el = $("#cs-cache-usage", m.box);
-            if (el) el.textContent = usageFmt(d);
+            applyUsage(d);
             maintMsg.textContent = t("cacheCleared");
         } catch (e) {
             maintMsg.textContent = t("saveFailed") + ": " + e.message;
@@ -2766,6 +2840,31 @@ async function openSettings() {
         } catch (e) {
             maintMsg.textContent = t("deepScanFailed") + ": " + e.message;
         }
+    };
+    // 测试连接:输入框有新 key 先落库再探测(探测读已保存配置);徽章按结构化 reason 映射文案
+    const badge = $("#cs-set-keybadge", m.box);
+    const testBtn = $("#cs-set-test", m.box);
+    testBtn.onclick = async () => {
+        const newKey = $("#cs-set-key", m.box).value.trim();
+        if (newKey) { try { await apiPost("/civitai_studio/config", { api_key: newKey }); } catch (_) {} }
+        testBtn.disabled = true;
+        testBtn.textContent = t("testKeying");
+        badge.style.display = "none";
+        try {
+            const r = await apiPost("/civitai_studio/key_probe", {});
+            const reasons = {
+                no_key: t("probeNoKey"), invalid: t("probeInvalid"), timeout: t("probeTimeout"),
+            };
+            badge.textContent = r.ok
+                ? t("probeOk") + (r.username ? ` (${r.username})` : "") + (r.social_write ? "" : " " + t("probeNoSocial"))
+                : (reasons[r.reason] || r.message || t("probeFailUnknown"));
+            badge.className = "cs-set-badge show " + (r.ok ? (r.social_write ? "ok" : "warn") : "bad");
+        } catch (e) {
+            badge.textContent = t("probeFailUnknown") + ": " + e.message;
+            badge.className = "cs-set-badge show bad";
+        }
+        testBtn.disabled = false;
+        testBtn.textContent = t("testKeyBtn");
     };
     $("[data-act=ok]", m.box).onclick = async () => {
         const mirror = siteSel.value === "__custom__" ? mirrorInput.value.trim()
@@ -3447,6 +3546,31 @@ function injectStyles() {
 .cs-form input[type=text], .cs-form input[type=password], .cs-form input[type=number], .cs-form select { background:var(--comfy-input-bg,#333); color:var(--input-text-color,#ddd); border:1px solid var(--border-color,#444); border-radius:5px; padding:6px; font-size:12px; }
 .cs-check { flex-direction:row !important; align-items:center; gap:6px !important; }
 .cs-form-hint { font-size:11px; color:var(--desc-text-color,#999); opacity:.8; }
+/* ---- 设置页:分组卡片 + sticky 底栏 ---- */
+.cs-settings-modal .cs-float-body { display:flex; flex-direction:column; overflow:hidden; }
+.cs-set-body { flex:1; min-height:0; overflow-y:auto; display:flex; flex-direction:column; gap:10px; }
+.cs-set-group { border:1px solid var(--border-color,#444); border-radius:8px; flex-shrink:0; }
+.cs-set-group-head { display:flex; justify-content:space-between; align-items:center; padding:7px 10px; font-size:12px; font-weight:600; cursor:pointer; user-select:none; }
+.cs-set-group-head:hover { background:var(--comfy-input-bg,#333); border-radius:8px; }
+.cs-set-group-body { display:flex; flex-direction:column; gap:10px; padding:8px 10px 10px; border-top:1px solid var(--border-color,#444); }
+.cs-set-group.closed .cs-set-group-body { display:none; }
+.cs-set-caret { transition:transform .15s; opacity:.7; }
+.cs-set-group.closed .cs-set-caret { transform:rotate(-90deg); }
+.cs-set-keyrow { display:flex; gap:8px; align-items:center; min-height:22px; flex-wrap:wrap; }
+.cs-set-badge { font-size:11px; border-radius:4px; padding:2px 8px; white-space:normal; }
+.cs-set-badge.ok { background:rgba(76,175,80,.15); color:#4caf50; }
+.cs-set-badge.warn { background:rgba(255,152,0,.15); color:#ffb74d; }
+.cs-set-badge.bad { background:rgba(226,84,63,.15); color:#e2543f; }
+.cs-set-exp { font-size:10px; color:#ffb74d; border:1px solid rgba(255,152,0,.5); border-radius:3px; padding:0 4px; margin-left:4px; }
+.cs-set-sliderrow { display:flex; gap:8px; align-items:center; }
+.cs-set-sliderrow input[type=range] { flex:1; min-width:0; }
+.cs-set-sliderrow input[type=number] { width:64px; }
+.cs-set-progress { height:6px; border-radius:3px; background:var(--comfy-input-bg,#333); overflow:hidden; }
+.cs-set-progress-fill { height:100%; width:0; background:var(--accent-color,#4a90e2); transition:width .3s; }
+.cs-set-progress-fill.warn { background:#ffb74d; }
+.cs-set-progress-fill.bad { background:#e2543f; }
+.cs-set-btnrow { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+.cs-set-actions { flex-shrink:0; border-top:1px solid var(--border-color,#444); margin-top:10px; padding-top:10px; }
 .cs-dl-hint { background:rgba(0,0,0,.2); border-radius:6px; padding:6px 8px; }
 .cs-float { position:fixed; width:460px; max-width:calc(100vw - 20px); max-height:calc(100vh - 24px); background:var(--comfy-menu-bg,#2a2a2a); border:1px solid var(--border-color,#444); border-radius:10px; box-shadow:0 12px 40px rgba(0,0,0,.55); z-index:60000; display:flex; flex-direction:column; overflow:hidden; }
 .cs-float-head { display:flex; gap:8px; align-items:center; padding:8px 10px; border-bottom:1px solid var(--border-color,#444); cursor:move; user-select:none; }
