@@ -310,12 +310,12 @@ def upsert_group(name, gid=None, civitai_id=None, dirty=0, updated_at=None, ctyp
                     # 否则"建组(即 dirty)后未同步前改名"会被旧名吞掉
                     new_cid = int(civitai_id) if civitai_id else r[0]
                     conn.execute(
-                        "UPDATE fav_groups SET civitai_id=?, updated_at=? WHERE gid=?",
-                        (new_cid, updated_at or now, gid),
+                        "UPDATE fav_groups SET civitai_id=?, updated_at=?, ctype=? WHERE gid=?",
+                        (new_cid, updated_at or now, ctype, gid),  # ctype 透传(审计 F-5)
                     )
                     conn.commit()
                     return {"gid": gid, "name": r[2], "civitai_id": new_cid,
-                            "dirty": 1, "updated_at": updated_at or now, "ctype": r[3]}
+                            "dirty": 1, "updated_at": updated_at or now, "ctype": ctype}
             conn.execute(
                 "INSERT OR REPLACE INTO fav_groups(gid, name, civitai_id, dirty, updated_at, ctype)"
                 " VALUES(?,?,?,?,?,?)",
@@ -337,6 +337,19 @@ def ensure_legacy_group():
     永不建远端集合/推条目;分组下拉只在资产 kind 下展示。幂等。"""
     for g in groups_list():
         if g.get("ctype") == LEGACY_CTYPE:
+            return g["gid"]
+    # 用户早建过同名普通组:收编补 ctype,防双 "Legacy" 并存(审计 F-7)
+    for g in groups_list():
+        if g["name"] == "Legacy" and not g.get("civitai_id") and not g.get("ctype"):
+            conn = _conn()
+            if conn is not None:
+                with _LOCK:
+                    try:
+                        conn.execute("UPDATE fav_groups SET ctype=? WHERE gid=?",
+                                     (LEGACY_CTYPE, g["gid"]))
+                        conn.commit()
+                    except sqlite3.Error:
+                        pass
             return g["gid"]
     g = upsert_group("Legacy", dirty=0, ctype=LEGACY_CTYPE)
     return g["gid"] if g else None

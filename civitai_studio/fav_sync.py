@@ -48,7 +48,8 @@ def _ts(iso):
 
 
 async def _trpc_paged(proc, base_input, item_key):
-    """tRPC 分页 query 包装:getAllCollectionItems(cursor 型,条目键 collectionItems)."""
+    """tRPC 分页 query 包装:getAllCollectionItems(cursor 型,条目键 collectionItems).
+    返回 (items, truncated):truncated=翻到页数上限时仍有下一页."""
     items, cursor, pages = [], None, 0
     while pages < _MAX_PAGES:
         js = dict(base_input or {})
@@ -60,8 +61,8 @@ async def _trpc_paged(proc, base_input, item_key):
         cursor = (data or {}).get("nextCursor") if isinstance(data, dict) else None
         pages += 1
         if not cursor or not page:
-            break
-    return items
+            return items, False
+    return items, True
 
 
 async def _down_favorites(kind, group_id=None):
@@ -118,6 +119,7 @@ async def _down_groups():
         if g.get("civitai_id"):
             by_cid[int(g["civitai_id"])] = g["gid"]
     g_n = i_n = 0
+    m_seen, any_tr = set(), False
     for c in cols or []:
         cid, name, ctype = c.get("id"), c.get("name"), c.get("type")
         if not cid or not name or ctype == "Article":
@@ -129,8 +131,9 @@ async def _down_groups():
         gid = (g or {}).get("gid") or by_cid.get(int(cid))
         g_n += 1
         try:
-            items = await _trpc_paged("collection.getAllCollectionItems",
-                                      {"collectionId": int(cid), "limit": 100}, "collectionItems")
+            items, tr = await _trpc_paged("collection.getAllCollectionItems",
+                                          {"collectionId": int(cid), "limit": 100}, "collectionItems")
+            any_tr = any_tr or tr
         except civitai_client.CivitaiError:
             items = []
         for it in items:
@@ -147,11 +150,12 @@ async def _down_groups():
                                  remote_updated=_ts(it.get("createdAt")))
                 i_n += 1
             elif et == "model":
+                m_seen.add(oid)
                 fs.upsert_remote(fs.KIND_MODEL, oid, group_id=gid, name=d.get("name"),
                                  cover=_cover_url(((d.get("images") or [{}])[0] or {})),
                                  extra={"type": d.get("type"), "baseModels": d.get("baseModels")},
                                  remote_updated=_ts(d.get("lastVersionAt") or it.get("createdAt")))
-    return {"groups": g_n, "images": i_n}
+    return {"groups": g_n, "images": i_n, "model_ids": m_seen, "truncated": any_tr}
 
 
 async def _upsync_models(result):
@@ -259,27 +263,35 @@ async def sync_now():
                 result["truncated"] = r["truncated"]
             except Exception as e:
                 result["errors"].append("旧版图片收藏读取: " + str(e)[:160])
-        else:
+        elif not cache_store.kv_get("legacy_purged_v1"):
+            # 一次性清理残留(审计 F-4:每轮都清会吞掉"手动移出分组"的粘滞操作)
             try:
                 result["legacy_purged"] = await bg.run_bg(fs.purge_legacy_ungrouped)
+                cache_store.kv_put("legacy_purged_v1", True)
             except Exception as e:
                 result["errors"].append("legacy 残留清理: " + str(e)[:160])
         try:
             r = await _down_favorites(fs.KIND_MODEL)
             result["models_down"] = r["n"]
-            if r["truncated"]:
-                result["truncated"] = True
-            else:
-                # 未截断才做缺席对账(截断时"缺席"可能只是翻页上限,会误杀)
-                await bg.run_bg(fs.mark_remote_absent, fs.KIND_MODEL, r["seen"])
+            models_truncated = r["truncated"]
+            models_seen = r["seen"]
         except Exception as e:
             result["errors"].append("模型收藏读取: " + str(e)[:160])
+            models_truncated, models_seen = False, set()
         try:
             d = await _down_groups()
             result["groups_down"] = d["groups"]
             result["collection_images"] = d["images"]
         except Exception as e:
             result["errors"].append("集合读取: " + str(e)[:160])
+            d = {"groups": 0, "images": 0, "model_ids": set(), "truncated": False}
+        # 缺席对账口径 = REST ★ 收藏 ∪ 集合 model 条目(审计 F-3:只收进集合未★的
+        # 模型不在 REST 收藏表,单用 REST seen 会每轮误杀);任一通道截断则跳过(缺席
+        # 可能只是翻页上限,会误杀)
+        if not models_truncated and not d["truncated"]:
+            await bg.run_bg(fs.mark_remote_absent, fs.KIND_MODEL, models_seen | d["model_ids"])
+        elif models_truncated or d["truncated"]:
+            result["truncated"] = True
         await _upsync_models(result)
         await _upsync_groups(result)
         await bg.run_bg(fs.purge_tombstones)
