@@ -141,6 +141,9 @@ const STR = {
         deepScanFailed: "深度重扫失败",
         favTabTitle: "收藏夹", favKindAsset: "资产", favKindModel: "模型",
         favTab: "★ 收藏", favSyncLine: "上次同步 {time} · 上推 {up} · 下拉 {down}",
+        onboardTitle: "👋 三步开始", onboard1: "设置页填入 Civitai API Key（可选，解锁受限模型与收藏同步）",
+        onboard2: "「浏览」搜索 / 「本地库」管理已装模型", onboard3: "画廊 ⬇ 存图、★ 收藏可双向同步 Civitai 账号",
+        onboardGo: "去设置", onboardDismiss: "不再提示",
         favSyncBusy: "同步正在进行中…", syncFailShort: "同步失败",
         ffoldTitle: "折叠/展开筛选区",
         favGroupAll: "全部分组", favGroupNone: "未分组", favGroupLabel: "分组",
@@ -284,6 +287,9 @@ const STR = {
         deepScanFailed: "Deep rescan failed",
         favTabTitle: "Favorites", favKindAsset: "Assets", favKindModel: "Models",
         favTab: "★ Favorites", favSyncLine: "Last sync {time} · up {up} · down {down}",
+        onboardTitle: "👋 Start in 3 steps", onboard1: "Paste your Civitai API Key in Settings (optional; unlocks restricted models & favorites sync)",
+        onboard2: "「Browse」to search / 「Library」to manage installed models", onboard3: "Save gallery images ⬇ and ★ favorites can sync with your Civitai account",
+        onboardGo: "Open settings", onboardDismiss: "Don't show again",
         favSyncBusy: "Sync in progress…", syncFailShort: "Sync failed",
         ffoldTitle: "Collapse/expand filters",
         favGroupAll: "All groups", favGroupNone: "Ungrouped", favGroupLabel: "Group",
@@ -2947,6 +2953,8 @@ async function openSettings() {
             }
             m.close();
             toast("success", t("settingsSaved"), "");
+            const ob = S.ui.root && S.ui.root.querySelector("#cs-onboard");
+            if (ob && body.api_key) ob.remove(); // 引导卡:配好 key 即使命自动消失
             if (body.proxy_images !== oldProxyImages) refreshAllImages();
         } catch (e) {
             toast("error", t("saveFailed"), e.message);
@@ -3249,7 +3257,10 @@ function renderFavGrid(view) {
     }
     const groups = S.favData?.groups || [];
     const h = 180;
-    for (const it of items) {
+    const PAGE = 60; // 网格分页:首屏 60,「加载更多」每次 +60(1000 条不再一次性入 DOM)
+    if (S.favUi.page < 1) S.favUi.page = 1;
+    const shown = items.slice(0, S.favUi.page * PAGE);
+    for (const it of shown) {
         const cell = document.createElement("div");
         cell.className = "cs-thumb";
         cell.style.cssText = `width:135px;height:${h}px;position:relative;`;
@@ -3309,6 +3320,14 @@ function renderFavGrid(view) {
             if (it.kind === "asset") openImageDetail({ id: it.oid, url: it.cover, meta: (it.extra || {}).meta, modelVersionIds: (it.extra || {}).modelVersionIds });
         };
         grid.appendChild(cell);
+    }
+    if (items.length > shown.length) {
+        const more = document.createElement("button");
+        more.className = "cs-btn";
+        more.style.cssText = "grid-column:1/-1;margin:6px auto;";
+        more.textContent = t("loadMore") + ` (+${items.length - shown.length})`;
+        more.onclick = () => { S.favUi.page += 1; renderFavGrid(view); };
+        grid.appendChild(more);
     }
 }
 
@@ -3381,7 +3400,7 @@ function buildFavoritesView(root) {
     const view = document.createElement("div");
     view.className = "cs-view";
     view.dataset.view = "favorites";
-    S.favUi = S.favUi || { kind: "asset", group: "all" };
+    S.favUi = S.favUi || { kind: "asset", group: "all", page: 1 };
     view.innerHTML = `
         <div class="cs-filters">
             <select id="cs-fav-kind">
@@ -3404,8 +3423,8 @@ function buildFavoritesView(root) {
         const rec = JSON.parse(localStorage.getItem("cs_fav_lastsync") || "null");
         if (rec && rec.ts) setFavSyncLine(t("favSyncLine", { time: new Date(rec.ts).toLocaleString(), up: rec.up || 0, down: rec.down || 0 }), "");
     } catch (_) {}
-    $("#cs-fav-kind", view).onchange = (e) => { S.favUi.kind = e.target.value; refreshFavGroupSel(view); renderFavGrid(view); };
-    $("#cs-fav-group", view).onchange = (e) => { S.favUi.group = e.target.value; renderFavGrid(view); };
+    $("#cs-fav-kind", view).onchange = (e) => { S.favUi.kind = e.target.value; S.favUi.page = 1; refreshFavGroupSel(view); renderFavGrid(view); };
+    $("#cs-fav-group", view).onchange = (e) => { S.favUi.group = e.target.value; S.favUi.page = 1; renderFavGrid(view); };
     let debSearch;
     $("#cs-fav-search", view).addEventListener("input", (e) => {
         e.stopPropagation();
@@ -3484,6 +3503,32 @@ function buildRoot(el) {
     $("#cs-settings-btn", root).onclick = openSettings;
     pinSidebarHeight(root);
     switchTab("browse");
+    maybeOnboard(root);
+}
+
+function maybeOnboard(root) {
+    // U1 首次引导:未配置 key 且用户没关过引导 → 浏览 tab 顶部三步卡;保存 key 自动消失
+    if (S.cfg?.api_key_set || localStorage.getItem("cs_onboard_done")) return;
+    const view = root.querySelector(".cs-view[data-view=browse]");
+    if (!view || root.querySelector("#cs-onboard")) return;
+    const card = document.createElement("div");
+    card.className = "cs-banner cs-onboard";
+    card.id = "cs-onboard";
+    card.innerHTML = `
+        <div style="font-weight:600;margin-bottom:2px;">${esc(t("onboardTitle"))}</div>
+        <ol style="margin:0 0 6px 18px;padding:0;font-size:11px;line-height:1.6;">
+            <li>${esc(t("onboard1"))}</li><li>${esc(t("onboard2"))}</li><li>${esc(t("onboard3"))}</li>
+        </ol>
+        <div style="display:flex;gap:6px;">
+            <button class="cs-btn cs-btn-mini cs-btn-primary" data-go>${esc(t("onboardGo"))}</button>
+            <button class="cs-btn cs-btn-mini" data-x>${esc(t("onboardDismiss"))}</button>
+        </div>`;
+    view.prepend(card);
+    card.querySelector("[data-go]").onclick = () => { card.remove(); openSettings(); };
+    card.querySelector("[data-x]").onclick = () => {
+        card.remove();
+        try { localStorage.setItem("cs_onboard_done", "1"); } catch (_) {}
+    };
 }
 
 let _sidebarRO = null;
