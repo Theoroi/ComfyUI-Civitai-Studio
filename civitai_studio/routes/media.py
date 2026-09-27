@@ -143,8 +143,8 @@ async def cache_clear(request):
     await local_index.run_bg(cache_store.clear_cache)  # checkpoint 别堵事件循环
     api_cache.clear_mem()
     civitai_client._model_cache.clear()
-    global _enums_cache
-    _enums_cache = {"data": None, "ts": 0.0}
+    from .common import reset_enums_cache
+    reset_enums_cache()
     _VERSION_CACHE.clear()
     await _scan_async(True, True)
     cfg = config.load()

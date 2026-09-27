@@ -41,8 +41,8 @@ async def resolve_versions(request):
     fetch_list = []
     for vid in ids:
         hit = _VERSION_CACHE.get(vid)
-        if hit and now - hit[0] < _VERSION_TTL:
-            out[vid] = hit[1]
+        if hit is not None:
+            out[vid] = hit
         else:
             fetch_list.append(vid)
     if fetch_list:
@@ -71,10 +71,7 @@ async def resolve_versions(request):
                 }
             except Exception as e:
                 info = {"error": civitai_client.net_error_message(e) if not isinstance(e, civitai_client.CivitaiError) else str(e)}
-            _VERSION_CACHE[vid] = (now, info)
-            if len(_VERSION_CACHE) > _VERSION_CACHE_MAX:
-                oldest = min(_VERSION_CACHE, key=lambda k: _VERSION_CACHE[k][0])
-                _VERSION_CACHE.pop(oldest, None)
+            _VERSION_CACHE.put(vid, info, expires_at=now + _VERSION_TTL)
             out[vid] = info
 
         await _asyncio.gather(*(fetch_one(vid) for vid in fetch_list))

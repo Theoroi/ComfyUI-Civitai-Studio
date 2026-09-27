@@ -519,6 +519,24 @@ def rename_assoc(old_path, new_path, pending=False):
             error("[Civitai-Studio] 关联行平移失败(下轮扫描自动对账):", e)
 
 
+def atomic_write(path, data):
+    """唯一临时名(带 pid+tid)+os.replace 的原子落盘公共实现(C-4).
+
+    data: str(按 utf-8)或 bytes。多实例/多线程不共享临时文件。
+    """
+    d = os.path.dirname(path)
+    if d:
+        os.makedirs(d, exist_ok=True)
+    tmp = "%s.%d.%d.tmp" % (path, os.getpid(), threading.get_ident())
+    if isinstance(data, str):
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(data)
+    else:
+        with open(tmp, "wb") as f:
+            f.write(data)
+    os.replace(tmp, path)
+
+
 def tag_map_all():
     """全量 {tag名: tag id}(用户策展数据;durable 域,配额/清缓存不触及)."""
     init()
@@ -737,11 +755,7 @@ def media_store(url, ctype, data):
         os.makedirs(media_dir(), exist_ok=True)
         h = hashlib.sha1(url.encode("utf-8")).hexdigest()
         p = os.path.join(media_dir(), h + ".bin")
-        # tmp 名带 pid+tid:并发同键写不共享 tmp,防混合字节经 os.replace 变成"合法坏文件"
-        tmp = "%s.%d.%d.tmp" % (p, os.getpid(), threading.get_ident())
-        with open(tmp, "wb") as f:
-            f.write(data)
-        os.replace(tmp, p)
+        atomic_write(p, data)  # C-4:tmp 带 pid+tid,防并发混合字节
         kv_put("media:" + h, {"ctype": ctype, "size": len(data)})
         _enforce_quota()
         return p

@@ -21,6 +21,7 @@ from .. import (api_cache, cache_store, civitai_client, config, downloader, fav_
 from ..bg import spawn as bg_spawn
 from ..version import VERSION, build
 from ..log import info, warn, error
+from ..mem_lru import MemLru
 
 try:
     from server import PromptServer
@@ -75,6 +76,12 @@ _enums_cache = {"data": None, "ts": 0.0}
 _ENUMS_TTL = 6 * 3600.0
 
 
+def reset_enums_cache():
+    """清空缓存时重置枚举缓存(from-import 各持全局,必须经此函数原地/重置)."""
+    global _enums_cache
+    _enums_cache = {"data": None, "ts": 0.0}
+
+
 def _parse_model_ref(text):
     """从页面链接或纯数字里提取 (model_id, version_id|None)。
 
@@ -114,7 +121,7 @@ async def _scan_async(force=False, deep=False):
     return await local_index.run_bg(local_index.scan, force, deep)
 
 
-_VERSION_CACHE = {}
+_VERSION_CACHE = MemLru(200)  # C-1:共享 MemLru,条目 TTL 10min
 
 
 _VERSION_TTL = 600.0

@@ -3324,7 +3324,7 @@ function renderFavGrid(view) {
     if (items.length > shown.length) {
         const more = document.createElement("button");
         more.className = "cs-btn";
-        more.style.cssText = "grid-column:1/-1;margin:6px auto;";
+        more.style.cssText = "flex:0 0 100%;margin:6px auto;";
         more.textContent = t("loadMore") + ` (+${items.length - shown.length})`;
         more.onclick = () => { S.favUi.page += 1; renderFavGrid(view); };
         grid.appendChild(more);
@@ -3429,7 +3429,7 @@ function buildFavoritesView(root) {
     $("#cs-fav-search", view).addEventListener("input", (e) => {
         e.stopPropagation();
         clearTimeout(debSearch);
-        debSearch = setTimeout(() => renderFavGrid(view), 250);
+        debSearch = setTimeout(() => { S.favUi.page = 1; renderFavGrid(view); }, 250);
     });
     $("#cs-fav-sync", view).onclick = () => favDoSync(false);
     $("#cs-fav-import", view).onclick = () => $("#cs-fav-file", view).click();
@@ -3508,7 +3508,9 @@ function buildRoot(el) {
 
 function maybeOnboard(root) {
     // U1 首次引导:未配置 key 且用户没关过引导 → 浏览 tab 顶部三步卡;保存 key 自动消失
-    if (S.cfg?.api_key_set || localStorage.getItem("cs_onboard_done")) return;
+    let dismissed = false;
+    try { dismissed = !!localStorage.getItem("cs_onboard_done"); } catch (_) {}
+    if (S.cfg?.api_key_set || dismissed) return;
     const view = root.querySelector(".cs-view[data-view=browse]");
     if (!view || root.querySelector("#cs-onboard")) return;
     const card = document.createElement("div");

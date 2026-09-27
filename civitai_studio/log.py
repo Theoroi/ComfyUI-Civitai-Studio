@@ -9,13 +9,20 @@ import logging
 log = logging.getLogger("civitai-studio")
 
 
+def _fmt(msg, args):
+    # print 风格迁移:msg 不带 % 占位符时把剩余参数拼进正文(防 logging % 格式化炸)
+    if args:
+        return msg + " " + " ".join(str(a) for a in args)
+    return msg
+
+
 def info(msg, *args):
-    log.info("[Civitai-Studio] " + msg, *args)
+    log.info("[Civitai-Studio] " + _fmt(msg, args))
 
 
 def warn(msg, *args):
-    log.warning("[Civitai-Studio] " + msg, *args)
+    log.warning("[Civitai-Studio] " + _fmt(msg, args))
 
 
 def error(msg, *args):
-    log.error("[Civitai-Studio] " + msg, *args)
+    log.error("[Civitai-Studio] " + _fmt(msg, args))

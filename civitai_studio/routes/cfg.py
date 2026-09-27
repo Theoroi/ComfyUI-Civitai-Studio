@@ -193,7 +193,10 @@ async def set_config(request):
     partial = {}
     for key in ("proxy", "mirror"):
         if key in body:
-            partial[key] = str(body.get(key) or "").strip()
+            v = str(body.get(key) or "").strip()
+            if v and not v.lower().startswith(("http://", "https://", "socks5://", "socks5h://")):
+                return _json_error(f"{key} 需为 http(s)/socks5 地址或留空", 400)
+            partial[key] = v
     if "api_key" in body:
         partial["api_key"] = str(body.get("api_key") or "").strip()
     for key, (lo, hi) in (("nsfw", (0, 2)), ("max_concurrent", (1, 4)),
