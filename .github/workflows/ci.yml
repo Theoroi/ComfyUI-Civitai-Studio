@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.13"]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install test deps
+        run: python -m pip install --quiet pillow
+      - name: Compile all modules
+        run: python -m py_compile civitai_studio/*.py __init__.py
+      - name: Run offline smoke suite
+        run: |
+          set -e
+          for f in tests/smoke/test_*.py; do
+            echo "== $f"
+            python "$f"
+          done
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Syntax-check frontend
+        run: node --check js/civitai_studio_app.js

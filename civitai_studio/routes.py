@@ -79,10 +79,13 @@ if _routes is not None:
     def _post(path):
         return _routes.post(path)
 else:
+    # 无 PromptServer(测试/裸 import):只登记路由清单供契约测试快照,不做任何挂载
+    ROUTES = []  # [(method, path), ...]
     def _get(path):
+        ROUTES.append(("GET", path))
         return lambda fn: fn
-
     def _post(path):
+        ROUTES.append(("POST", path))
         return lambda fn: fn
 
 
