@@ -59,7 +59,9 @@ def sidecar_path(model_path):
 def read_sidecar(model_path):
     try:
         with open(sidecar_path(model_path), "r", encoding="utf-8") as f:
-            return json.load(f)
+            meta = json.load(f)
+            # 外部工具可能写入合法 JSON 但非对象(数组/字符串/数字):一律视为无 sidecar
+            return meta if isinstance(meta, dict) else None
     except (OSError, ValueError):
         return None
 
@@ -157,6 +159,7 @@ def _scan_unlocked(deep=False):
             break
     # truncated 时 alive 不完整:不清库,保住没扫到文件的指纹(下轮接着增量)
     cache_store.sync_fingerprints(changed, None if truncated else alive)
+    by_path = {m["path"]: m for m in models}  # 对账/补源用(路径反查条目)
     # 根不可达(网络盘掉线/外置盘未挂载)时按 truncated 语义对账:alive 集不完整,
     # 不清关联行——assocs 是用户数据域,不能因盘暂时看不见而整体丢失
     all_roots_ok = True
@@ -168,31 +171,46 @@ def _scan_unlocked(deep=False):
         except Exception:
             all_roots_ok = False
             break
-    # 关联表对账(阶段2 终态:DB 是关联真值)。有 sidecar/有 meta 的文件全量 upsert
-    # (含完整 meta JSON);sidecar 缺席不再清行(外部删 sidecar ≠ 取消关联,由 alive
-    # 对账管辖文件消失);无 meta 且 DB 也无行的文件自然无行,不需要显式清
-    assoc_rows = []
+    # 关联表对账(阶段2 终态:DB 是关联真值)。有身份字段(sidecar 或 DB 补源)的文件
+    # 全量 upsert;sidecar 与 DB meta 做字段级合并(sidecar 优先,DB 兜底)——外部
+    # "瘦 sidecar"不会降级 DB 富元数据,无身份的外部 sidecar 不会翻转关联可见性
+    with_side, without = [], []
     for m in models:
         meta = m.get("civitai")
-        if meta and (meta.get("model_id") or meta.get("version_id")):
-            assoc_rows.append((m["path"], str(meta.get("model_id") or ""),
-                               str(meta.get("version_id") or ""), meta.get("model_name"),
-                               meta.get("cover_url"), _sidecar_blob(meta)))
+        if isinstance(meta, dict) and (meta.get("model_id") or meta.get("version_id")):
+            with_side.append(m["path"])
+        else:
+            without.append(m["path"])
+            m["civitai"] = None  # 非dict/无身份的外部 sidecar 不作为元数据真值
+    db_meta = cache_store.assocs_meta_for(with_side + without)
+    assoc_rows = []
+    for p in with_side:
+        m = by_path[p]
+        meta = m["civitai"]
+        db_blob = db_meta.get(os.path.normpath(p))
+        if db_blob:
+            try:
+                merged = {**json.loads(db_blob), **meta}  # sidecar 字段优先,DB 兜底
+                meta = merged
+                m["civitai"] = merged
+            except ValueError:
+                pass
+        assoc_rows.append((p, str(meta.get("model_id") or ""),
+                           str(meta.get("version_id") or ""), meta.get("model_name"),
+                           meta.get("cover_url"), _sidecar_blob(meta)))
     cache_store.sync_assocs(assoc_rows,
                             alive if (not truncated and all_roots_ok) else None,
                             swept_before=t0)
-    # DB 补源(主存储的核心收益):sidecar 缺失/未导出的文件,元数据从 assocs.meta
-    # 恢复——「已安装」标注、节点三级匹配、触发词等功能不依赖 sidecar 在盘
-    meta_map = cache_store.assocs_meta_map()
-    if meta_map:
-        for m in models:
-            if not m.get("civitai"):
-                blob = meta_map.get(m["path"])
-                if blob:
-                    try:
-                        m["civitai"] = json.loads(blob)
-                    except ValueError:
-                        pass
+    # DB 补源(主存储核心收益):sidecar 缺失/无身份的文件,元数据从 assocs.meta 恢复
+    # ——「已安装」标注、节点三级匹配、触发词等功能不依赖 sidecar 在盘
+    for p in without:
+        m = by_path[p]
+        blob = db_meta.get(os.path.normpath(p))
+        if blob:
+            try:
+                m["civitai"] = json.loads(blob)
+            except ValueError:
+                pass
     by_version = {}
     by_name = {}
     by_id = {}

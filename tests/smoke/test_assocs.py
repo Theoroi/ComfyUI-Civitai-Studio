@@ -34,7 +34,7 @@ assert cache_store.assoc_by_version("9999") is None
 local_index.scan(force=True, deep=True)
 a = cache_store.get_assoc(P1)
 assert a and a["version_id"] == "1001", "DB 行被 sidecar 缺席误清(旧语义残留)"
-snap = local_index.scan()
+snap = local_index.scan(force=True)  # 强制新扫描,不吃 TTL 缓存(真实验证补源路径)
 m1 = next(m for m in snap["models"] if m["path"] == os.path.normpath(P1))
 assert (m1.get("civitai") or {}).get("trained_words") == ["kw"], "快照未从 DB meta 补源"
 assert snap["by_version"].get("1001") is m1, "by_version 未含 DB 补源条目"
@@ -67,10 +67,30 @@ assert a and a["version_id"] == "1001", "平移后行内容错误"  # 1001 行�
 local_index.scan(force=True)  # P1 无 sidecar:pending=1 行不得被对账清除
 a = cache_store.get_assoc(P1)
 assert a is not None and str(json.loads(a["meta"])["model_id"]) == "100", "pending 行被扫描清/快照未恢复"
-# sidecar 补导成功 → 扫描后 pending 清零、字段刷新
+# sidecar 补导成功 → 扫描后 pending 清零(硬断言:扫描分支的 pending_export=0 子句)
 json.dump(json.loads(M1), open(P1 + ".civitai.json", "w", encoding="utf-8"))
 local_index.scan(force=True)
-assert cache_store.get_assoc(P1)["version_id"] == "1001"
+a = cache_store.get_assoc(P1)
+assert a["version_id"] == "1001"
+assert os.path.normpath(P1) not in cache_store.assoc_pending_paths(), "补导后 pending 未清零"
+
+# 4c) 瘦 sidecar 不降级 DB 富元数据(字段级合并,sidecar 优先);无身份 sidecar 不翻转可见性
+json.dump({"model_id": 100, "version_id": "1001"}, open(P1 + ".civitai.json", "w", encoding="utf-8"))
+local_index.scan(force=True)
+snap = local_index.scan(force=True)
+m1 = next(m for m in snap["models"] if m["path"] == os.path.normpath(P1))
+assert (m1["civitai"].get("trained_words") == ["kw"]
+        and m1["civitai"].get("model_name") == "模型甲"), "瘦 sidecar 降级了 DB 富元数据"
+json.dump({"description": "外部描述,无身份"}, open(P1 + ".civitai.json", "w", encoding="utf-8"))
+local_index.scan(force=True)
+a = cache_store.get_assoc(P1)
+assert a and a["version_id"] == "1001", "无身份 sidecar 清掉了 DB 行"
+snap = local_index.scan(force=True)
+m1 = next(m for m in snap["models"] if m["path"] == os.path.normpath(P1))
+assert (m1["civitai"] or {}).get("version_id") == "1001", "无身份 sidecar 翻转了关联可见性"
+# 恢复有效 sidecar(为 test 6 删库重建提供重建源)
+json.dump(json.loads(M1), open(P1 + ".civitai.json", "w", encoding="utf-8"))
+local_index.scan(force=True)
 
 # 5) durable 域:clear_cache 清 kv/指纹/媒体,assocs 幸存
 cache_store.sync_assocs([(P1, "100", "1001", "模型甲", None, M1)])

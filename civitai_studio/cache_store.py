@@ -394,11 +394,12 @@ def sync_assocs(rows, alive_paths=None, swept_before=None, pending=False):
                 if swept_before is not None:
                     _CONN.execute(
                         "DELETE FROM assocs WHERE path NOT IN (SELECT path FROM _alive)"
-                        " AND updated_at < ?",
+                        " AND pending_export=0 AND updated_at < ?",
                         (swept_before,))
                 else:
                     _CONN.execute(
-                        "DELETE FROM assocs WHERE path NOT IN (SELECT path FROM _alive)")
+                        "DELETE FROM assocs WHERE path NOT IN (SELECT path FROM _alive)"
+                        " AND pending_export=0")
                 _CONN.execute("DELETE FROM _alive")
             _CONN.commit()
         except (sqlite3.Error, ValueError) as e:
@@ -450,17 +451,25 @@ def assoc_by_version(version_id):
     return _assoc_row_dict(row) if row else None
 
 
-def assocs_meta_map():
-    """全表 {path: meta_json}(快照构建时给 sidecar 缺失的文件恢复元数据;单查询)."""
+def assocs_meta_for(paths):
+    """按 path 批量取 {path: meta_json}(分批 IN 点查,不整表载入;缺行不在返回中)."""
     init()
-    if _CONN is None:
+    if _CONN is None or not paths:
         return {}
+    uniq = list({_norm(p): None for p in paths}.keys())
+    out = {}
     with _LOCK:
         try:
-            return {r[0]: r[1] for r in _CONN.execute(
-                "SELECT path, meta FROM assocs WHERE meta IS NOT NULL")}
+            for i in range(0, len(uniq), 400):
+                chunk = uniq[i:i + 400]
+                marks = ",".join("?" * len(chunk))
+                for r in _CONN.execute(
+                        f"SELECT path, meta FROM assocs WHERE path IN ({marks}) AND meta IS NOT NULL",
+                        chunk):
+                    out[r[0]] = r[1]
         except sqlite3.Error:
             return {}
+    return out
 
 
 def assoc_pending_paths():
@@ -479,8 +488,8 @@ def assoc_pending_paths():
 def rename_assoc(old_path, new_path, pending=False):
     """移动/重命名模型文件后平移关联行(轻量,免全扫).
 
-    pending=True:目标位置无 sidecar(sidecar 迁移失败),行标记待导,
-    防下一轮扫描对账按"无关联"清掉;pending_export=1 的行不受对账删除影响。"""
+    pending=True:目标位置无 sidecar(sidecar 迁移失败),行标记待导;
+    pending_export=1 的行对 alive 对账与导出失败均免疫,仅记录导出通道待补。"""
     init()
     if _CONN is None:
         return
