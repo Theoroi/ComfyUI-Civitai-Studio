@@ -157,6 +157,17 @@ def _scan_unlocked(deep=False):
             break
     # truncated 时 alive 不完整:不清库,保住没扫到文件的指纹(下轮接着增量)
     cache_store.sync_fingerprints(changed, None if truncated else alive)
+    # 关联表对账(DB 为主存储的第一步):每个扫到的模型都有行(有 meta)或清除请求(无 meta)
+    assoc_rows, assoc_clear = [], []
+    for m in models:
+        meta = m.get("civitai")
+        if meta and (meta.get("model_id") or meta.get("version_id")):
+            assoc_rows.append((m["path"], str(meta.get("model_id") or ""),
+                               str(meta.get("version_id") or ""), meta.get("model_name"),
+                               meta.get("cover_url")))
+        else:
+            assoc_clear.append(m["path"])
+    cache_store.sync_assocs(assoc_rows, None if truncated else alive, assoc_clear)
     by_version = {}
     by_name = {}
     by_id = {}

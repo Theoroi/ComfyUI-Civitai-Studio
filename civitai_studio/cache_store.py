@@ -67,6 +67,15 @@ CREATE TABLE IF NOT EXISTS fav_groups (
     dirty INTEGER DEFAULT 0,
     updated_at REAL
 );
+CREATE TABLE IF NOT EXISTS assocs (
+    path TEXT PRIMARY KEY,         -- 模型文件完整路径(normpath);主存储:本地↔Civitai 关联
+    model_id TEXT,
+    version_id TEXT,
+    name TEXT,                     -- Civitai 模型名(冗余,免解析 sidecar JSON)
+    cover TEXT,
+    updated_at REAL NOT NULL       -- 写入时刻(对账/调试用)
+);
+CREATE INDEX IF NOT EXISTS idx_assocs_vid ON assocs(version_id);
 """
 
 
@@ -315,6 +324,100 @@ def sidecar_blob(path):
             return row[0] if row else None
         except sqlite3.Error:
             return None
+
+
+def sync_assocs(rows, alive_paths=None, clear_paths=None):
+    """批量对账「本地文件 ↔ Civitai 关联」表(用户数据域:配额淘汰/clear_cache 均不触及).
+
+    rows=[(path, model_id, version_id, name, cover)];clear_paths=本轮确认"无关联"的
+    path(外部删了 sidecar/清空字段),直接删行;alive_paths 非 None 时另删除表内
+    不在该集合的行(文件已消失/移走;truncated 扫描传 None 保未扫到的行)。
+    """
+    init()
+    if _CONN is None:
+        return
+    now = time.time()
+    with _LOCK:
+        try:
+            _CONN.executemany(
+                "INSERT OR REPLACE INTO assocs(path, model_id, version_id, name, cover, updated_at)"
+                " VALUES(?,?,?,?,?,?)",
+                [(_norm(p), mi, vi, n, c, now)
+                 for (p, mi, vi, n, c) in rows],
+            )
+            if alive_paths is not None:
+                _CONN.execute("CREATE TEMP TABLE IF NOT EXISTS _alive(path TEXT PRIMARY KEY)")
+                _CONN.execute("DELETE FROM _alive")
+                _CONN.executemany(
+                    "INSERT OR IGNORE INTO _alive VALUES(?)",
+                    ((_norm(p),) for p in alive_paths),
+                )
+                _CONN.execute("DELETE FROM assocs WHERE path NOT IN (SELECT path FROM _alive)")
+                _CONN.execute("DELETE FROM _alive")
+            if clear_paths:
+                _CONN.executemany("DELETE FROM assocs WHERE path=?", ((_norm(p),) for p in clear_paths))
+            _CONN.commit()
+        except sqlite3.Error as e:
+            try:
+                _CONN.rollback()
+            except sqlite3.Error:
+                pass
+            print("[Civitai-Studio] 写关联表失败(下次扫描补齐):", e)
+
+
+def get_assoc(path):
+    """单查某文件的关联(无则 None)."""
+    if _CONN is None:
+        return None
+    with _LOCK:
+        try:
+            row = _CONN.execute(
+                "SELECT path, model_id, version_id, name, cover, updated_at"
+                " FROM assocs WHERE path=?", (_norm(path),)
+            ).fetchone()
+        except sqlite3.Error:
+            return None
+    if not row:
+        return None
+    return {"path": row[0], "model_id": row[1], "version_id": row[2],
+            "name": row[3], "cover": row[4], "updated_at": row[5]}
+
+
+def assoc_by_version(version_id):
+    """按 version_id 查已安装位置(多处安装取最先一条;「已安装」判断的主数据源)."""
+    if _CONN is None:
+        return None
+    with _LOCK:
+        try:
+            row = _CONN.execute(
+                "SELECT path, model_id, version_id, name, cover, updated_at"
+                " FROM assocs WHERE version_id=? ORDER BY updated_at LIMIT 1",
+                (str(version_id),)
+            ).fetchone()
+        except sqlite3.Error:
+            return None
+    if not row:
+        return None
+    return {"path": row[0], "model_id": row[1], "version_id": row[2],
+            "name": row[3], "cover": row[4], "updated_at": row[5]}
+
+
+def rename_assoc(old_path, new_path):
+    """移动/重命名模型文件后平移关联行(轻量,免全扫)."""
+    init()
+    if _CONN is None:
+        return
+    with _LOCK:
+        try:
+            _CONN.execute("UPDATE assocs SET path=?, updated_at=? WHERE path=?",
+                          (_norm(new_path), time.time(), _norm(old_path)))
+            _CONN.commit()
+        except sqlite3.Error as e:
+            try:
+                _CONN.rollback()
+            except sqlite3.Error:
+                pass
+            print("[Civitai-Studio] 关联行平移失败(下轮扫描自动对账):", e)
 
 
 def sync_fingerprints(changed_rows, seen_paths):

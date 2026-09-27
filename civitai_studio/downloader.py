@@ -19,7 +19,7 @@ import uuid
 import aiohttp
 import folder_paths
 
-from . import civitai_client, config, local_index
+from . import cache_store, civitai_client, config, local_index
 
 _jobs = {}
 _queue = asyncio.Queue()
@@ -500,8 +500,11 @@ async def _run_job(job):
                  for i in (v.get("images") or []) if i.get("url")), None)
         except Exception:
             pass
+    # DB 为主存储:关联行直接落表(不依赖 sidecar 写盘成功);sidecar 是导出,失败仅警告
+    cache_store.sync_assocs([(final, str(job.get("model_id") or ""), str(job.get("version_id") or ""),
+                              job.get("model_name"), meta.get("cover_url"))])
     if not local_index.write_sidecar(final, meta):
-        job["warning"] = "模型已下载,但写入 .civitai.json 元数据失败(权限/磁盘?),本地库将无法关联该版本"
+        job["warning"] = "模型已下载,关联已保存;但 .civitai.json 导出失败(权限/磁盘?)——仅影响外部工具互操作"
     local_index.schedule_rescan()  # 去抖合并:2s 窗口内多个完成只触发一次重扫
 
 
