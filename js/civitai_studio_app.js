@@ -1229,7 +1229,7 @@ function galleryItemHtml(img) {
     const src = esc(imgSrc(img.url));
     const direct = esc(img.url);
     const save = `<button class="cs-save-btn" title="${esc(t("saveBtnTitle"))}" data-save-url="${direct}">⬇</button>`;
-    if (img.type === "video") {
+    if (isVideoItem(img)) { // 与全局口径一致:webm/mov 也走 video 分支(复审R2-4)
         return `<div class="cs-gallery-item">${save}<video muted loop playsinline preload="metadata"
                     src="${src}#t=0.001" data-direct="${direct}"
                     onerror="this.style.display='none'"></video></div>`;
@@ -2690,8 +2690,20 @@ function buildGalleryView(root) {
         try { localStorage.setItem("cs_gal_fold", galFwrap.classList.contains("folded") ? "1" : "0"); } catch (_) {}
     };
     $("#cs-gal-sort", view).value = st.sort;
-    $("#cs-gal-sort", view).addEventListener("change", (e) => { st.sort = e.target.value; fetchGallery(true); });
-    $("#cs-gal-period", view).addEventListener("change", (e) => { st.period = e.target.value; fetchGallery(true); });
+    { // 视图重建时回显预设选中态(复审R2-1)
+        const hit = GAL_PRESETS.find(([, pd, so]) => pd === st.period && so === st.sort);
+        if (hit) { const c = $(".cs-presets [data-gpreset=\"" + hit[0] + "\"]", view); if (c) c.classList.add("active"); }
+    }
+    $("#cs-gal-sort", view).addEventListener("change", (e) => {
+        st.sort = e.target.value;
+        $$(".cs-presets .cs-chip", view).forEach((c) => c.classList.remove("active")); // 同上
+        fetchGallery(true);
+    });
+    $("#cs-gal-period", view).addEventListener("change", (e) => {
+        st.period = e.target.value;
+        $$(".cs-presets .cs-chip", view).forEach((c) => c.classList.remove("active")); // 手改下拉清预设高亮(复审R2-1)
+        fetchGallery(true);
+    });
     $("#cs-gal-nsfw", view).addEventListener("change", (e) => { st.nsfwLevel = parseInt(e.target.value, 10); fetchGallery(true); });
     // 格式筛选:纯客户端,只过滤已加载条目,不触发重拉(E2E e:API 无类型/格式参数)
     $("#cs-gal-fmt", view).addEventListener("change", (e) => {
