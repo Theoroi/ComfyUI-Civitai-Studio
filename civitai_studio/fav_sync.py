@@ -122,9 +122,11 @@ async def _down_groups():
         cid, name, ctype = c.get("id"), c.get("name"), c.get("type")
         if not cid or not name or ctype == "Article":
             continue  # 文章书签集合与插件无关
-        fs.upsert_group(str(name), civitai_id=int(cid), ctype=ctype,
-                        updated_at=_ts(c.get("updatedAt") or c.get("createdAt")) or None)
-        gid = by_cid.get(int(cid))
+        # 新集合首次落地 by_cid 里还没有映射:必须用 upsert 返回的 gid,
+        # 否则本轮条目全部挂不上组(集合"看似同步了但空")
+        g = fs.upsert_group(str(name), civitai_id=int(cid), ctype=ctype,
+                            updated_at=_ts(c.get("updatedAt") or c.get("createdAt")) or None)
+        gid = (g or {}).get("gid") or by_cid.get(int(cid))
         g_n += 1
         try:
             items = await _trpc_paged("collection.getAllCollectionItems",
