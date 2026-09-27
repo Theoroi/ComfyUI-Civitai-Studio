@@ -2898,9 +2898,11 @@ async function openSettings() {
                     || r.message || t("probeFailUnknown");
             }
             badge.className = "cs-set-badge show " + (r.ok ? (r.social_write === true ? "ok" : "warn") : "bad");
+            badge.style.display = "inline-block"; // className 加 show 不会清内联 display:none
         } catch (e) {
             badge.textContent = t("probeFailUnknown") + ": " + humanizeErr(e.message);
             badge.className = "cs-set-badge show bad";
+            badge.style.display = "inline-block";
         }
         testBtn.disabled = false;
         testBtn.textContent = t("testKeyBtn");
