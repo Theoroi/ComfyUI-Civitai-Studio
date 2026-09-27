@@ -23,7 +23,7 @@ DEFAULTS = {
     "persist_description": False,  # 说明/标签/封面落盘到 .civitai.json(默认关)
     "tag_scrape": True,     # 是否读取非公开 API 抓取图片分类标签
     "tag_and_mode": False,  # 实验选项:多标签筛选改漏斗式 AND(默认 OR,API 原生语义)
-    "cache_max_mb": 500,    # 磁盘缓存上限 MB(50~2000),见 docs/cache-design.md
+    "cache_max_mb": 500,    # 磁盘缓存上限 MB(50~2000),见 docs/plans/completed/cache-design.md
     "fav_autosync": False,  # 收藏与 Civitai 账号自动同步(开面板时触发,冲突按最新时间覆盖)
 }
 

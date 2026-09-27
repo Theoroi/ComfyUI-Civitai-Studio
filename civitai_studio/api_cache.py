@@ -1,6 +1,6 @@
 """civitai_client GET 的缓存编排 — 内存 LRU + 磁盘 kv SWR + singleflight.
 
-分层(docs/cache-design.md L2/L3):
+分层(docs/plans/completed/cache-design.md L2/L3):
 - 内存:进程内 dict,TTL 按端点传参,全局上限 _MEM_MAX 条(超限淘汰最旧)
 - 磁盘:cache_store kv,key 前缀 "api:";payload {"ts": 取数时刻, "data": ...};
   kv 硬过期 = ttl_disk + _SWR_CAP(纯 GC);新鲜度由 ts 自判:

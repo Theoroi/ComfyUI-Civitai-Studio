@@ -44,7 +44,9 @@ async def _download_asset_bytes(url):
         # 且 Authorization 头不会被剥离,302 到外域就泄露 API Key
         async with await civitai_client.open_stream(current, timeout=timeout) as resp:
             if resp.status in (301, 302, 303, 307, 308) and resp.headers.get("Location"):
-                current = str(URL(resp.headers["Location"]).join(URL(current)))
+                # yarl join:基座=当前 URL,解析 Location(相对/绝对都正确);
+                # 此前参数写反导致 current 恒等原 URL、每跳重复请求 → "重定向次数过多"
+                current = str(URL(current).join(URL(resp.headers["Location"])))
                 if not civitai_client.host_allowed_image(current):
                     return None, "重定向到不允许的地址"
                 continue
