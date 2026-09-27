@@ -49,7 +49,11 @@ function fmtOf(it) {
 function fmtBadgeHtml(it) {
     const f = fmtOf(it);
     if (!f) return "";
-    const label = f === "video" ? (/\.webm$/i.test(String(it.url || "")) ? "WEBM" : "MP4") : f.toUpperCase();
+    let label = f.toUpperCase();
+    if (f === "video") {
+        const vm = String(it.url || "").match(/\.(mp4|webm|mov)$/i);
+        label = vm ? vm[1].toUpperCase() : "MP4"; // 扩展名可辨时如实显示(审计二 F-5)
+    }
     return `<span class="cs-fmt">${label}</span>`;
 }
 
@@ -199,7 +203,6 @@ const STR = {
         hashLabel: "下载完成后校验 SHA256",
         pdescLabel: "导出 .civitai.json 伴生文件(默认关)",
         pdescTip: "关联元数据始终存本地数据库;开启后额外把说明/标签/封面导出为模型旁的 .civitai.json(供外部工具)",
-        pdescLabel: "导出 .civitai.json:关联元数据始终存本地数据库;开启后额外把说明/标签/封面导出为模型旁的 .civitai.json(供外部工具,默认关)",
         settingsMsg: "API Key 在 Civitai 账户设置页生成,仅保存在本机 ComfyUI user 目录;Key 只会下发给官方站点,不会发给镜像。",
         settingsSaved: "设置已保存", saveFailed: "保存失败",
         readCfgFailed: "读取配置失败", clearFailed: "清除失败",
@@ -358,7 +361,6 @@ const STR = {
         hashLabel: "Verify SHA256 after download",
         pdescLabel: "Export .civitai.json sidecar (default off)",
         pdescTip: "Association metadata always lives in the local DB; when on, also export description/tags/cover next to the model file for external tools",
-        pdescLabel: "Export .civitai.json: association metadata always lives in the local DB; when on, also export description/tags/cover next to the model file (for external tools, default off)",
         settingsMsg: "Generate the key on the Civitai account page; it is stored locally in the ComfyUI user directory and only ever sent to official hosts.",
         settingsSaved: "Settings saved", saveFailed: "Save failed",
         readCfgFailed: "Failed to read settings", clearFailed: "Clear failed",
@@ -1135,7 +1137,7 @@ function modelBadgesHtml(model) {
     }
     const bases = [...new Set((model.modelVersions || []).map((v) => v.baseModel).filter(Boolean))];
     const html = chips.map(([txt, cls]) => `<span class="cs-badge2 cs-badge2-${cls}">${esc(txt)}</span>`).join("")
-        + bases.map((b) => `<span class="cs-badge2 cs-badge2-base" title="${esc(t("basePlaceholder"))}">${esc(b)}</span>`).join("");
+        + bases.map((b) => `<span class="cs-badge2 cs-badge2-base">${esc(b)}</span>`).join("");
     return html ? `<div class="cs-detail-badges">${html}</div>` : "";
 }
 
@@ -1612,7 +1614,7 @@ function openImageDetail(item, opts = {}) {
                 return;
             }
             const res = ((gd && gd.resources) || []).filter((r) => r.modelVersionId || r.modelName);
-            if (res.length) {
+            if (res.length && !rawRes.length && !vidSet.size) { // 首条流水线无输入才补渲染,防并发覆盖(审计二 F-4)
                 const block = $("[data-res-block]", m.box);
                 if (block) block.style.display = "";
                 const conv = res.map((r) => ({
@@ -4357,13 +4359,15 @@ function renderNodeThumbs(node) {
     const idw = (node.widgets || []).find((w) => w.name === "image_id");
     renderSelInfo(node); // 顶部信息面板(独立 widget,随选择刷新)
 
-    // 状态条:提示 + 计数 + spinner
+    // 状态条:提示 + 计数 + spinner(格式筛选生效时显示可见数,审计二 F-5)
+    const fmtWant = node.__fmt && node.__fmt !== "all" ? node.__fmt : null;
+    const items = (node.csResults || []).filter((it) => !fmtWant || fmtOf(it) === fmtWant).slice(0, 100);
     const bar = document.createElement("div");
     bar.className = "cs-thumb-bar";
     bar.style.cssText = "width:100%;display:flex;align-items:center;gap:8px;font-size:11px;color:#999;";
     bar.innerHTML = `<span>${esc(S.lang === "zh"
         ? "点击放大/选择 · tag 仅数字 ID · "
-        : "Click to enlarge / select · tag = numeric IDs · ")}${total}</span>`;
+        : "Click to enlarge / select · tag = numeric IDs · ")}${items.length}</span>`;
     if (st.loading) {
         const sp = document.createElement("span");
         sp.className = "cs-spin";
@@ -4381,8 +4385,6 @@ function renderNodeThumbs(node) {
     }
     strip.appendChild(bar);
 
-    const fmtWant = node.__fmt && node.__fmt !== "all" ? node.__fmt : null;
-    const items = (node.csResults || []).filter((it) => !fmtWant || fmtOf(it) === fmtWant).slice(0, 100);
     if (!items.length && !st.loading) {
         const msg = document.createElement("div");
         msg.className = "cs-thumb-msg";
