@@ -140,6 +140,9 @@ const STR = {
         deepScanDone: "重扫完成:共 {total} 项,复用 {reused},重读 {read},耗时 {dur}s",
         deepScanFailed: "深度重扫失败",
         favTabTitle: "收藏夹", favKindAsset: "资产", favKindModel: "模型",
+        favTab: "★ 收藏", favSyncLine: "上次同步 {time} · 上推 {up} · 下拉 {down}",
+        favSyncBusy: "同步正在进行中…", syncFailShort: "同步失败",
+        ffoldTitle: "折叠/展开筛选区",
         favGroupAll: "全部分组", favGroupNone: "未分组", favGroupLabel: "分组",
         favSync: "同步 Civitai", favSyncing: "同步中…",
         favSyncDone: "同步完成:资产 +{assets_down},模型 +{models_down},集合条目 +{groups_down},上推 {upsynced}(失败 {upsync_failed})",
@@ -281,6 +284,9 @@ const STR = {
         deepScanDone: "Rescan done: {total} items, {reused} reused, {read} re-read, {dur}s",
         deepScanFailed: "Deep rescan failed",
         favTabTitle: "Favorites", favKindAsset: "Assets", favKindModel: "Models",
+        favTab: "★ Favorites", favSyncLine: "Last sync {time} · up {up} · down {down}",
+        favSyncBusy: "Sync in progress…", syncFailShort: "Sync failed",
+        ffoldTitle: "Collapse/expand filters",
         favGroupAll: "All groups", favGroupNone: "Ungrouped", favGroupLabel: "Group",
         favSync: "Sync Civitai", favSyncing: "Syncing…",
         favSyncDone: "Synced: assets +{assets_down}, models +{models_down}, collection items +{groups_down}, pushed {upsynced} (failed {upsync_failed})",
@@ -456,6 +462,21 @@ const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
 
 function esc(s) {
     return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function humanizeErr(msg) {
+    // 高频原始错误 → 人话(中文界面才映射,英文保持原样)
+    const s = String(msg || "");
+    if (S.lang !== "zh") return s;
+    if (/-32003|required scope|缺少所需作用域/.test(s)) return "API Key 缺少所需权限：到 Civitai 账户设置重建 Key 并勾选相应权限";
+    if (/\b401\b|Unauthorized/i.test(s)) return "认证失败：检查 API Key 是否有效";
+    if (/\b403\b/i.test(s)) return "无权访问（资源私有或权限不足）";
+    if (/\b404\b/i.test(s)) return "资源不存在（可能已被删除）";
+    if (/\b429\b/i.test(s)) return "请求过于频繁，稍后再试";
+    if (/\b502\b|\b503\b|proxy error/i.test(s)) return "网络/代理异常";
+    if (/timed?_?out|timeout/i.test(s)) return "连接超时（检查网络/代理）";
+    if (/ECONNRESET|ECONNREFUSED|ENOTFOUND|network/i.test(s)) return "网络连接失败";
+    return s;
 }
 
 function sanitizeHtml(html) {
@@ -2480,24 +2501,34 @@ function buildGalleryView(root) {
     view.className = "cs-view";
     view.dataset.view = "gallery";
     view.innerHTML = `
-        <div class="cs-filters cs-filters-gal">
-            <input id="cs-gal-base" class="cs-span-full" type="text" placeholder="${esc(t("basePlaceholder"))}" value="${esc(st.base)}"/>
-            <input id="cs-gal-imgid" class="cs-span-full" type="text" placeholder="${esc(S.lang === "zh" ? "图片 ID 精确搜索(回车)" : "Image ID exact search (Enter)")}" value="${esc(st.imageId || "")}" autocomplete="off"/>
-            <div id="cs-gal-tag-picker" class="cs-span-full"></div>
-            <select id="cs-gal-period">${PERIODS.map((p) => `<option value="${p}" ${st.period === p ? "selected" : ""}>${esc(periodLabel(p))}</option>`).join("")}</select>
-            <select id="cs-gal-sort">
-                <option value="Newest">${esc(t("gallerySortNewest"))}</option>
-                <option value="Most Reactions">${esc(t("gallerySortReactions"))}</option>
-                <option value="Most Comments">${esc(t("gallerySortComments"))}</option>
-            </select>
-            <select id="cs-gal-nsfw"><option value="0" ${!st.nsfwLevel ? "selected" : ""}>${esc(t("sfwLabel"))}</option><option value="1" ${st.nsfwLevel ? "selected" : ""}>${esc(t("nsfwLabel"))}</option></select>
-            <select id="cs-gal-size" title="${esc(S.lang === "zh" ? "缩略图大小" : "Thumbnail size")}">${[128, 256, 512].map((px) => `<option value="${px}" ${st.thumbSize === px ? "selected" : ""}>${px}px</option>`).join("")}</select>
-            <button class="cs-btn" id="cs-gal-fav" title="${esc(t("favOnlyTitle"))}" style="${st.favOnly ? "background:var(--accent-color,#4a90e2);color:#fff;border-color:transparent;" : ""}">★</button>
+        <div class="cs-fwrap">
+            <div class="cs-filters cs-filters-gal">
+                <input id="cs-gal-base" class="cs-span-full" type="text" placeholder="${esc(t("basePlaceholder"))}" value="${esc(st.base)}"/>
+                <input id="cs-gal-imgid" class="cs-span-full" type="text" placeholder="${esc(S.lang === "zh" ? "图片 ID 精确搜索(回车)" : "Image ID exact search (Enter)")}" value="${esc(st.imageId || "")}" autocomplete="off"/>
+                <div id="cs-gal-tag-picker" class="cs-span-full"></div>
+                <select id="cs-gal-period">${PERIODS.map((p) => `<option value="${p}" ${st.period === p ? "selected" : ""}>${esc(periodLabel(p))}</option>`).join("")}</select>
+                <select id="cs-gal-sort">
+                    <option value="Newest">${esc(t("gallerySortNewest"))}</option>
+                    <option value="Most Reactions">${esc(t("gallerySortReactions"))}</option>
+                    <option value="Most Comments">${esc(t("gallerySortComments"))}</option>
+                </select>
+                <select id="cs-gal-nsfw"><option value="0" ${!st.nsfwLevel ? "selected" : ""}>${esc(t("sfwLabel"))}</option><option value="1" ${st.nsfwLevel ? "selected" : ""}>${esc(t("nsfwLabel"))}</option></select>
+                <select id="cs-gal-size" title="${esc(S.lang === "zh" ? "缩略图大小" : "Thumbnail size")}">${[128, 256, 512].map((px) => `<option value="${px}" ${st.thumbSize === px ? "selected" : ""}>${px}px</option>`).join("")}</select>
+                <button class="cs-btn" id="cs-gal-fav" title="${esc(t("favOnlyTitle"))}" style="${st.favOnly ? "background:var(--accent-color,#4a90e2);color:#fff;border-color:transparent;" : ""}">★</button>
+            </div>
+            <button class="cs-ffold" id="cs-gal-ffold" title="${esc(t("ffoldTitle"))}">▾</button>
         </div>
         <div id="cs-gal-content" class="cs-scroll">
             <div id="cs-gal-grid" class="cs-gal-grid"></div>
         </div>`;
     root.appendChild(view);
+    // 画廊筛选折叠:与浏览 tab 同构,独立记住偏好
+    const galFwrap = $(".cs-fwrap", view);
+    try { if (localStorage.getItem("cs_gal_fold") === "1") galFwrap.classList.add("folded"); } catch (_) {}
+    $("#cs-gal-ffold", view).onclick = () => {
+        galFwrap.classList.toggle("folded");
+        try { localStorage.setItem("cs_gal_fold", galFwrap.classList.contains("folded") ? "1" : "0"); } catch (_) {}
+    };
     $("#cs-gal-sort", view).value = st.sort;
     $("#cs-gal-sort", view).addEventListener("change", (e) => { st.sort = e.target.value; fetchGallery(true); });
     $("#cs-gal-period", view).addEventListener("change", (e) => { st.period = e.target.value; fetchGallery(true); });
@@ -2601,7 +2632,7 @@ function renderDownloads(force) {
             verifying: t("stVerifying"),
             done: t("stDone"),
             cancelled: t("stCancelled"),
-            error: t("stError") + (j.error || ""),
+            error: t("stError") + humanizeErr(j.error || ""),
         }[j.status] || j.status;
         const active = j.status === "downloading" || j.status === "verifying" || j.status === "queued";
         return `
@@ -2941,17 +2972,20 @@ function buildBrowseView(root) {
         <div class="cs-toolbar">
             <input id="cs-search" type="search" placeholder="${esc(t("searchPlaceholder"))}"/>
         </div>
-        <div class="cs-presets">
-            <button class="cs-chip" data-preset="hot-week">${esc(t("presetHotWeek"))}</button>
-            <button class="cs-chip" data-preset="hot-month">${esc(t("presetHotMonth"))}</button>
-            <button class="cs-chip" data-preset="best-month">${esc(t("presetBestMonth"))}</button>
-        </div>
-        <div class="cs-filters">
-            <input id="cs-f-base" class="cs-span-full" type="text" placeholder="${esc(t("basePlaceholder"))}" value="${esc(st.base)}"/>
-            <select id="cs-f-type" class="cs-span-full"><option value="">${esc(t("allTypes"))}</option>${TYPE_OPTIONS.map((tp) => `<option value="${tp}" ${st.type === tp ? "selected" : ""}>${esc(tp)}</option>`).join("")}</select>
-            <select id="cs-f-period">${PERIODS.map((p) => `<option value="${p}" ${st.period === p ? "selected" : ""}>${esc(periodLabel(p))}</option>`).join("")}</select>
-            <select id="cs-f-sort">${SORTS.map((s) => `<option value="${s}" ${st.sort === s ? "selected" : ""}>${esc(sortLabel(s))}</option>`).join("")}</select>
-            <select id="cs-f-nsfw"><option value="0" ${!st.nsfw ? "selected" : ""}>${esc(t("sfwLabel"))}</option><option value="1" ${st.nsfw ? "selected" : ""}>${esc(t("nsfwLabel"))}</option></select>
+        <div class="cs-fwrap">
+            <div class="cs-presets">
+                <button class="cs-chip" data-preset="hot-week">${esc(t("presetHotWeek"))}</button>
+                <button class="cs-chip" data-preset="hot-month">${esc(t("presetHotMonth"))}</button>
+                <button class="cs-chip" data-preset="best-month">${esc(t("presetBestMonth"))}</button>
+            </div>
+            <div class="cs-filters">
+                <input id="cs-f-base" class="cs-span-full" type="text" placeholder="${esc(t("basePlaceholder"))}" value="${esc(st.base)}"/>
+                <select id="cs-f-type" class="cs-span-full"><option value="">${esc(t("allTypes"))}</option>${TYPE_OPTIONS.map((tp) => `<option value="${tp}" ${st.type === tp ? "selected" : ""}>${esc(tp)}</option>`).join("")}</select>
+                <select id="cs-f-period">${PERIODS.map((p) => `<option value="${p}" ${st.period === p ? "selected" : ""}>${esc(periodLabel(p))}</option>`).join("")}</select>
+                <select id="cs-f-sort">${SORTS.map((s) => `<option value="${s}" ${st.sort === s ? "selected" : ""}>${esc(sortLabel(s))}</option>`).join("")}</select>
+                <select id="cs-f-nsfw"><option value="0" ${!st.nsfw ? "selected" : ""}>${esc(t("sfwLabel"))}</option><option value="1" ${st.nsfw ? "selected" : ""}>${esc(t("nsfwLabel"))}</option></select>
+            </div>
+            <button class="cs-ffold" id="cs-browse-ffold" title="${esc(t("ffoldTitle"))}">▾</button>
         </div>
         <div id="cs-browse-content" class="cs-scroll">
             <div id="cs-grid" class="cs-grid"></div>
@@ -2981,9 +3015,19 @@ function buildBrowseView(root) {
             if (preset === "hot-week") { st.sort = "Most Downloaded"; st.period = "Week"; }
             else if (preset === "hot-month") { st.sort = "Most Downloaded"; st.period = "Month"; }
             else { st.sort = "Highest Rated"; st.period = "Month"; }
+            // 预设只改状态不刷 DOM 会让下拉显示与实际查询不一致:回写两个 select
+            $("#cs-f-sort", view).value = st.sort;
+            $("#cs-f-period", view).value = st.period;
             triggerBrowseRefresh();
         };
     });
+    // 筛选区折叠:右下角 chevron,小尺寸 UI 下把 presets+filters 收起,搜索框常驻;记住偏好
+    const fwrap = $(".cs-fwrap", view);
+    try { if (localStorage.getItem("cs_browse_fold") === "1") fwrap.classList.add("folded"); } catch (_) {}
+    $("#cs-browse-ffold", view).onclick = () => {
+        fwrap.classList.toggle("folded");
+        try { localStorage.setItem("cs_browse_fold", fwrap.classList.contains("folded") ? "1" : "0"); } catch (_) {}
+    };
     // 底模:可自由输入 + 自动补全弹层(视觉对齐 ComfyUI 原生 combo);输入 400ms 防抖即刷
     const baseCands = { list: BASE_MODELS };
     attachComboComplete($("#cs-f-base", view), () => baseCands.list, (val) => { st.base = val; triggerBrowseRefresh(); });
@@ -3261,19 +3305,44 @@ async function loadFavView() {
     if (S.cfg?.fav_autosync && Date.now() - (S.favLastSync || 0) > 30 * 60 * 1000) favDoSync(true);
 }
 
+function setFavSyncLine(text, cls) {
+    // U3:收藏 tab 顶部的同步状态条——自动同步静默跑,结果必须可见
+    const el = $("#cs-fav-syncline", S.ui.root);
+    if (!el) return;
+    if (!text) { el.style.display = "none"; return; }
+    el.style.display = "block";
+    el.className = "cs-fav-syncline " + (cls || "");
+    el.textContent = text;
+}
+
+function favSyncLineText(r) {
+    const rec = { ts: Date.now(), up: r.upsynced || 0, down: (r.assets_down || 0) + (r.models_down || 0) };
+    try { localStorage.setItem("cs_fav_lastsync", JSON.stringify(rec)); } catch (_) {}
+    let txt = t("favSyncLine", { time: new Date(rec.ts).toLocaleTimeString(), up: rec.up, down: rec.down });
+    if (r.scope_hint) txt += " · " + r.scope_hint;
+    if (r.errors && r.errors.length) txt += " · " + t("syncFailShort") + ": " + humanizeErr(String(r.errors[0]));
+    return txt;
+}
+
 async function favDoSync(silent) {
     const btn = $("#cs-fav-sync", S.ui.root);
     if (btn) { btn.disabled = true; btn.textContent = t("favSyncing"); }
     try {
         const r = await apiPost("/civitai_studio/favorites/sync");
         S.favLastSync = Date.now();
-        if (r.status === "busy") toast("warn", S.lang === "zh" ? "同步已在进行中" : "Sync already running", "");
-        else if (r.scope_hint) toast("warn", r.scope_hint, "");
-        else if (!silent) toast("success", t("favSyncDone", r) + (r.truncated ? (S.lang === "zh" ? "(收藏较多,本次仅同步前 1000 条)" : " (first 1000 items only)") : ""), "");
-        else if (r.upsync_failed) toast("warn", t("favFailed"), String(r.errors?.[0] || ""));
+        if (r.status === "busy") {
+            setFavSyncLine(t("favSyncBusy"), "warn");
+            toast("warn", S.lang === "zh" ? "同步已在进行中" : "Sync already running", "");
+        } else {
+            setFavSyncLine(favSyncLineText(r), (r.scope_hint || (r.errors && r.errors.length)) ? "warn" : "");
+            if (r.scope_hint) toast("warn", r.scope_hint, "");
+            else if (!silent) toast("success", t("favSyncDone", r) + (r.truncated ? (S.lang === "zh" ? "(收藏较多,本次仅同步前 1000 条)" : " (first 1000 items only)") : ""), "");
+            else if (r.upsync_failed) toast("warn", t("favFailed"), String(r.errors?.[0] || ""));
+        }
         await loadFavDataOnly();
     } catch (e) {
-        if (!silent) toast("error", t("favFailed"), e.message);
+        setFavSyncLine(t("syncFailShort") + ": " + humanizeErr(e.message), "bad");
+        if (!silent) toast("error", t("favFailed"), humanizeErr(e.message));
     } finally {
         if (btn) { btn.disabled = false; btn.textContent = t("favSync"); }
     }
@@ -3307,8 +3376,14 @@ function buildFavoritesView(root) {
             <button class="cs-btn" id="cs-fav-extracts">${esc(t("extractMgr"))}</button>
             <input type="file" id="cs-fav-file" accept=".json,application/json" style="display:none"/>
         </div>
+        <div id="cs-fav-syncline" class="cs-fav-syncline" style="display:none"></div>
         <div class="cs-scroll"><div id="cs-fav-grid" class="cs-gal-grid"></div></div>`;
     root.appendChild(view);
+    // 上次同步摘要(localStorage):自动同步静默跑,打开 tab 也能看到结果
+    try {
+        const rec = JSON.parse(localStorage.getItem("cs_fav_lastsync") || "null");
+        if (rec && rec.ts) setFavSyncLine(t("favSyncLine", { time: new Date(rec.ts).toLocaleTimeString(), up: rec.up || 0, down: rec.down || 0 }), "");
+    } catch (_) {}
     $("#cs-fav-kind", view).onchange = (e) => { S.favUi.kind = e.target.value; refreshFavGroupSel(view); renderFavGrid(view); };
     $("#cs-fav-group", view).onchange = (e) => { S.favUi.group = e.target.value; renderFavGrid(view); };
     let debSearch;
@@ -3373,7 +3448,7 @@ function buildRoot(el) {
             <button class="cs-tab-btn" data-tab="local">${esc(t("tabLocal"))}</button>
             <button class="cs-tab-btn" data-tab="downloads">${esc(t("tabDownloads"))} <span id="cs-dl-badge" class="cs-dl-badge" style="display:none"></span></button>
             <button class="cs-tab-btn" data-tab="gallery">${esc(t("galleryTab"))}</button>
-            <button class="cs-tab-btn" data-tab="favorites" title="${esc(t("favTabTitle"))}">★</button>
+            <button class="cs-tab-btn" data-tab="favorites" title="${esc(t("favTabTitle"))}">${esc(t("favTab"))}</button>
             <span class="cs-topbar-spacer"></span>
             <button class="cs-tab-btn" id="cs-settings-btn" title="${esc(t("settings"))}">⚙</button>
         </div>
@@ -3387,7 +3462,28 @@ function buildRoot(el) {
     buildFavoritesView($(".cs-body", root));
     $$(".cs-tab-btn[data-tab]", root).forEach((b) => { b.onclick = () => switchTab(b.dataset.tab); });
     $("#cs-settings-btn", root).onclick = openSettings;
+    pinSidebarHeight(root);
     switchTab("browse");
+}
+
+function pinSidebarHeight(root) {
+    // ComfyUI 侧边栏 tab 的挂载容器高度是 auto,height:100% 解析不出 → 面板被内容撑高
+    // (实测 1000 收藏时 root 4136px),滚动交给外层 .sidebar-content-container,
+    // tab 栏与各视图筛选区随之滚走。这里把 root 钉到滚动容器的实测高度,
+    // 让滚动回到面板内部的 .cs-scroll;ResizeObserver 跟随分栏拖动/窗口缩放。
+    const scroller = root.parentElement ? root.parentElement.closest(".sidebar-content-container") : null;
+    if (!scroller) return; // 找不到容器时保持原 100% 布局,topbar 的 sticky 兜底
+    const pin = () => {
+        if (!root.isConnected) return;
+        root.style.height = scroller.clientHeight + "px";
+        root.style.overflow = "hidden";
+    };
+    pin();
+    const ro = new ResizeObserver(() => {
+        if (!root.isConnected) { ro.disconnect(); return; }
+        pin();
+    });
+    ro.observe(scroller);
 }
 
 function restoreBrowseState() {
@@ -3403,7 +3499,7 @@ function injectStyles() {
     style.id = "civitai-studio-styles";
     style.textContent = `
 .cs-root { display:flex; flex-direction:column; height:100%; color:var(--fg-color,#eee); font-size:13px; }
-.cs-topbar { display:flex; flex-wrap:wrap; gap:4px; align-items:center; padding:6px; border-bottom:1px solid var(--border-color,#444); flex-shrink:0; }
+.cs-topbar { display:flex; flex-wrap:wrap; gap:4px; align-items:center; padding:6px; border-bottom:1px solid var(--border-color,#444); flex-shrink:0; position:sticky; top:0; z-index:30; background:var(--comfy-menu-bg,#1f1f1f); }
 .cs-topbar-spacer { flex:1; min-width:8px; }
 .cs-tab-btn { background:transparent; border:1px solid transparent; color:var(--fg-color,#eee); border-radius:6px; padding:3px 8px; cursor:pointer; font-size:12px; }
 .cs-tab-btn:hover { border-color:var(--border-color,#444); }
@@ -3571,6 +3667,15 @@ function injectStyles() {
 .cs-set-progress-fill.bad { background:#e2543f; }
 .cs-set-btnrow { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
 .cs-set-actions { flex-shrink:0; border-top:1px solid var(--border-color,#444); margin-top:10px; padding-top:10px; }
+/* ---- 筛选区折叠(右下角 chevron)+ 收藏同步状态条 ---- */
+.cs-fwrap { position:relative; flex-shrink:0; }
+.cs-ffold { position:absolute; right:6px; bottom:4px; background:var(--comfy-menu-bg,#2a2a2a); border:1px solid var(--border-color,#444); border-radius:4px; color:var(--desc-text-color,#999); font-size:9px; line-height:1; padding:3px 6px; cursor:pointer; z-index:2; }
+.cs-ffold:hover { color:var(--fg-color,#eee); border-color:var(--accent-color,#4a90e2); }
+.cs-fwrap.folded .cs-presets, .cs-fwrap.folded .cs-filters { display:none; }
+.cs-fwrap.folded .cs-ffold { transform:rotate(180deg); }
+.cs-fav-syncline { padding:2px 8px; font-size:11px; color:var(--desc-text-color,#999); border-bottom:1px solid var(--border-color,#444); flex-shrink:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.cs-fav-syncline.warn { color:#e2a23f; }
+.cs-fav-syncline.bad { color:#e2543f; }
 .cs-dl-hint { background:rgba(0,0,0,.2); border-radius:6px; padding:6px 8px; }
 .cs-float { position:fixed; width:460px; max-width:calc(100vw - 20px); max-height:calc(100vh - 24px); background:var(--comfy-menu-bg,#2a2a2a); border:1px solid var(--border-color,#444); border-radius:10px; box-shadow:0 12px 40px rgba(0,0,0,.55); z-index:60000; display:flex; flex-direction:column; overflow:hidden; }
 .cs-float-head { display:flex; gap:8px; align-items:center; padding:8px 10px; border-bottom:1px solid var(--border-color,#444); cursor:move; user-select:none; }
