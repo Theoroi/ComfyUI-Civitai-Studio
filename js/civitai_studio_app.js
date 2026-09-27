@@ -2682,7 +2682,11 @@ function buildGalleryView(root) {
     $("#cs-gal-period", view).addEventListener("change", (e) => { st.period = e.target.value; fetchGallery(true); });
     $("#cs-gal-nsfw", view).addEventListener("change", (e) => { st.nsfwLevel = parseInt(e.target.value, 10); fetchGallery(true); });
     // 格式筛选:纯客户端,只过滤已加载条目,不触发重拉(E2E e:API 无类型/格式参数)
-    $("#cs-gal-fmt", view).addEventListener("change", (e) => { st.fmt = e.target.value; renderGallery(true); });
+    $("#cs-gal-fmt", view).addEventListener("change", (e) => {
+        st.fmt = e.target.value;
+        st.items.forEach((i) => { delete i.__rendered; }); // 清渲染标记,防筛选后整版被跳过
+        renderGallery(true);
+    });
     // 快捷栏(E2E 6):映射 period+sort,回写 select 后重拉
     $$(".cs-presets [data-gpreset]", view).forEach((chip) => {
         chip.onclick = () => {
