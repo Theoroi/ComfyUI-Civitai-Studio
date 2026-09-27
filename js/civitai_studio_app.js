@@ -124,16 +124,17 @@ const STR = {
         probeNoKey: "未配置 API Key", probeInvalid: "Key 无效或已被吊销",
         probeTimeout: "连接超时（检查网络/代理）", probeFailUnknown: "测试失败",
         expBadge: "实验",
-        keyLabel: "Civitai API Key(可选,下载受限模型/提高限额/提取tag)",
+        keyLabel: "Civitai API Key（可选）",
+        keyFunc: "功能：下载受限模型/提高下载限额/提取tag/同步收藏夹（需 Collections Write 和 Social Write 权限）",
         keySetPh: "已设置(尾号 {tail}),留空保持不变", keyPh: "粘贴 API Key",
-        keyHowTo: "获取方式:登录 Civitai → 右上角头像 Account Settings → Security & Apps → Add API Key → 勾选 READ ONLY → Save,把生成的 Key 粘贴到上面。",
+        keyHowTo: "获取方式：登录 Civitai → 右上角头像 → Account Settings → Security & Apps → API Keys → Add API Key，勾选所需权限后 Save，把生成的 Key 粘贴到上面。",
         keyLink: "打开 Civitai 安全设置页 ↗",
-        proxyLabel: "网络代理(HTTP / SOCKS 均可,裸地址自动按 HTTP 处理)",
+        proxyLabel: "网络代理",
         proxyPh: "http://127.0.0.1:10808 或 socks5://127.0.0.1:10808,留空 = 直连",
-        proxyHint: "填 127.0.0.1 而非 localhost。v2rayN 混合端口 10808:优先填 socks5://127.0.0.1:10808(实测最稳),http://127.0.0.1:10808 亦可;API、下载、图片全部走此代理。",
-        mirrorLabel: "API 站点(默认 civitai.com)", siteCustom: "自定义",
-        concLabel: "下载并发数(1-4)",
-        cacheMaxLabel: "磁盘缓存上限 MB(50-2000)",
+        mirrorLabel: "API 站点", mirrorTip: "默认 civitai.com;直连不稳定时可切换镜像站",
+        siteCustom: "自定义",
+        concLabel: "下载并发数", concTip: "1-4;并发越高同时下载越多,过大易触发 Civitai 限速",
+        cacheMaxLabel: "磁盘缓存上限 MB", cacheMaxTip: "50-2000;超出按最近最少使用(LRU)淘汰",
         cacheUsageFmt: "缓存占用:{mb} MB / 上限 {max} MB", cacheUsageLoading: "缓存占用:统计中…",
         clearCacheBtn: "清空缓存", deepScanBtn: "深度重扫",
         cacheCleared: "缓存已清空,索引已重建",
@@ -151,7 +152,8 @@ const STR = {
         favSyncDone: "同步完成:资产 +{assets_down},模型 +{models_down},集合条目 +{groups_down},上推 {upsynced}(失败 {upsync_failed})",
         favImport: "导入", favExport: "导出", favImported: "已导入 {items} 条 / {groups} 个分组",
         favImportFailed: "导入失败", favEmpty: "还没有收藏 — 在画廊、节点缩略图或大图浮层里点 ★",
-        favAutoSync: "收藏自动同步(打开收藏夹时,冲突按最新修改时间覆盖;模型上推需 key 勾选 SocialWrite)",
+        favAutoSync: "收藏自动同步",
+        favAutoSyncTip: "打开收藏夹时自动与 Civitai 同步,冲突按最新修改时间覆盖;模型上推需 key 勾选 Social Write",
         favLegacyLabel: "下拉旧版图片收藏(Legacy,默认关)",
         favLegacyHint: "图片收藏以 Civitai 集合为准。旧版收藏表(Civitai 改版前,网页上已不可见)默认不拉取,且同步时自动清理其本地残留;开启后拉取内容落入 Legacy 分组,不上传。",
         favRemoveTitle: "取消收藏", favSearchPh: "在收藏里搜索…",
@@ -160,8 +162,10 @@ const STR = {
         extractWf: "提取工作流", extractDone: "已存为工作流模板: {name}", extractNone: "该文件未内嵌 ComfyUI 工作流", extractFail: "提取失败",
         extractMgr: "提取管理", extractMgrTitle: "提取的工作流(civitai_studio/)", extractEmpty: "还没有提取过工作流",
         extractDelete: "删除", extractDeleted: "已删除", extractCapWarn: "提取文件已达 {n} 个,建议清理",
-        pimgLabel: "预览图经服务端中转(直连打不开图片时开启)",
+        pimgLabel: "预览图经服务端中转", pimgTip: "直连打不开图片时开启",
         hashLabel: "下载完成后校验 SHA256",
+        pdescLabel: "导出 .civitai.json 伴生文件(默认关)",
+        pdescTip: "关联元数据始终存本地数据库;开启后额外把说明/标签/封面导出为模型旁的 .civitai.json(供外部工具)",
         pdescLabel: "导出 .civitai.json:关联元数据始终存本地数据库;开启后额外把说明/标签/封面导出为模型旁的 .civitai.json(供外部工具,默认关)",
         settingsMsg: "API Key 在 Civitai 账户设置页生成,仅保存在本机 ComfyUI user 目录;Key 只会下发给官方站点,不会发给镜像。",
         settingsSaved: "设置已保存", saveFailed: "保存失败",
@@ -176,8 +180,8 @@ const STR = {
         galBase: "底模", loadMore: "加载更多", useAsOutput: "选为输出", selectedAsOutput: "已选为输出",
         sfwLabel: "全年龄", nsfwLabel: "包含 NSFW", galTagId: "Tag ID 或名称(逗号分隔)",
         noTags: "无标签", tagsPaused: "标签抓取已暂停({sec} 秒后恢复)", noSelectionHint: "未选择(点击缩略图选择)",
-        tagScrapeLabel: "读取非公开 API 获取图片分类标签，需要Civitai API Key", tagsLoading: "标签加载中…",
-        tagAndLabel: "实验:多标签 AND 语义(逐标签查询求交集,请求量更大)", clearTags: "清空",
+        tagScrapeLabel: "读取图片分类标签", tagScrapeTip: "读取非公开 API 获取图片分类标签，需要 Civitai API Key", tagsLoading: "标签加载中…",
+        tagAndLabel: "多标签 AND 语义", tagAndTip: "实验:逐标签查询求交集,请求量更大", clearTags: "清空",
         noTagsSel: "未选标签(下拉选择或输入名称/ID,可多选;多标签任一命中)",
         tagsOff: "标签抓取已在设置中关闭", capHint: "已达显示上限(100)",
         galleryEmpty: "没有图片。", galleryAuthor: "作者",
@@ -272,16 +276,16 @@ const STR = {
         probeNoKey: "No API key configured", probeInvalid: "Key invalid or revoked",
         probeTimeout: "Connection timeout (check network/proxy)", probeFailUnknown: "Test failed",
         expBadge: "Experimental",
-        keyLabel: "Civitai API key (optional, for gated models / higher rate limits / tag scraping)",
+        keyLabel: "Civitai API key (optional)",
+        keyFunc: "Unlocks gated models / higher rate limits / tag scraping / favorites sync (needs Collections Write + Social Write scopes)",
         keySetPh: "Set (ends with {tail}) — leave empty to keep", keyPh: "Paste API key",
-        keyHowTo: "How to get one: log in to Civitai → Account Settings (avatar menu) → Security & Apps → Add API Key → check READ ONLY → Save, then paste the generated key above.",
+        keyHowTo: "How to get one: Civitai avatar menu → Account Settings → Security & Apps → API Keys → Add API Key, pick the scopes, Save, then paste the key above.",
         keyLink: "Open Civitai security settings ↗",
-        proxyLabel: "Network proxy (HTTP / SOCKS; bare addresses are treated as HTTP)",
+        proxyLabel: "Network proxy",
         proxyPh: "http://127.0.0.1:10808 or socks5://127.0.0.1:10808, empty = direct",
-        proxyHint: "Use 127.0.0.1 instead of localhost. API, downloads and previews all go through this proxy.",
-        mirrorLabel: "API site (default civitai.com)", siteCustom: "Custom",
-        concLabel: "Download concurrency (1-4)",
-        cacheMaxLabel: "Disk cache limit MB (50-2000)",
+        mirrorLabel: "API site", mirrorTip: "Default civitai.com; switch to a mirror if the connection is unstable", siteCustom: "Custom",
+        concLabel: "Download concurrency", concTip: "1-4; more parallel downloads, higher rate-limit risk",
+        cacheMaxLabel: "Disk cache limit MB", cacheMaxTip: "50-2000; least-recently-used eviction beyond the limit",
         cacheUsageFmt: "Cache usage: {mb} MB / limit {max} MB", cacheUsageLoading: "Cache usage: calculating…",
         clearCacheBtn: "Clear cache", deepScanBtn: "Deep rescan",
         cacheCleared: "Cache cleared, index rebuilt",
@@ -299,7 +303,8 @@ const STR = {
         favSyncDone: "Synced: assets +{assets_down}, models +{models_down}, collection items +{groups_down}, pushed {upsynced} (failed {upsync_failed})",
         favImport: "Import", favExport: "Export", favImported: "Imported {items} items / {groups} groups",
         favImportFailed: "Import failed", favEmpty: "No favorites yet — tap ★ in the gallery, node thumbnails or the image overlay",
-        favAutoSync: "Auto-sync favorites with Civitai (on Favorites tab open; conflicts resolved by newest timestamp; model push requires the SocialWrite key scope)",
+        favAutoSync: "Auto-sync favorites",
+        favAutoSyncTip: "Sync on Favorites tab open; conflicts resolved by newest timestamp; model push requires the SocialWrite key scope",
         favLegacyLabel: "Pull legacy image favorites (pre-collections, default off)",
         favLegacyHint: "Image favorites follow Civitai collections. The legacy favorites table (invisible on today's Civitai) is not pulled by default and its leftovers are purged locally on sync; when enabled, pulled items land in the Legacy group and are never uploaded.",
         favRemoveTitle: "Unfavorite", favSearchPh: "Search favorites…",
@@ -308,8 +313,10 @@ const STR = {
         extractWf: "Extract workflow", extractDone: "Saved as workflow: {name}", extractNone: "No embedded ComfyUI workflow in this file", extractFail: "Extract failed",
         extractMgr: "Extracts", extractMgrTitle: "Extracted workflows (civitai_studio/)", extractEmpty: "No extracted workflows yet",
         extractDelete: "Delete", extractDeleted: "Deleted", extractCapWarn: "{n} extracts — consider cleaning up",
-        pimgLabel: "Route preview images through the backend (enable if direct loading fails)",
+        pimgLabel: "Route preview images through the backend", pimgTip: "Enable if direct loading fails",
         hashLabel: "Verify SHA256 after download",
+        pdescLabel: "Export .civitai.json sidecar (default off)",
+        pdescTip: "Association metadata always lives in the local DB; when on, also export description/tags/cover next to the model file for external tools",
         pdescLabel: "Export .civitai.json: association metadata always lives in the local DB; when on, also export description/tags/cover next to the model file (for external tools, default off)",
         settingsMsg: "Generate the key on the Civitai account page; it is stored locally in the ComfyUI user directory and only ever sent to official hosts.",
         settingsSaved: "Settings saved", saveFailed: "Save failed",
@@ -324,8 +331,8 @@ const STR = {
         galBase: "Base model", loadMore: "Load more", useAsOutput: "Use as output", selectedAsOutput: "Selected as output",
         sfwLabel: "SFW only", nsfwLabel: "Include NSFW", galTagId: "Tag ID or name, comma-separated",
         noTags: "No tags", tagsPaused: "Tag fetch paused ({sec}s), retrying later", noSelectionHint: "Nothing selected (click a thumbnail)",
-        tagScrapeLabel: "Fetch image category tags (unofficial API), requires Civitai API Key", tagsLoading: "Loading tags…", tagsOff: "Tag scraping disabled in settings", capHint: "Display cap reached (100)",
-        tagAndLabel: "Experimental: multi-tag AND (per-tag queries + intersection, more requests)", clearTags: "Clear",
+        tagScrapeLabel: "Fetch image category tags", tagScrapeTip: "Uses the unofficial API; requires a Civitai API key", tagsLoading: "Loading tags…", tagsOff: "Tag scraping disabled in settings", capHint: "Display cap reached (100)",
+        tagAndLabel: "Multi-tag AND", tagAndTip: "Experimental: per-tag queries + intersection, more requests", clearTags: "Clear",
         noTagsSel: "No tags (pick from dropdown or type name/ID, multi-select; any-match)",
         galleryEmpty: "No images.", galleryAuthor: "Author",
     },
@@ -2549,8 +2556,10 @@ function buildGalleryView(root) {
     // 画廊筛选折叠:与浏览 tab 同构,独立记住偏好
     const galFwrap = $(".cs-fwrap", view);
     try { if (localStorage.getItem("cs_gal_fold") === "1") galFwrap.classList.add("folded"); } catch (_) {}
+    syncFoldBtn($("#cs-gal-ffold", view), galFwrap.classList.contains("folded"));
     $("#cs-gal-ffold", view).onclick = () => {
         galFwrap.classList.toggle("folded");
+        syncFoldBtn($("#cs-gal-ffold", view), galFwrap.classList.contains("folded"));
         try { localStorage.setItem("cs_gal_fold", galFwrap.classList.contains("folded") ? "1" : "0"); } catch (_) {}
     };
     $("#cs-gal-sort", view).value = st.sort;
@@ -2745,6 +2754,11 @@ async function pollDownloads() {
 }
 
 // ---------- 设置 ----------
+// 设置页说明改 ⓘ 悬浮(E2E 1):标题从简,完整解释进 title tooltip
+function infoIco(tip) {
+    return `<span class="cs-info" title="${esc(tip)}">ⓘ</span>`;
+}
+
 async function openSettings() {
     let cfg;
     try { cfg = await apiGet("/civitai_studio/config"); }
@@ -2760,15 +2774,16 @@ async function openSettings() {
                 <div class="cs-set-group-body">
                     <label>${esc(t("keyLabel"))}
                         <input id="cs-set-key" type="password" placeholder="${cfg.api_key_set ? esc(t("keySetPh", { tail: cfg.api_key_tail || "" })) : esc(t("keyPh"))}"/>
-                        <span class="cs-form-hint">${esc(t("keyHowTo"))}
-                            <a href="https://civitai.com/user/account/security" target="_blank" rel="noopener noreferrer"
-                               style="color:var(--accent-color,#4a90e2);">${esc(t("keyLink"))}</a></span>
+                        <span class="cs-form-hint">${esc(t("keyFunc"))}</span>
+                        <span class="cs-form-hint">${esc(t("keyHowTo"))}</span>
+                        <a href="https://civitai.com/user/account/security" target="_blank" rel="noopener noreferrer"
+                           style="color:var(--accent-color,#4a90e2);">${esc(t("keyLink"))}</a>
                     </label>
                     <div class="cs-set-keyrow">
                         <button class="cs-btn" id="cs-set-test" type="button">${esc(t("testKeyBtn"))}</button>
                         <span id="cs-set-keybadge" class="cs-set-badge" style="display:none"></span>
                     </div>
-                    <label>${esc(t("mirrorLabel"))}
+                    <label>${esc(t("mirrorLabel"))} ${infoIco(t("mirrorTip"))}
                         <select id="cs-set-site">
                             <option value="https://civitai.com">civitai.com</option>
                             <option value="https://civitai.red">civitai.red [NSFW]</option>
@@ -2778,32 +2793,31 @@ async function openSettings() {
                     </label>
                     <label>${esc(t("proxyLabel"))}
                         <input id="cs-set-proxy" type="text" value="${esc(cfg.proxy || "")}" placeholder="${esc(t("proxyPh"))}"/>
-                        <span class="cs-form-hint">${esc(t("proxyHint"))}</span>
                     </label>
                 </div>
             </div>
             <div class="cs-set-group${fold.download ? " closed" : ""}" data-fold="download">
                 <div class="cs-set-group-head">${esc(t("setGrpDownload"))}<span class="cs-set-caret">▾</span></div>
                 <div class="cs-set-group-body">
-                    <label>${esc(t("concLabel"))}
+                    <label>${esc(t("concLabel"))} ${infoIco(t("concTip"))}
                         <input id="cs-set-conc" type="number" min="1" max="4" value="${cfg.max_concurrent || 1}"/>
                     </label>
                     <label class="cs-check"><input id="cs-set-hash" type="checkbox" ${cfg.verify_hash ? "checked" : ""}/> ${esc(t("hashLabel"))}</label>
-                    <label class="cs-check"><input id="cs-set-pdesc" type="checkbox" ${cfg.persist_description ? "checked" : ""}/> ${esc(t("pdescLabel"))}</label>
+                    <label class="cs-check"><input id="cs-set-pdesc" type="checkbox" ${cfg.persist_description ? "checked" : ""}/> ${esc(t("pdescLabel"))} ${infoIco(t("pdescTip"))}</label>
                 </div>
             </div>
             <div class="cs-set-group${fold.search ? " closed" : ""}" data-fold="search">
                 <div class="cs-set-group-head">${esc(t("setGrpSearch"))}<span class="cs-set-caret">▾</span></div>
                 <div class="cs-set-group-body">
-                    <label class="cs-check"><input id="cs-set-pimg" type="checkbox" ${cfg.proxy_images ? "checked" : ""}/> ${esc(t("pimgLabel"))}</label>
-                    <label class="cs-check"><input id="cs-set-tscrape" type="checkbox" ${cfg.tag_scrape !== false ? "checked" : ""}/> ${esc(t("tagScrapeLabel"))}</label>
-                    <label class="cs-check"><input id="cs-set-andmode" type="checkbox" ${cfg.tag_and_mode ? "checked" : ""}/> ${esc(t("tagAndLabel"))}<span class="cs-set-exp">${esc(t("expBadge"))}</span></label>
+                    <label class="cs-check"><input id="cs-set-pimg" type="checkbox" ${cfg.proxy_images ? "checked" : ""}/> ${esc(t("pimgLabel"))} ${infoIco(t("pimgTip"))}</label>
+                    <label class="cs-check"><input id="cs-set-tscrape" type="checkbox" ${cfg.tag_scrape !== false ? "checked" : ""}/> ${esc(t("tagScrapeLabel"))} ${infoIco(t("tagScrapeTip"))}</label>
+                    <label class="cs-check"><input id="cs-set-andmode" type="checkbox" ${cfg.tag_and_mode ? "checked" : ""}/> ${esc(t("tagAndLabel"))} ${infoIco(t("tagAndTip"))}<span class="cs-set-exp">${esc(t("expBadge"))}</span></label>
                 </div>
             </div>
             <div class="cs-set-group${fold.storage ? " closed" : ""}" data-fold="storage">
                 <div class="cs-set-group-head">${esc(t("setGrpStorage"))}<span class="cs-set-caret">▾</span></div>
                 <div class="cs-set-group-body">
-                    <label>${esc(t("cacheMaxLabel"))}
+                    <label>${esc(t("cacheMaxLabel"))} ${infoIco(t("cacheMaxTip"))}
                         <div class="cs-set-sliderrow">
                             <input id="cs-set-cachemb-range" type="range" min="50" max="2000" step="10" value="${cfg.cache_max_mb || 500}"/>
                             <input id="cs-set-cachemb" type="number" min="50" max="2000" value="${cfg.cache_max_mb || 500}"/>
@@ -2821,9 +2835,8 @@ async function openSettings() {
             <div class="cs-set-group${fold.sync ? " closed" : ""}" data-fold="sync">
                 <div class="cs-set-group-head">${esc(t("setGrpSync"))}<span class="cs-set-caret">▾</span></div>
                 <div class="cs-set-group-body">
-                    <label class="cs-check"><input id="cs-set-autosync" type="checkbox" ${cfg.fav_autosync ? "checked" : ""}/> ${esc(t("favAutoSync"))}</label>
-                    <label class="cs-check"><input id="cs-set-legacy" type="checkbox" ${cfg.fav_pull_legacy ? "checked" : ""}/> ${esc(t("favLegacyLabel"))}</label>
-                    <div class="cs-form-hint">${esc(t("favLegacyHint"))}</div>
+                    <label class="cs-check"><input id="cs-set-autosync" type="checkbox" ${cfg.fav_autosync ? "checked" : ""}/> ${esc(t("favAutoSync"))} ${infoIco(t("favAutoSyncTip"))}</label>
+                    <label class="cs-check"><input id="cs-set-legacy" type="checkbox" ${cfg.fav_pull_legacy ? "checked" : ""}/> ${esc(t("favLegacyLabel"))} ${infoIco(t("favLegacyHint"))}</label>
                 </div>
             </div>
         </div>
@@ -3061,8 +3074,10 @@ function buildBrowseView(root) {
     // 筛选区折叠:右下角 chevron,小尺寸 UI 下把 presets+filters 收起,搜索框常驻;记住偏好
     const fwrap = $(".cs-fwrap", view);
     try { if (localStorage.getItem("cs_browse_fold") === "1") fwrap.classList.add("folded"); } catch (_) {}
+    syncFoldBtn($("#cs-browse-ffold", view), fwrap.classList.contains("folded"));
     $("#cs-browse-ffold", view).onclick = () => {
         fwrap.classList.toggle("folded");
+        syncFoldBtn($("#cs-browse-ffold", view), fwrap.classList.contains("folded"));
         try { localStorage.setItem("cs_browse_fold", fwrap.classList.contains("folded") ? "1" : "0"); } catch (_) {}
     };
     // 底模:可自由输入 + 自动补全弹层(视觉对齐 ComfyUI 原生 combo);输入 400ms 防抖即刷
@@ -3134,7 +3149,10 @@ async function openMoveDialog(m) {
         const keys = typeMap[tp];
         let list = keys ? allDests.filter((d) => keys.includes(d.key)) : allDests;
         if (scope !== "all") list = list.filter((d) => d.scope === scope);
-        return list.filter((d) => d.root !== m.root); // 排除当前位置
+        // E2E 13:当前注册根不再排除——"移动到同目录子文件夹"需要它;置顶+标记
+        const cur = list.filter((d) => d.root === m.root)
+            .map((d) => ({ ...d, _cur: true, label: (S.lang === "zh" ? "▶ 当前目录 · " : "▶ Current folder · ") + d.label }));
+        return [...cur, ...list.filter((d) => d.root !== m.root)];
     };
     const m2 = showModal(`
         <h3 class="cs-modal-title">${esc(t("moveTitle", { name: m.name }))}</h3>
@@ -3171,6 +3189,8 @@ async function openMoveDialog(m) {
         rootSel.innerHTML = lastList.length
             ? lastList.map((d, i) => `<option value="${i}">${esc(d.label)}</option>`).join("")
             : `<option value="">${esc(S.lang === "zh" ? "(此范围无可用目录)" : "(no folders in this scope)")}</option>`;
+        const ci = lastList.findIndex((d) => d._cur);
+        if (ci >= 0) rootSel.value = String(ci); // 默认选中当前目录,配合子文件夹输入直移
     };
     rebuildRoots();
     if (typeSel) typeSel.onchange = rebuildRoots;
@@ -3183,6 +3203,10 @@ async function openMoveDialog(m) {
         const btn = $("[data-act=ok]", m2.box);
         const d = lastList[parseInt(rootSel.value, 10)];
         if (!d) { toast("error", t("moveFailed"), t("noRegFolders")); return; }
+        if (d.root === m.root && !$("#cs-mv-sub", m2.box).value.trim()) {
+            toast("warn", S.lang === "zh" ? "目标与当前位置相同(需填写子文件夹)" : "Target equals current folder (enter a subfolder)", "");
+            return;
+        }
         btn.disabled = true;
         try {
             await apiPost("/civitai_studio/local/move", {
@@ -3207,14 +3231,14 @@ function buildLocalView(root) {
     view.innerHTML = `
         <div class="cs-toolbar">
             <input id="cs-local-search" type="search" placeholder="${esc(t("localSearchPh"))}"/>
-            <button class="cs-btn" id="cs-check-updates">${esc(t("checkUpdates"))}</button>
+            <!-- E2E 12:批量【检查更新】暂隐藏——比对逻辑待真机验证后再恢复(按钮+下方 onclick 两处);单模型详情里的检查不受影响 -->
             <button class="cs-btn" id="cs-local-refresh" title="${esc(t("rescanTitle"))}">🔄</button>
         </div>
         <div id="cs-local-chips" class="cs-chips"></div>
         <div id="cs-local-list" class="cs-scroll"></div>`;
     root.appendChild(view);
     $("#cs-local-refresh", view).onclick = () => { S.local.updates = {}; loadLocal(true); };
-    $("#cs-check-updates", view).onclick = () => runUpdateCheck([]);
+    // $("#cs-check-updates", view).onclick = () => runUpdateCheck([]); // E2E 12 暂隐藏,恢复时连同上面按钮一起放开
     let deb;
     $("#cs-local-search", view).addEventListener("input", (e) => {
         clearTimeout(deb);
@@ -3554,6 +3578,11 @@ function maybeOnboard(root) {
     };
 }
 
+// 折叠态按钮:E2E 15 — 原单字符 chevron 折叠后不显眼,改为拉宽的 »»»
+function syncFoldBtn(btn, folded) {
+    if (btn) btn.textContent = folded ? "»»»" : "▾";
+}
+
 let _sidebarRO = null;
 let _sidebarPinTimer = null;
 
@@ -3745,6 +3774,8 @@ function injectStyles() {
 .cs-form input[type=text], .cs-form input[type=password], .cs-form input[type=number], .cs-form select { background:var(--comfy-input-bg,#333); color:var(--input-text-color,#ddd); border:1px solid var(--border-color,#444); border-radius:5px; padding:6px; font-size:12px; }
 .cs-check { flex-direction:row !important; align-items:center; gap:6px !important; }
 .cs-form-hint { font-size:11px; color:var(--desc-text-color,#999); opacity:.8; }
+.cs-info { cursor:help; opacity:.75; font-size:11px; flex:0 0 auto; }
+.cs-info:hover { opacity:1; color:var(--accent-color,#4a90e2); }
 /* ---- 设置页:分组卡片 + sticky 底栏 ---- */
 .cs-settings-modal .cs-float-body { display:flex; flex-direction:column; overflow:hidden; }
 .cs-set-body { flex:1; min-height:0; overflow-y:auto; display:flex; flex-direction:column; gap:10px; }
@@ -3776,7 +3807,7 @@ function injectStyles() {
 .cs-ffold:hover { color:var(--fg-color,#eee); border-color:var(--accent-color,#4a90e2); }
 .cs-fwrap.folded .cs-presets, .cs-fwrap.folded .cs-filters { display:none; }
 .cs-fwrap.folded { min-height:20px; } /* 折叠后留一条高度,右下 chevron 不叠搜索框 */
-.cs-fwrap.folded .cs-ffold { transform:rotate(180deg); bottom:2px; }
+.cs-fwrap.folded .cs-ffold { transform:none; bottom:2px; padding:3px 14px; font-size:10px; font-weight:700; letter-spacing:2px; }
 .cs-fav-syncline { padding:2px 8px; font-size:11px; color:var(--desc-text-color,#999); border-bottom:1px solid var(--border-color,#444); flex-shrink:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .cs-fav-syncline.warn { color:#e2a23f; }
 .cs-fav-syncline.bad { color:#e2543f; }
