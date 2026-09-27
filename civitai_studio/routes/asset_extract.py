@@ -129,7 +129,7 @@ async def import_asset(request):
     except OSError as e:
         return _json_error(f"写入失败: {e}", 500)
     return _ok(name=name, existed=existed, hash=h,
-               dir=os.path.relpath(os.path.dirname(target), folder_paths.get_base_directory()))
+               dir=os.path.relpath(os.path.dirname(target), folder_paths.get_input_directory()))
 
 
 def _write_file(path, data):
