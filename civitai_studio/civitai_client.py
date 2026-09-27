@@ -353,14 +353,20 @@ class TrpcScopeError(CivitaiError):
         self.scope_hint = True
 
 
-async def _trpc_request(proc, js, mutation):
-    """非批量调用:query=GET ?input=;mutation=POST {"json":...}.返回 data.json 或抛 CivitaiError."""
+async def _trpc_request(proc, js, mutation, extra_headers=None):
+    """非批量调用:query=GET ?input=;mutation=POST {"json":...}.返回 data.json 或抛 CivitaiError.
+
+    extra_headers 覆盖默认头(key_probe 探测"候选 key"时替换 Authorization)。
+    """
     url = base_url().rstrip("/") + "/api/trpc/" + proc
     sess, via_connector = await get_session()
     p = _proxy()
     if not via_connector and p and _is_socks(p):
         raise CivitaiError(net_error_message(ValueError("Only http proxies are supported")))
-    kwargs = {"headers": _headers_for(url, {"Content-Type": "application/json"})}
+    base_extra = {"Content-Type": "application/json"} if mutation else None
+    if extra_headers:
+        base_extra = {**(base_extra or {}), **extra_headers}
+    kwargs = {"headers": _headers_for(url, base_extra)}
     if not via_connector:
         kwargs["proxy"] = p or None
     if mutation:
@@ -395,12 +401,12 @@ async def _trpc_request(proc, js, mutation):
         raise CivitaiError(net_error_message(e)) from e
 
 
-async def trpc_query(proc, js=None):
-    return await _trpc_request(proc, js or {}, mutation=False)
+async def trpc_query(proc, js=None, extra_headers=None):
+    return await _trpc_request(proc, js or {}, mutation=False, extra_headers=extra_headers)
 
 
-async def trpc_mutation(proc, js):
-    return await _trpc_request(proc, js, mutation=True)
+async def trpc_mutation(proc, js, extra_headers=None):
+    return await _trpc_request(proc, js, mutation=True, extra_headers=extra_headers)
 
 
 async def get_json(path, params=None, timeout=None):

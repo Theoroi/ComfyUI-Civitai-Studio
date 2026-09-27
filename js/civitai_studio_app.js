@@ -120,6 +120,7 @@ const STR = {
         setGrpStorage: "💾 存储与缓存", setGrpSync: "🔄 收藏同步",
         testKeyBtn: "测试连接", testKeying: "测试中…",
         probeOk: "Key 有效", probeNoSocial: "缺 Social→Write 权限，收藏上推不可用",
+        probeSocialUnknown: "写权限探测未完成（网络波动？可重试）",
         probeNoKey: "未配置 API Key", probeInvalid: "Key 无效或已被吊销",
         probeTimeout: "连接超时（检查网络/代理）", probeFailUnknown: "测试失败",
         expBadge: "实验",
@@ -264,6 +265,7 @@ const STR = {
         setGrpStorage: "💾 Storage & cache", setGrpSync: "🔄 Favorites sync",
         testKeyBtn: "Test connection", testKeying: "Testing…",
         probeOk: "Key is valid", probeNoSocial: "Missing Social→Write scope — favorites upsync unavailable",
+        probeSocialUnknown: "Write-scope probe inconclusive (network? try again)",
         probeNoKey: "No API key configured", probeInvalid: "Key invalid or revoked",
         probeTimeout: "Connection timeout (check network/proxy)", probeFailUnknown: "Test failed",
         expBadge: "Experimental",
@@ -2872,26 +2874,32 @@ async function openSettings() {
             maintMsg.textContent = t("deepScanFailed") + ": " + e.message;
         }
     };
-    // 测试连接:输入框有新 key 先落库再探测(探测读已保存配置);徽章按结构化 reason 映射文案
+    // 测试连接:输入框的候选 key 随探测请求传参(只探测不落库,保存仍由「保存」负责);
+    // 缺省探测已保存 key。social_write 三态:true 有效/false 缺权限/null 未知
     const badge = $("#cs-set-keybadge", m.box);
     const testBtn = $("#cs-set-test", m.box);
     testBtn.onclick = async () => {
         const newKey = $("#cs-set-key", m.box).value.trim();
-        if (newKey) { try { await apiPost("/civitai_studio/config", { api_key: newKey }); } catch (_) {} }
         testBtn.disabled = true;
         testBtn.textContent = t("testKeying");
         badge.style.display = "none";
         try {
-            const r = await apiPost("/civitai_studio/key_probe", {});
+            const r = await apiPost("/civitai_studio/key_probe", newKey ? { api_key: newKey } : {});
             const reasons = {
                 no_key: t("probeNoKey"), invalid: t("probeInvalid"), timeout: t("probeTimeout"),
             };
-            badge.textContent = r.ok
-                ? t("probeOk") + (r.username ? ` (${r.username})` : "") + (r.social_write ? "" : " " + t("probeNoSocial"))
-                : (reasons[r.reason] || r.message || t("probeFailUnknown"));
-            badge.className = "cs-set-badge show " + (r.ok ? (r.social_write ? "ok" : "warn") : "bad");
+            if (r.ok) {
+                badge.textContent = t("probeOk") + (r.username ? ` (${r.username})` : "")
+                    + (r.social_write === false ? " " + t("probeNoSocial")
+                        : r.social_write == null ? " " + t("probeSocialUnknown") : "");
+            } else {
+                badge.textContent = reasons[r.reason]
+                    || (r.reason && r.reason.startsWith("http_") ? "HTTP " + r.reason.slice(5) : null)
+                    || r.message || t("probeFailUnknown");
+            }
+            badge.className = "cs-set-badge show " + (r.ok ? (r.social_write === true ? "ok" : "warn") : "bad");
         } catch (e) {
-            badge.textContent = t("probeFailUnknown") + ": " + e.message;
+            badge.textContent = t("probeFailUnknown") + ": " + humanizeErr(e.message);
             badge.className = "cs-set-badge show bad";
         }
         testBtn.disabled = false;
@@ -3318,7 +3326,7 @@ function setFavSyncLine(text, cls) {
 function favSyncLineText(r) {
     const rec = { ts: Date.now(), up: r.upsynced || 0, down: (r.assets_down || 0) + (r.models_down || 0) };
     try { localStorage.setItem("cs_fav_lastsync", JSON.stringify(rec)); } catch (_) {}
-    let txt = t("favSyncLine", { time: new Date(rec.ts).toLocaleTimeString(), up: rec.up, down: rec.down });
+    let txt = t("favSyncLine", { time: new Date(rec.ts).toLocaleString(), up: rec.up, down: rec.down });
     if (r.scope_hint) txt += " · " + r.scope_hint;
     if (r.errors && r.errors.length) txt += " · " + t("syncFailShort") + ": " + humanizeErr(String(r.errors[0]));
     return txt;
@@ -3382,7 +3390,7 @@ function buildFavoritesView(root) {
     // 上次同步摘要(localStorage):自动同步静默跑,打开 tab 也能看到结果
     try {
         const rec = JSON.parse(localStorage.getItem("cs_fav_lastsync") || "null");
-        if (rec && rec.ts) setFavSyncLine(t("favSyncLine", { time: new Date(rec.ts).toLocaleTimeString(), up: rec.up || 0, down: rec.down || 0 }), "");
+        if (rec && rec.ts) setFavSyncLine(t("favSyncLine", { time: new Date(rec.ts).toLocaleString(), up: rec.up || 0, down: rec.down || 0 }), "");
     } catch (_) {}
     $("#cs-fav-kind", view).onchange = (e) => { S.favUi.kind = e.target.value; refreshFavGroupSel(view); renderFavGrid(view); };
     $("#cs-fav-group", view).onchange = (e) => { S.favUi.group = e.target.value; renderFavGrid(view); };
@@ -3466,12 +3474,15 @@ function buildRoot(el) {
     switchTab("browse");
 }
 
+let _sidebarRO = null;
+
 function pinSidebarHeight(root) {
     // ComfyUI 侧边栏 tab 的挂载容器高度是 auto,height:100% 解析不出 → 面板被内容撑高
     // (实测 1000 收藏时 root 4136px),滚动交给外层 .sidebar-content-container,
     // tab 栏与各视图筛选区随之滚走。这里把 root 钉到滚动容器的实测高度,
     // 让滚动回到面板内部的 .cs-scroll;ResizeObserver 跟随分栏拖动/窗口缩放。
     const scroller = root.parentElement ? root.parentElement.closest(".sidebar-content-container") : null;
+    if (_sidebarRO) { _sidebarRO.disconnect(); _sidebarRO = null; } // 面板重建:先放上一棵树的 RO
     if (!scroller) return; // 找不到容器时保持原 100% 布局,topbar 的 sticky 兜底
     const pin = () => {
         if (!root.isConnected) return;
@@ -3479,11 +3490,11 @@ function pinSidebarHeight(root) {
         root.style.overflow = "hidden";
     };
     pin();
-    const ro = new ResizeObserver(() => {
-        if (!root.isConnected) { ro.disconnect(); return; }
+    _sidebarRO = new ResizeObserver(() => {
+        if (!root.isConnected) { _sidebarRO.disconnect(); _sidebarRO = null; return; }
         pin();
     });
-    ro.observe(scroller);
+    _sidebarRO.observe(scroller);
 }
 
 function restoreBrowseState() {
@@ -3672,7 +3683,8 @@ function injectStyles() {
 .cs-ffold { position:absolute; right:6px; bottom:4px; background:var(--comfy-menu-bg,#2a2a2a); border:1px solid var(--border-color,#444); border-radius:4px; color:var(--desc-text-color,#999); font-size:9px; line-height:1; padding:3px 6px; cursor:pointer; z-index:2; }
 .cs-ffold:hover { color:var(--fg-color,#eee); border-color:var(--accent-color,#4a90e2); }
 .cs-fwrap.folded .cs-presets, .cs-fwrap.folded .cs-filters { display:none; }
-.cs-fwrap.folded .cs-ffold { transform:rotate(180deg); }
+.cs-fwrap.folded { min-height:20px; } /* 折叠后留一条高度,右下 chevron 不叠搜索框 */
+.cs-fwrap.folded .cs-ffold { transform:rotate(180deg); bottom:2px; }
 .cs-fav-syncline { padding:2px 8px; font-size:11px; color:var(--desc-text-color,#999); border-bottom:1px solid var(--border-color,#444); flex-shrink:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .cs-fav-syncline.warn { color:#e2a23f; }
 .cs-fav-syncline.bad { color:#e2543f; }
