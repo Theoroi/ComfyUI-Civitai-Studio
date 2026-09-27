@@ -78,6 +78,11 @@ CREATE TABLE IF NOT EXISTS assocs (
     meta TEXT                         -- 完整元数据 JSON(DB=真值;快照/节点功能由此恢复)
 );
 CREATE INDEX IF NOT EXISTS idx_assocs_vid ON assocs(version_id);
+CREATE TABLE IF NOT EXISTS dl_jobs (
+    job_id TEXT PRIMARY KEY,       -- 下载任务 id(durable 域:重启恢复用户任务列表)
+    payload TEXT NOT NULL,         -- 任务记录 JSON(JOB_PUBLIC_FIELDS+payload/root/subfolder/file_index)
+    updated_at REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS tag_map (
     name TEXT PRIMARY KEY,         -- 图片分类 tag 名(用户策展数据:durable 域)
     tid INTEGER NOT NULL,          -- Civitai tag id
@@ -544,6 +549,57 @@ def tag_map_put(pairs):
             except sqlite3.Error:
                 pass
             print("[Civitai-Studio] tag 映射写入失败(下次重试):", e)
+
+
+def dl_jobs_put(jobs, keep_ids=None):
+    """下载任务落库:jobs=[(job_id, rec_json)] 全量 upsert;keep_ids 非 None 时
+    删除表中不在集合内的行(与内存 trim 同步).durable 域,配额/清缓存不触及."""
+    init()
+    if _CONN is None:
+        return
+    now = time.time()
+    with _LOCK:
+        try:
+            _CONN.executemany(
+                "INSERT INTO dl_jobs(job_id, payload, updated_at) VALUES(?,?,?)"
+                " ON CONFLICT(job_id) DO UPDATE SET payload=excluded.payload,"
+                " updated_at=excluded.updated_at",
+                [(str(i), j, now) for (i, j) in jobs])
+            if keep_ids is not None:
+                _CONN.execute("CREATE TEMP TABLE IF NOT EXISTS _keep(job_id TEXT PRIMARY KEY)")
+                _CONN.execute("DELETE FROM _keep")
+                _CONN.executemany("INSERT OR IGNORE INTO _keep VALUES(?)",
+                                  ((str(i),) for i in keep_ids))
+                _CONN.execute("DELETE FROM dl_jobs WHERE job_id NOT IN (SELECT job_id FROM _keep)")
+                _CONN.execute("DELETE FROM _keep")
+            _CONN.commit()
+        except (sqlite3.Error, ValueError) as e:
+            try:
+                _CONN.rollback()
+            except sqlite3.Error:
+                pass
+            print("[Civitai-Studio] 下载任务落库失败(下次重试):", e)
+
+
+def dl_jobs_all():
+    """全部任务记录 [{...rec...}](payload JSON 已解析;库空返回 [])."""
+    init()
+    if _CONN is None:
+        return []
+    with _LOCK:
+        try:
+            out = []
+            for r in _CONN.execute("SELECT job_id, payload FROM dl_jobs"):
+                try:
+                    rec = json.loads(r[1])
+                except ValueError:
+                    continue
+                if isinstance(rec, dict):
+                    rec["id"] = r[0]
+                    out.append(rec)
+            return out
+        except sqlite3.Error:
+            return []
 
 
 def sync_fingerprints(changed_rows, seen_paths):
