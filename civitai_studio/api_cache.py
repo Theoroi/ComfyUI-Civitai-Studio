@@ -15,6 +15,7 @@ import asyncio
 import time
 
 from . import bg, cache_store
+from .log import info, warn, error  # 统一日志(E2)
 
 _MEM = {}  # key -> (ts, data)
 _MEM_MAX = 200
@@ -71,7 +72,7 @@ def _kick_refresh(key, fetch, ttl_disk, ttl_mem):
             await bg.run_bg(cache_store.kv_put, "api:" + key,
                             {"ts": time.time(), "data": data}, ttl_disk + _SWR_CAP)
         except Exception as e:  # 刷新失败保留旧值,不打扰用户
-            print("[Civitai-Studio] SWR 后台刷新失败(继续用旧值):", e)
+            error("[Civitai-Studio] SWR 后台刷新失败(继续用旧值):", e)
         finally:
             _refreshing.discard(key)
 

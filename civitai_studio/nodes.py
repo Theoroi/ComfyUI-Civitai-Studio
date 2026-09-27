@@ -17,6 +17,7 @@ import urllib.request
 import folder_paths
 
 from . import civitai_client, local_index
+from .log import info, warn, error  # 统一日志(E2)
 
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
@@ -399,7 +400,7 @@ class CivitaiSaveImage:
             if bits:
                 params = (params + ", " if params else "") + ", ".join(bits)
             if missing:
-                print("[Civitai-Studio] 保存警告(元数据 hash 缺失): " + "; ".join(missing))
+                warn("[Civitai-Studio] 保存警告(元数据 hash 缺失): " + "; ".join(missing))
 
             pnginfo = PngInfo()
             if params:

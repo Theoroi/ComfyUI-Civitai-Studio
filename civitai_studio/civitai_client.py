@@ -19,6 +19,7 @@ from contextlib import asynccontextmanager
 import aiohttp
 
 from . import api_cache, config
+from .log import info, warn, error  # 统一日志(E2)
 
 # 主站用 civitai.red(与 docs/civitai/civitai_pull.py 实测一致):
 # API 与下载端点齐全,且不被 Cloudflare 盯;civitai.com 对代理出口 IP 经常弹网页挑战
@@ -292,7 +293,7 @@ async def _fetch_model(key):
         if items and str((items[0] or {}).get("id") or "") == key:
             return items[0]
     except (CivitaiError, asyncio.TimeoutError, aiohttp.ClientError) as e:
-        print(f"[Civitai-Studio] ?ids= 查询失败,回退 by-id: {e}")
+        error(f"[Civitai-Studio] ?ids= 查询失败,回退 by-id: {e}")
     return await get_json(f"/models/{key}")
 
 

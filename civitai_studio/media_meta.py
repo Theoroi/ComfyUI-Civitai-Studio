@@ -16,6 +16,7 @@ import json
 import os
 
 from . import cache_store
+from .log import info, warn, error  # 统一日志(E2)
 
 
 # ---------- MP4 mdta(标准 box 结构;lab 分支实测 ComfyUI 写入 workflow/prompt/encoder) ----------
@@ -150,7 +151,7 @@ def _png_quietly(err):
     name = type(err).__name__
     if name in ("UnidentifiedImageError", "OSError", "DecompressionBombError"):
         return
-    print("[Civitai-Studio] 内嵌元数据解析异常:", name, err)
+    info("[Civitai-Studio] 内嵌元数据解析异常:", name, err)
 
 
 def extract_png_file(path):

@@ -23,6 +23,7 @@ from . import (api_cache, cache_store, civitai_client, config, downloader, fav_s
                favorites_store as fs, local_index, media_meta)
 from .bg import spawn as bg_spawn
 from .version import VERSION, build
+from .log import info, warn, error  # 统一日志(E2)
 
 _enums_cache = {"data": None, "ts": 0.0}
 _ENUMS_TTL = 6 * 3600.0
@@ -155,7 +156,7 @@ def _load_tag_mapping():
             cache_store.tag_map_put(pairs)
             mapping = cache_store.tag_map_all()
     except Exception as e:
-        print(f"[Civitai-Studio] 旧 tag 映射文件读取失败(跳过迁移): {e}")
+        error(f"[Civitai-Studio] 旧 tag 映射文件读取失败(跳过迁移): {e}")
     cache_store.kv_put("tagmap:migrated_v1", True)
     return mapping
 
@@ -235,7 +236,7 @@ async def remember_image(request):
         with open(path, "w", encoding="utf-8") as f:
             json.dump(ids[:50], f)
     except Exception as e:
-        print(f"[Civitai-Studio] 最近图片 ID 写入失败: {e}")
+        error(f"[Civitai-Studio] 最近图片 ID 写入失败: {e}")
     return web.json_response({"ok": True, "ids": ids[:50]})
 
 
@@ -1571,7 +1572,7 @@ async def check_updates(request):
 
 
 if _routes is None:
-    print("[Civitai-Studio] 警告: PromptServer 不可用,HTTP 路由未注册")
+    warn("[Civitai-Studio] 警告: PromptServer 不可用,HTTP 路由未注册")
 else:
     # 防缓存:覆盖 ComfyUI 静态路由,始终返回最新 JS 并发 no-cache 头。
     # 没有这段,Desktop webview 会启发式缓存旧版 JS,导致更新后侧边栏消失。

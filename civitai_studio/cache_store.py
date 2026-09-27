@@ -19,6 +19,7 @@ import time
 import folder_paths
 
 from . import config
+from .log import info, warn, error  # 统一日志(E2)
 
 _LOCK = threading.RLock()
 _CONN = None
@@ -123,7 +124,7 @@ def _is_corruption(err):
 def _heal(err):
     """损坏自愈:关连接→删库文件→重建一次;再失败进入永久降级."""
     global _CONN, _BROKEN
-    print("[Civitai-Studio] 缓存库损坏,尝试重建:", err)
+    error("[Civitai-Studio] 缓存库损坏,尝试重建:", err)
     if _CONN is not None:
         try:
             _CONN.close()
@@ -151,7 +152,7 @@ def _heal(err):
             except Exception:
                 pass
         _BROKEN = True
-        print("[Civitai-Studio] 缓存库重建失败,本会话禁用磁盘缓存:", e)
+        error("[Civitai-Studio] 缓存库重建失败,本会话禁用磁盘缓存:", e)
 
 
 def _migrate(conn):
@@ -175,7 +176,7 @@ def _connect(conn):
     mode = conn.execute("PRAGMA journal_mode=WAL").fetchone()
     if not mode or str(mode[0]).lower() != "wal":
         # 网络盘等场景 WAL 静默退化:多实例并发写动机失效,点一条日志
-        print("[Civitai-Studio] sqlite WAL 未生效(journal_mode=%s),多实例并发写请留意" % (mode,))
+        warn("[Civitai-Studio] sqlite WAL 未生效(journal_mode=%s),多实例并发写请留意" % (mode,))
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA busy_timeout=5000")
     conn.executescript(_SCHEMA)
@@ -223,7 +224,7 @@ def init():
                 _heal(e)
             else:
                 # 锁竞争/目录暂不可写等:本轮降级为空实现,下次调用再试
-                print("[Civitai-Studio] 缓存库暂不可用(下次调用重试):", e)
+                warn("[Civitai-Studio] 缓存库暂不可用(下次调用重试):", e)
 
 
 # ---------- kv 端点缓存(阶段2 的 GET 接入用;阶段1 先落地表与机制) ----------
@@ -251,7 +252,7 @@ def kv_get(key):
                 _CONN.commit()
             return json.loads(row[0])
         except (sqlite3.Error, ValueError, OSError) as e:
-            print("[Civitai-Studio] kv_get 失败:", e)
+            error("[Civitai-Studio] kv_get 失败:", e)
             return None
 
 
@@ -271,7 +272,7 @@ def kv_put(key, value, ttl=None):
             _CONN.commit()
             _enforce_quota()
         except (sqlite3.Error, OSError, TypeError) as e:
-            print("[Civitai-Studio] kv_put 失败:", e)
+            error("[Civitai-Studio] kv_put 失败:", e)
 
 
 def kv_delete(key):
@@ -339,7 +340,7 @@ def fingerprints():
                 )
             }
         except sqlite3.Error as e:
-            print("[Civitai-Studio] 读取索引指纹失败(退化为全量重扫):", e)
+            error("[Civitai-Studio] 读取索引指纹失败(退化为全量重扫):", e)
             return {}
 
 
@@ -417,7 +418,7 @@ def sync_assocs(rows, alive_paths=None, swept_before=None, pending=False):
                 _CONN.rollback()
             except sqlite3.Error:
                 pass
-            print("[Civitai-Studio] 写关联表失败(下次扫描补齐):", e)
+            error("[Civitai-Studio] 写关联表失败(下次扫描补齐):", e)
 
 
 def _assoc_row_dict(row):
@@ -515,7 +516,7 @@ def rename_assoc(old_path, new_path, pending=False):
                 _CONN.rollback()
             except sqlite3.Error:
                 pass
-            print("[Civitai-Studio] 关联行平移失败(下轮扫描自动对账):", e)
+            error("[Civitai-Studio] 关联行平移失败(下轮扫描自动对账):", e)
 
 
 def tag_map_all():
@@ -548,7 +549,7 @@ def tag_map_put(pairs):
                 _CONN.rollback()
             except sqlite3.Error:
                 pass
-            print("[Civitai-Studio] tag 映射写入失败(下次重试):", e)
+            error("[Civitai-Studio] tag 映射写入失败(下次重试):", e)
 
 
 def dl_jobs_put(jobs, keep_ids=None):
@@ -578,7 +579,7 @@ def dl_jobs_put(jobs, keep_ids=None):
                 _CONN.rollback()
             except sqlite3.Error:
                 pass
-            print("[Civitai-Studio] 下载任务落库失败(下次重试):", e)
+            error("[Civitai-Studio] 下载任务落库失败(下次重试):", e)
 
 
 def dl_jobs_all():
@@ -634,7 +635,7 @@ def sync_fingerprints(changed_rows, seen_paths):
                 _CONN.rollback()
             except sqlite3.Error:
                 pass
-            print("[Civitai-Studio] 写索引指纹失败(下次重扫补齐):", e)
+            error("[Civitai-Studio] 写索引指纹失败(下次重扫补齐):", e)
 
 
 def forget_fingerprint(path):
@@ -702,7 +703,7 @@ def clear_cache():
             _CONN.commit()
             _CONN.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         except sqlite3.Error as e:
-            print("[Civitai-Studio] 清空缓存失败:", e)
+            error("[Civitai-Studio] 清空缓存失败:", e)
     media_evict(0)
 
 
