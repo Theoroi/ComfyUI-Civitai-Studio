@@ -13,15 +13,16 @@ A ComfyUI sidebar plugin: Civitai **online browser + local model manager + downl
 - **🌐 Browse**: search Civitai (type / base model / sort / period / NSFW filters) with infinite scroll; installed models are badged; detail view with version switcher, trigger words, file list and preview gallery — click a preview to inspect generation params (prompt / sampler / seed / resources, one-click copy).
 - **⬇ Download**: pick a target folder (auto-mapped by model type to checkpoints / loras / vae / controlnet etc.) + subfolder + filename; serial/parallel queue, live speed, **resumable downloads**, optional **SHA256 verification**; writes `<file>.civitai.json` metadata (version_id / trigger words / hash) on completion.
 - **📁 Local library**: scan all local models by folder; search, reveal in Explorer, delete (with confirm), **check updates** (compares sidecar version_id against Civitai's latest — no giant-file hashing), one-click download of new versions into the same folder; **rename** (sidecar follows); **expand details** (cover / metadata / trigger words / description / files / copyable Model & Version IDs / refresh metadata); **manually associate** unlinked files (filename-based smart search or paste a link, pick the version to confirm).
-- **⚙ Settings**: API key, HTTP proxy, API host, download concurrency, image-proxy toggle, SHA256 toggle, **description persistence toggle (default off)** (NSFW level is picked in the browse filter and remembered).
-- **🧩 Workflow nodes**: Civitai Image Search (thumbnail picker; outputs positive / negative / lora_string / trigger_words / base_model / image), Trigger Words, LoRA Recipe, Show Text; a minimal verification workflow ships in `examples/image_search_verify.json`.
-- **🖼 Gallery**: site-wide image feed with base-model / NSFW / tag / period / sort filters; the lightbox shows generation params and category tags (click to copy IDs).
+- **⚙ Settings**: API key, HTTP proxy, API host, download concurrency, image-proxy toggle, SHA256 toggle, description persistence toggle (default off), tag autocomplete toggle, favorites auto-sync, legacy image-favorites pull (default off), disk cache limit (50-2000MB) + clear cache / deep rescan.
+- **🧩 Workflow nodes**: Civitai Image Search (thumbnail picker; outputs positive / negative / trigger_words / local_checkpoint / image), LoRA Recipe, Show Text, Export with A1111 geninfo (IMAGE passthrough); a minimal verification workflow ships in `examples/image_search_verify.json`.
+- **🖼 Gallery**: site-wide image feed with base-model / NSFW / tag / period / format filters, six sorts (newest / oldest / most reactions / comments / collected / random) and six quick presets; file-format badges on cards; the lightbox shows generation params, category tags and license badges — images without embedded params fall back to Civitai's unofficial generation-data API for the checkpoint/LoRA chain (click to copy IDs).
+- **★ Favorites**: a dedicated Favorites tab (assets / models, groups, sorting, search) that **two-way syncs** with your Civitai account — model favorites read & write (SocialWrite scope needed), collections aligned with local groups (CollectionsRead/Write), image favorites follow collections; the legacy favorites table stays off by default.
 - **🏷 Tag tools**: scrape category tags (id + name) from the image page, accumulated into a local `tag_mapping.json` for filtering and autocomplete.
 
 ## Compatibility
 
 - Requires a frontend with `extensionManager.registerSidebarTab` (any frontend after 2024-07; tested on **ComfyUI 0.37.0 / frontend 1.52.7**).
-- Ships 4 custom nodes (Image Search / Trigger Words / LoRA Recipe / Show Text); Python deps are `aiohttp` (bundled with ComfyUI) + `aiohttp-socks` (installed with the release; the code still runs without it — only SOCKS proxies become unavailable, with a hint shown).
+- Ships 4 custom nodes (Image Search / LoRA Recipe / Show Text / Export with A1111 geninfo); Python deps are `aiohttp` (bundled with ComfyUI) + `aiohttp-socks` (installed with the release; the code still runs without it — only SOCKS proxies become unavailable, with a hint shown).
 
 ## Install
 

@@ -276,6 +276,29 @@ def kv_put(key, value, ttl=None):
             error("[Civitai-Studio] kv_put 失败:", e)
 
 
+def kv_putnx(key, value, ttl=None):
+    """原子占位:键不存在(或已过期)才写入,返回 True=占位成功.
+    INSERT OR IGNORE 单事务,消 kv_get→kv_put 两笔事务间的 check-then-set 竞态."""
+    init()
+    if _CONN is None:
+        return False
+    now = time.time()
+    with _LOCK:
+        try:
+            _CONN.execute("DELETE FROM kv_cache WHERE key=? AND expires_at IS NOT NULL AND expires_at<?",
+                          (key, now))
+            cur = _CONN.execute(
+                "INSERT OR IGNORE INTO kv_cache(key, value, created_at, expires_at, last_access)"
+                " VALUES(?,?,?,?,?)",
+                (key, json.dumps(value, ensure_ascii=False), now,
+                 now + ttl if ttl else None, now),
+            )
+            _CONN.commit()
+            return cur.rowcount > 0
+        except sqlite3.Error:
+            return False
+
+
 def kv_delete(key):
     init()
     if _CONN is None:
