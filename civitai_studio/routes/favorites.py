@@ -119,7 +119,7 @@ async def favorites_import(request):
 
 @_post("/civitai_studio/favorites/sync")
 async def favorites_sync(request):
-    """手动/自动同步入口:能力矩阵见 docs/favorites-api-research.md。"""
+    """手动/自动同步入口:能力矩阵见 docs/research/favorites-api-research.md。"""
     result = await fav_sync.sync_now()
     return web.json_response({"status": result.get("status", "ok"), **result})
 

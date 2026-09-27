@@ -1,4 +1,4 @@
-"""收藏双向同步引擎 — 能力矩阵与实测依据见 docs/favorites-api-research.md.
+"""收藏双向同步引擎 — 能力矩阵与实测依据见 docs/research/favorites-api-research.md.
 
 矩阵:
 - 资产(图片)收藏:远端→本地 ✅(REST /images?favorites=true);本地→远端 ❌(无公开端点,

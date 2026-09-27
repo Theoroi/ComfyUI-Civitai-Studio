@@ -1,4 +1,4 @@
-"""统一磁盘缓存层(sqlite, WAL) — 设计见 docs/cache-design.md.
+"""统一磁盘缓存层(sqlite, WAL) — 设计见 docs/plans/completed/cache-design.md.
 
 目录:user/civitai_studio/cache/
   cache.sqlite        kv 端点缓存表 + 本地索引指纹表(local_files)
