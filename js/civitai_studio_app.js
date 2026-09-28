@@ -162,6 +162,7 @@ const STR = {
         expBadge: "实验",
         keyLabel: "Civitai API Key（可选）",
         keyFunc: "功能：下载受限模型/提高下载限额/提取tag/同步收藏夹（需 Collections Write 和 Social Write 权限）",
+        keyFuncEx: "额外功能: 同步收藏夹（需 Collections Write 和 Social Write 权限）",
         keySetPh: "已设置(尾号 {tail}),留空保持不变", keyPh: "粘贴 API Key",
         keyHowTo: "获取方式：登录 Civitai → 右上角头像 → Account Settings → Security & Apps → API Keys → Add API Key，勾选所需权限后 Save，把生成的 Key 粘贴到上面。",
         keyLink: "打开 Civitai 安全设置页 ↗",
@@ -199,7 +200,7 @@ const STR = {
         extractWf: "提取工作流", extractDone: "已存为工作流模板: {name}", extractNone: "该文件未内嵌 ComfyUI 工作流", extractFail: "提取失败",
         extractMgr: "提取管理", extractMgrTitle: "提取的工作流(civitai_studio/)", extractEmpty: "还没有提取过工作流",
         extractDelete: "删除", extractDeleted: "已删除", extractCapWarn: "提取文件已达 {n} 个,建议清理",
-        pimgLabel: "预览图经服务端中转", pimgTip: "直连打不开图片时开启",
+        pimgLabel: "预览图经ComfyUI服务端中转", pimgTip: "直连打不开图片时开启",
         hashLabel: "下载完成后校验 SHA256",
         pdescLabel: "导出 .civitai.json 伴生文件(默认关)",
         pdescTip: "关联元数据始终存本地数据库;开启后额外把说明/标签/封面导出为模型旁的 .civitai.json(供外部工具)",
@@ -217,7 +218,7 @@ const STR = {
         galPresetNewDay: "🌅 今日最新", galPresetHotDay: "🔥 今日热门", galPresetHotWeek: "🔥 本周热门",
         galPresetBestWeek: "⭐ 本周高分", galPresetHotMonth: "📈 本月热门", galPresetBestMonth: "⭐ 本月高分",
         fmtAll: "全部格式", fmtVideo: "视频", fmtTip: "客户端筛选,只作用于已加载条目",
-        galBase: "底模", loadMore: "加载更多", useAsOutput: "选为输出", selectedAsOutput: "已选为输出",
+        galBase: "底模", loadMore: "加载更多", tryMore: "尝试加载更多", useAsOutput: "选为输出", selectedAsOutput: "已选为输出",
         sfwLabel: "全年龄", nsfwLabel: "包含 NSFW", galTagId: "Tag ID 或名称(逗号分隔)",
         noTags: "无标签", tagsPaused: "标签抓取已暂停({sec} 秒后恢复)", noSelectionHint: "未选择(点击缩略图选择)",
         tagScrapeLabel: "读取图片分类标签", tagScrapeTip: "读取非公开 API 获取图片分类标签，需要 Civitai API Key", tagsLoading: "标签加载中…",
@@ -320,7 +321,8 @@ const STR = {
         probeTimeout: "Connection timeout (check network/proxy)", probeFailUnknown: "Test failed",
         expBadge: "Experimental",
         keyLabel: "Civitai API key (optional)",
-        keyFunc: "Unlocks gated models / higher rate limits / tag scraping / favorites sync (needs Collections Write + Social Write scopes)",
+        keyFunc: "Feature: Unlocks gated models / higher rate limits / tag scraping",
+        keyFuncEx: "Extra feature: Sync Favorites with Civitai (needs Collections Write + Social Write scopes)",
         keySetPh: "Set (ends with {tail}) — leave empty to keep", keyPh: "Paste API key",
         keyHowTo: "How to get one: Civitai avatar menu → Account Settings → Security & Apps → API Keys → Add API Key, pick the scopes, Save, then paste the key above.",
         keyLink: "Open Civitai security settings ↗",
@@ -357,7 +359,7 @@ const STR = {
         extractWf: "Extract workflow", extractDone: "Saved as workflow: {name}", extractNone: "No embedded ComfyUI workflow in this file", extractFail: "Extract failed",
         extractMgr: "Extracts", extractMgrTitle: "Extracted workflows (civitai_studio/)", extractEmpty: "No extracted workflows yet",
         extractDelete: "Delete", extractDeleted: "Deleted", extractCapWarn: "{n} extracts — consider cleaning up",
-        pimgLabel: "Route preview images through the backend", pimgTip: "Enable if direct loading fails",
+        pimgLabel: "Route preview images through the backend ComfyUI", pimgTip: "Enable if direct loading fails",
         hashLabel: "Verify SHA256 after download",
         pdescLabel: "Export .civitai.json sidecar (default off)",
         pdescTip: "Association metadata always lives in the local DB; when on, also export description/tags/cover next to the model file for external tools",
@@ -375,7 +377,7 @@ const STR = {
         galPresetNewDay: "🌅 New today", galPresetHotDay: "🔥 Hot today", galPresetHotWeek: "🔥 Hot this week",
         galPresetBestWeek: "⭐ Top this week", galPresetHotMonth: "📈 Hot this month", galPresetBestMonth: "⭐ Top this month",
         fmtAll: "All formats", fmtVideo: "Video", fmtTip: "Client-side filter, applies to loaded items only",
-        galBase: "Base model", loadMore: "Load more", useAsOutput: "Use as output", selectedAsOutput: "Selected as output",
+        galBase: "Base model", loadMore: "Load more", tryMore: "Try loading more", useAsOutput: "Use as output", selectedAsOutput: "Selected as output",
         sfwLabel: "SFW only", nsfwLabel: "Include NSFW", galTagId: "Tag ID or name, comma-separated",
         noTags: "No tags", tagsPaused: "Tag fetch paused ({sec}s), retrying later", noSelectionHint: "Nothing selected (click a thumbnail)",
         tagScrapeLabel: "Fetch image category tags", tagScrapeTip: "Uses the unofficial API; requires a Civitai API key", tagsLoading: "Loading tags…", tagsOff: "Tag scraping disabled in settings", capHint: "Display cap reached (100)",
@@ -394,7 +396,7 @@ let S = {
     },
     local: { models: [], search: "", type: "", loading: false, updates: {}, truncated: false, openId: null, detailCache: {} },
     dl: { jobs: [], lastSig: "", failStreak: 0 },
-    gal: { items: [], next: [], sort: "Newest", period: "AllTime", base: "", tag: "", imageId: "", nsfwLevel: 0, thumbSize: 256, loading: false, error: "", favOnly: false },
+    gal: { items: [], next: [], sort: "Newest", period: "AllTime", base: "", tag: "", imageId: "", nsfwLevel: 0, thumbSize: 256, loading: false, error: "", favOnly: false, nsfwLv: new Set() },
     ui: { tab: "browse", root: null, scrollTop: 0, detailId: null, backendStale: false },
 };
 
@@ -1136,9 +1138,13 @@ function modelBadgesHtml(model) {
         if (labels.length) chips.push([t("nsfwLevelLabel") + " " + labels.join("/"), /X|Blocked/.test(labels.join("/")) ? "warn" : "ok"]);
     }
     const bases = [...new Set((model.modelVersions || []).map((v) => v.baseModel).filter(Boolean))];
-    const html = chips.map(([txt, cls]) => `<span class="cs-badge2 cs-badge2-${cls}">${esc(txt)}</span>`).join("")
-        + bases.map((b) => `<span class="cs-badge2 cs-badge2-base">${esc(b)}</span>`).join("");
-    return html ? `<div class="cs-detail-badges">${html}</div>` : "";
+    const html = chips.map(([txt, cls]) => `<span class="cs-badge2 cs-badge2-${cls}">${esc(txt)}</span>`).join("");
+    // baseModel chips 单独一行 + "Base model" 前缀(E2E r3-19):与许可徽章混排时淹没
+    const basesHtml = bases.length
+        ? `<div class="cs-detail-badges" style="margin-top:4px"><span class="cs-badge2 cs-badge2-base">Base model</span>`
+          + bases.map((b) => `<span class="cs-badge2 cs-badge2-base">${esc(b)}</span>`).join("") + `</div>`
+        : "";
+    return (html ? `<div class="cs-detail-badges">${html}</div>` : "") + basesHtml;
 }
 
 function renderDetail(model, container, opts = {}) {
@@ -1149,6 +1155,7 @@ function renderDetail(model, container, opts = {}) {
     box.innerHTML = `
         ${opts.offline ? `<div class="cs-banner">${esc(t("offlineBanner"))}</div>` : ""}
         <div class="cs-detail-head">
+            <button class="cs-btn" id="cs-detail-fav" title="${esc(t("favBtnTitle"))}">★ ${esc(t("favBtnTitle"))}</button>
             <a class="cs-btn" href="${esc(civitaiPage())}/models/${esc(String(model.id))}" target="_blank" rel="noopener noreferrer">${esc(t("openOnCivitai"))}</a>
         </div>
         <h3 class="cs-detail-title" title="${esc(model.name)}">${esc(model.name)}</h3>
@@ -1171,6 +1178,19 @@ function renderDetail(model, container, opts = {}) {
         ${desc ? `<details class="cs-desc" open><summary>${esc(t("modelDesc"))}</summary><div class="cs-desc-body">${desc}</div></details>` : ""}
     `;
     rewriteDescImages(box);
+    // 模型页收藏入口(E2E r3-a):★落本地收藏,经同步上推 user.toggleFavorite
+    const favB = $("#cs-detail-fav", box);
+    if (favB && model.id != null) {
+        const mid = String(model.id);
+        const paint = (on) => { favB.style.color = on ? "#ffd75e" : ""; };
+        paint(S.favModelIds?.has(mid) || (S.favs && S.favs.has(mid)));
+        favB.onclick = async () => {
+            try {
+                const cover = ((((model.modelVersions || [])[0] || {}).images || [{}])[0] || {}).url || null;
+                paint(await toggleFav("model", mid, { name: model.name, cover }));
+            } catch (e) { toast("error", t("favFailed"), e.message); }
+        };
+    }
     const sel = $("#cs-version-sel", box);
     const renderVer = () => {
         const idx = parseInt(sel.selectedOptions[0]?.dataset.idx || "0", 10);
@@ -1281,6 +1301,11 @@ async function renderVersion(version, model, box, opts = {}) {
             <div class="cs-section-title">${esc(t("triggerWords"))} <button class="cs-btn cs-btn-mini" id="cs-copy-triggers">${esc(t("copyAll"))}</button></div>
             <div class="cs-tags">${triggers.map((tg) => `<code class="cs-trigger">${esc(tg)}</code>`).join("")}</div>
         </div>` : ""}
+        ${version.description ? `
+        <div class="cs-section">
+            <div class="cs-section-title">${esc(t("verDescTitle"))}</div>
+            <div class="cs-ver-desc-box"><div class="cs-desc-body">${sanitizeHtml(version.description)}</div></div>
+        </div>` : ""}
         <div class="cs-section">
             <div class="cs-section-title">${esc(t("files"))}</div>
             <div class="cs-files">${(version.files || []).map((f, i) => `
@@ -1298,11 +1323,6 @@ async function renderVersion(version, model, box, opts = {}) {
             <div class="cs-section-title">${esc(t("previews", { n: images.length }))}</div>
             <div class="cs-gallery">${images.map(galleryItemHtml).join("")}
             </div>
-        </div>` : ""}
-        ${version.description ? `
-        <div class="cs-section">
-            <div class="cs-section-title">${esc(t("verDescTitle"))}</div>
-            <div class="cs-ver-desc-box"><div class="cs-desc-body">${sanitizeHtml(version.description)}</div></div>
         </div>` : ""}
     `;
     rewriteDescImages(body); // 版本说明里的外链图走代理开关(模型说明同款处理)
@@ -1604,17 +1624,20 @@ function openImageDetail(item, opts = {}) {
     attachIdAndTags(m.box, item); // ID 行 + 标签行(插在 kv 网格之前)
     // 资源流水线:解析(vid→模型信息) → 与 meta.hashes 前缀比对 → 本地索引匹配 → chips 渲染
     renderResourceList(m.box, item, rawRes, civRes, [...vidSet], meta.hashes || {}, rec);
-    // 非公开 API 生成数据回退(E2E d):meta 缺失时探 tRPC image.getGenerationData;
-    // 命中 meta → 带参重开浮层;无 meta → 至少把 resources(底模/LoRA)+ tools/techniques 补进本浮层
-    if (!hasMeta && item.id != null && !opts.__genRetry) {
+    // 非公开 API 生成数据回退(E2E d + r3-21):meta 缺失,或 meta 有但 resources/
+    // civitaiResources 全空(实测图 144033695/143463647:gen_data 顶层才有 resources)
+    // 时探 tRPC image.getGenerationData;命中 meta 且本地缺失 → 带参重开浮层;
+    // 否则至少把 resources(底模/LoRA)+ tools/techniques 补进本浮层
+    const noRes = !rawRes.length && !civRes.length && !vidSet.size;
+    if (item.id != null && !opts.__genRetry && (!hasMeta || noRes)) {
         apiGet(`/civitai_studio/image_gen_data/${encodeURIComponent(String(item.id))}`).then((gd) => {
             if (!m.box.isConnected) return; // 浮层已被关闭
-            if (gd && gd.meta && (gd.meta.prompt || gd.meta.seed != null)) {
+            if (!hasMeta && gd && gd.meta && (gd.meta.prompt || gd.meta.seed != null)) {
                 openImageDetail({ ...item, meta: gd.meta }, { ...opts, __genRetry: true });
                 return;
             }
             const res = ((gd && gd.resources) || []).filter((r) => r.modelVersionId || r.modelName);
-            if (res.length && !rawRes.length && !vidSet.size) { // 首条流水线无输入才补渲染,防并发覆盖(审计二 F-4)
+            if (res.length && noRes) { // 首条流水线无输入才补渲染,防并发覆盖(审计二 F-4)
                 const block = $("[data-res-block]", m.box);
                 if (block) block.style.display = "";
                 const conv = res.map((r) => ({
@@ -2598,6 +2621,10 @@ function renderGallery(reset) {
     for (const img of st.items) {
         if (fmtWant && fmtOf(img) !== fmtWant) continue; // 格式筛选(E2E e)
         if (st.favOnly && !(S.favs && S.favs.has(String(img.id)))) continue; // ★只看收藏(评审R2:此前无消费点,功能整体失效)
+        if (st.nsfwLv.size) { // 本地分级多选(r3-f):命中任一选中位才显示;无标记位条目被滤掉
+            const nl = Number(img.nsfwLevel || 0);
+            if (!nl || ![...st.nsfwLv].some((b) => nl & b)) continue;
+        }
         if (img.__rendered) continue;
         img.__rendered = true;
         const item = document.createElement("div");
@@ -2644,6 +2671,24 @@ function renderGallery(reset) {
     if (!st.items.length && !st.loading) {
         grid.innerHTML = `<div class="cs-empty">${esc(t("galleryEmpty"))}</div>`;
     }
+    // E2E r3-d:格式/只看收藏是纯客户端过滤,筛选后可见数可能骤减。可见不足一页
+    // 且还有下一页时自动续拉(最多 3 轮防失控);仍不足则给手动按钮兜底
+    const vis = st.items.filter((x) => (!fmtWant || fmtOf(x) === fmtWant)
+        && (!st.favOnly || (S.favs && S.favs.has(String(x.id))))).length;
+    if (reset) st.autoMore = 0;
+    if (!st.loading && st.next.length && vis < 24) {
+        if ((st.autoMore || 0) < 3) {
+            st.autoMore = (st.autoMore || 0) + 1;
+            fetchGallery(false);
+        } else {
+            const tryMore = document.createElement("button");
+            tryMore.className = "cs-btn";
+            tryMore.style.cssText = "flex:0 0 100%;margin:6px auto;";
+            tryMore.textContent = t("tryMore");
+            tryMore.onclick = () => { st.autoMore = 0; fetchGallery(false); };
+            grid.appendChild(tryMore);
+        }
+    } else if (vis >= 24) st.autoMore = 0;
 }
 
 function buildGalleryView(root) {
@@ -2670,9 +2715,11 @@ function buildGalleryView(root) {
                     <option value="Random">${esc(t("gallerySortRandom"))}</option>
                 </select>
                 <select id="cs-gal-nsfw"><option value="0" ${!st.nsfwLevel ? "selected" : ""}>${esc(t("sfwLabel"))}</option><option value="1" ${st.nsfwLevel ? "selected" : ""}>${esc(t("nsfwLabel"))}</option></select>
+                <div id="cs-gal-nsfwlv" class="cs-nsfwlv cs-span-full" title="${esc(S.lang === "zh" ? "本地分级过滤(可多选,作用于已加载条目)" : "Local nsfw-level filter (multi-select, applies to loaded items)")}">${Object.entries(NSFW_LEVEL_LABELS).filter(([b]) => Number(b) < 32).map(([b, lb]) => `<button class="cs-chip" data-nsfwlv="${b}">${esc(lb)}</button>`).join("")}</div>
                 <select id="cs-gal-fmt" title="${esc(t("fmtTip"))}">${fmtSelHtml(st.fmt)}</select>
                 <select id="cs-gal-size" title="${esc(S.lang === "zh" ? "缩略图大小" : "Thumbnail size")}">${[128, 256, 512].map((px) => `<option value="${px}" ${st.thumbSize === px ? "selected" : ""}>${px}px</option>`).join("")}</select>
                 <button class="cs-btn" id="cs-gal-fav" title="${esc(t("favOnlyTitle"))}" style="${st.favOnly ? "background:var(--accent-color,#4a90e2);color:#fff;border-color:transparent;" : ""}">★</button>
+                <button class="cs-btn" id="cs-gal-refresh" title="${esc(S.lang === "zh" ? "重新拉取画廊数据" : "Refetch gallery")}">⟳</button>
             </div>
             <button class="cs-ffold" id="cs-gal-ffold" title="${esc(t("ffoldTitle"))}">▾</button>
         </div>
@@ -2711,6 +2758,16 @@ function buildGalleryView(root) {
         st.items.forEach((i) => { delete i.__rendered; }); // 清渲染标记,防筛选后整版被跳过
         renderGallery(true);
     });
+    // 本地 NSFW 分级多选 chips(E2E r3-f):纯客户端按 nsfwLevel 位掩码过滤已加载条目
+    $$("#cs-gal-nsfwlv .cs-chip", view).forEach((chip) => {
+        chip.onclick = () => {
+            const bit = Number(chip.dataset.nsfwlv);
+            if (st.nsfwLv.has(bit)) st.nsfwLv.delete(bit); else st.nsfwLv.add(bit);
+            chip.classList.toggle("active", st.nsfwLv.has(bit));
+            st.items.forEach((i) => { delete i.__rendered; });
+            renderGallery(true);
+        };
+    });
     // 快捷栏(E2E 6):映射 period+sort,回写 select 后重拉
     $$(".cs-presets [data-gpreset]", view).forEach((chip) => {
         chip.onclick = () => {
@@ -2738,6 +2795,7 @@ function buildGalleryView(root) {
         st.items.forEach((i2) => { delete i2.__rendered; });
         renderGallery(true);
     };
+    $("#cs-gal-refresh", view).onclick = () => fetchGallery(true); // 显式刷新(E2E r3-c)
     apiGet("/civitai_studio/favorites").then((d) => {
         S.favs = new Set((d.ids || []).map(String));
         if (st.favOnly) renderGallery(true);
@@ -2932,6 +2990,7 @@ async function openSettings() {
                     <label>${esc(t("keyLabel"))}
                         <input id="cs-set-key" type="password" placeholder="${cfg.api_key_set ? esc(t("keySetPh", { tail: cfg.api_key_tail || "" })) : esc(t("keyPh"))}"/>
                         <span class="cs-form-hint">${esc(t("keyFunc"))}</span>
+                        <span class="cs-form-hint">${esc(t("keyFuncEx"))}</span>
                         <span class="cs-form-hint">${esc(t("keyHowTo"))}</span>
                         <a href="https://civitai.com/user/account/security" target="_blank" rel="noopener noreferrer"
                            style="color:var(--accent-color,#4a90e2);">${esc(t("keyLink"))}</a>
@@ -2940,7 +2999,7 @@ async function openSettings() {
                         <button class="cs-btn" id="cs-set-test" type="button">${esc(t("testKeyBtn"))}</button>
                         <span id="cs-set-keybadge" class="cs-set-badge" style="display:none"></span>
                     </div>
-                    <label>${esc(t("mirrorLabel"))} ${infoIco(t("mirrorTip"))}
+                    <label><span class="cs-lab">${esc(t("mirrorLabel"))} ${infoIco(t("mirrorTip"))}</span>
                         <select id="cs-set-site">
                             <option value="https://civitai.com">civitai.com</option>
                             <option value="https://civitai.red">civitai.red [NSFW]</option>
@@ -2956,7 +3015,7 @@ async function openSettings() {
             <div class="cs-set-group${fold.download ? " closed" : ""}" data-fold="download">
                 <div class="cs-set-group-head">${esc(t("setGrpDownload"))}<span class="cs-set-caret">▾</span></div>
                 <div class="cs-set-group-body">
-                    <label>${esc(t("concLabel"))} ${infoIco(t("concTip"))}
+                    <label><span class="cs-lab">${esc(t("concLabel"))} ${infoIco(t("concTip"))}</span>
                         <input id="cs-set-conc" type="number" min="1" max="4" value="${cfg.max_concurrent || 1}"/>
                     </label>
                     <label class="cs-check"><input id="cs-set-hash" type="checkbox" ${cfg.verify_hash ? "checked" : ""}/> ${esc(t("hashLabel"))}</label>
@@ -2974,7 +3033,7 @@ async function openSettings() {
             <div class="cs-set-group${fold.storage ? " closed" : ""}" data-fold="storage">
                 <div class="cs-set-group-head">${esc(t("setGrpStorage"))}<span class="cs-set-caret">▾</span></div>
                 <div class="cs-set-group-body">
-                    <label>${esc(t("cacheMaxLabel"))} ${infoIco(t("cacheMaxTip"))}
+                    <label><span class="cs-lab">${esc(t("cacheMaxLabel"))} ${infoIco(t("cacheMaxTip"))}</span>
                         <div class="cs-set-sliderrow">
                             <input id="cs-set-cachemb-range" type="range" min="50" max="2000" step="10" value="${cfg.cache_max_mb || 500}"/>
                             <input id="cs-set-cachemb" type="number" min="50" max="2000" value="${cfg.cache_max_mb || 500}"/>
@@ -3326,7 +3385,7 @@ async function openMoveDialog(m) {
             </label>
             <label>${esc(t("subfolder"))}
                 <div style="display:flex;gap:4px;align-items:center;">
-                    <input id="cs-mv-sub" type="text" placeholder="${esc(t("subfolderPh"))}" style="flex:1;min-width:0;"/>
+                    <input id="cs-mv-sub" type="text" placeholder="${esc(t("subfolderPh"))}" value="${esc((m.rel || "").includes("/") ? m.rel.slice(0, m.rel.lastIndexOf("/")) : "")}" style="flex:1;min-width:0;"/>
                     <button class="cs-btn" id="cs-mv-sub-browse" type="button">${esc(t("browseBtn"))}</button>
                 </div>
             </label>
@@ -3414,9 +3473,13 @@ function buildDownloadsView(root) {
         </div>
         <div id="cs-dl-list" class="cs-scroll"></div>`;
     root.appendChild(view);
-    $("#cs-dl-clear", view).onclick = async () => {
+    $("#cs-dl-clear", view).onclick = async (ev) => {
+        const b = ev.currentTarget;
+        b.disabled = true;
+        b.innerHTML = `<span class="cs-spin" style="width:12px;height:12px;border-width:2px;display:inline-block;vertical-align:-2px;"></span>`; // 清除需遍历删除,点击即转圈(E2E r3-b)
         try { await apiPost("/civitai_studio/downloads/clear", {}); pollDownloads(); }
         catch (e) { toast("error", t("clearFailed"), e.message); }
+        finally { b.disabled = false; b.textContent = t("clearFinished"); }
     };
 }
 
@@ -3959,6 +4022,8 @@ function injectStyles() {
 .cs-form-hint { font-size:11px; color:var(--desc-text-color,#999); opacity:.8; }
 .cs-info { cursor:help; opacity:.75; font-size:11px; flex:0 0 auto; }
 .cs-info:hover { opacity:1; color:var(--accent-color,#4a90e2); }
+/* 标题行 label 是 column flex,文本与 ⓘ 会各占一行(E2E r3-1):包 cs-lab 让其同行 */
+.cs-form label .cs-lab { display:flex; align-items:center; gap:6px; }
 /* ---- 设置页:分组卡片 + sticky 底栏 ---- */
 .cs-settings-modal .cs-float-body { display:flex; flex-direction:column; overflow:hidden; }
 .cs-set-body { flex:1; min-height:0; overflow-y:auto; display:flex; flex-direction:column; gap:10px; }
@@ -4413,6 +4478,15 @@ function renderNodeThumbs(node) {
         fmtSel.innerHTML = fmtSelHtml(node.__fmt);
         fmtSel.onchange = () => { node.__fmt = fmtSel.value; renderNodeThumbs(node); };
         bar.appendChild(fmtSel);
+    }
+    { // 刷新按钮(E2E r3-25):改 sort 后显式重拉,清空已加载条目从第一页开始
+        const rb = document.createElement("button");
+        rb.className = "cs-btn cs-btn-mini";
+        rb.style.cssText = "font-size:11px;padding:1px 6px;";
+        rb.textContent = "⟳";
+        rb.title = S.lang === "zh" ? "重新拉取缩略图" : "Refetch thumbnails";
+        rb.onclick = () => { node.csResults = []; if (node.csLastParams) fetchNodeThumbs(node, node.csLastParams, true); else node.csSchedule?.(); };
+        bar.appendChild(rb);
     }
     strip.appendChild(bar);
 

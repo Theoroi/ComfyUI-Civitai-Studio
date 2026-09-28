@@ -1,7 +1,9 @@
-"""统一日志 — logging.getLogger("civitai-studio"),格式自带 [Civitai-Studio] 前缀。
+"""统一日志 — logging.getLogger("civitai-studio"),消息自带 [Civitai-Studio] 前缀.
 
 级别语义:error=功能受损/数据失败;warning=降级但自愈/配置指引;info=生命周期与统计。
-跟随 ComfyUI 根 logger 的级别与 handler,不自行 basicConfig。
+跟随 ComfyUI 根 logger 的级别与 handler(app/logger.py 的 ColoredFormatter 会在每行
+自动加 [LEVEL] 前缀),因此本模块不再自拼等级字段(E2E 26:用户看到 [INFO] 重复/缺失);
+输出形如「[INFO] [Civitai-Studio] …」。独立运行(无 ComfyUI handler)时无等级前缀,可接受。
 """
 
 import logging
@@ -17,13 +19,12 @@ def _fmt(msg, args):
 
 
 def info(msg, *args):
-    # 等级字段在前(E2E 18):[INFO] [Civitai-Studio] 消息
-    log.info("[INFO] [Civitai-Studio] " + _fmt(msg, args))
+    log.info("[Civitai-Studio] " + _fmt(msg, args))
 
 
 def warn(msg, *args):
-    log.warning("[WARNING] [Civitai-Studio] " + _fmt(msg, args))
+    log.warning("[Civitai-Studio] " + _fmt(msg, args))
 
 
 def error(msg, *args):
-    log.error("[ERROR] [Civitai-Studio] " + _fmt(msg, args))
+    log.error("[Civitai-Studio] " + _fmt(msg, args))
