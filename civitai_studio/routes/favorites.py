@@ -65,9 +65,9 @@ async def favorites_assign(request):
     if body is None:
         return _json_error("请求体必须是 JSON 对象", 400)
     kind = str(body.get("kind") or fs.KIND_ASSET)
-    oid = str(body.get("oid") or "")
-    if not oid:
-        return _json_error("缺少 oid", 400)
+    oid = str(body.get("oid") or "").strip()
+    if not oid or not oid.isdigit():  # F-S2-6:与 toggle 同口径,只收数字 id
+        return _json_error("缺少有效的数字 id", 400)
     gids = body.get("group_ids")
     if not isinstance(gids, list):
         gid = body.get("group_id")

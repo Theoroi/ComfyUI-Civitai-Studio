@@ -752,7 +752,10 @@ def clear_cache():
         return
     with _LOCK:
         try:
-            _CONN.execute("DELETE FROM kv_cache")
+            # F-S2-8:保留收藏同步在途锁(键名字面量 = fav_sync._SYNC_LOCK_KEY;
+            # cache_store 不反向 import fav_sync,两处注释互指,改名需两处同步改)——
+            # 清缓存不应把在途同步的互斥锁一起清掉
+            _CONN.execute("DELETE FROM kv_cache WHERE key != 'fav:sync_inflight'")
             _CONN.execute("DELETE FROM local_files")
             _CONN.commit()
             _CONN.execute("PRAGMA wal_checkpoint(TRUNCATE)")

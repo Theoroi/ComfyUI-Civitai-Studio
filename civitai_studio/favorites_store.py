@@ -449,6 +449,13 @@ def toggle(kind, oid, fields=None):
                  json.dumps(base["gpushed"], ensure_ascii=False) if base.get("gpushed") else None),
             )
             if f.get("group_id"):  # ★+指定组一次落库:同记会员行(UI 弹组选择器的写入路径)
+                # F-S2-7:同挂载的软删行(在途移除对账中)一并复活(deleted=0, pushed=0,
+                # item_id=NULL)——重新收藏=重新挂载,意图优先于在途对账;否则 INSERT OR
+                # IGNORE 对既有行静默忽略,该挂载永远回不来
+                conn.execute(
+                    "UPDATE fav_item_groups SET deleted=0, pushed=0, item_id=NULL"
+                    " WHERE kind=? AND oid=? AND gid=? AND deleted=1",
+                    (kind, oid, f["group_id"]))
                 conn.execute(
                     "INSERT OR IGNORE INTO fav_item_groups(kind, oid, gid, item_id, source,"
                     " pushed, deleted, added_at) VALUES(?,?,?,NULL,'local',0,0,?)",
@@ -482,11 +489,12 @@ def upsert_remote(kind, oid, *, name=None, cover=None, group_id=None, extra=None
         try:
             cur = get_item(kind, oid)
             if cur and cur["deleted"]:
-                # 资产(无收藏状态上行通道)墓碑 + 远端集合仍挂着它 + 本地没有在途
-                # 移除(软删挂载) → 旧引擎遗留的脏墓碑,复活镜像远端(E2E 真值对照:
-                # 两张 Images 集合图卡死在 deleted=1 dirty=1 永不下拉)
+                # 复活门控(F-S2-1 改判):仅 dirty=0 的墓碑(mark_remote_tombstone/缺席对账
+                # 产物=站方权威取消)可随远端重新出现而复活;dirty=1=本地取消在途(含旧引擎
+                # 遗留脏墓碑)一律终局——否则"用户刚取消而远端集合仍挂着它"会被拉回复活,
+                # 等于悄悄回滚用户的取消。资产无收藏状态上行通道,只能以站方 dirty=0 权威为准。
                 _soft = [m for m in memberships(kind, oid, include_deleted=True) if m["deleted"]]
-                if resurrect and kind == KIND_ASSET and not _soft:
+                if resurrect and kind == KIND_ASSET and not _soft and not cur["dirty"]:
                     conn.execute("UPDATE fav_items SET deleted=0, dirty=0, updated_at=?"
                                  " WHERE kind=? AND oid=?", (ru or now, kind, oid))
                     conn.commit()
@@ -575,9 +583,11 @@ def upsert_group(name, gid=None, civitai_id=None, dirty=0, updated_at=None, ctyp
                                  (civitai_id,)).fetchone()
                 if not r:
                     # 批4 E2E 5b:同名未绑定组(本地新建待上行)与下行同名集合合并,
-                    # 防"同名不同 id"的本地分叉上行后再造远端重复集合
+                    # 防"同名不同 id"的本地分叉上行后再造远端重复集合;
+                    # F-S2-5:Bookmark 系统集合(Liked Models 等)只读,不吞同名本地组
                     r = conn.execute(
                         "SELECT gid FROM fav_groups WHERE name=? AND (civitai_id IS NULL OR civitai_id=0)"
+                        " AND (ctype IS NULL OR ctype!='Bookmark')"
                         " ORDER BY updated_at DESC LIMIT 1", (name,)).fetchone()
                 if r:
                     gid = r[0]
@@ -791,6 +801,9 @@ def import_json(payload, replace=False):
             for it in items:
                 if not isinstance(it, dict) or not it.get("oid") or it.get("kind") not in (KIND_MODEL, KIND_ASSET):
                     continue
+                if not str(it["oid"]).isdigit():
+                    # F-S2-6:非数字 oid=损坏数据,拒收整单(回滚)走既有 ValueError→400 路径
+                    raise ValueError("条目 oid 必须是数字: %r" % (it["oid"],))
                 deleted = 1 if it.get("deleted") else 0
                 # 活动行强制 dirty=1 仅供模型(有上推通道);资产无上推,置 dirty 反而永久冻结远端刷新
                 dirty = 1 if it.get("dirty") else 0

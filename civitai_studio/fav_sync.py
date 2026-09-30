@@ -30,6 +30,7 @@ from .log import info, warn, error, debug
 
 _PAGE_LIMIT = 100
 _MAX_PAGES = 20  # 单方向单次同步最多 20 页(2000 条),够用且防失控
+# ⚠️ cache_store.clear_cache 以字面量保留本键不清(F-S2-8,两处注释互指;改名需同步改)
 _SYNC_LOCK_KEY = "fav:sync_inflight"
 _COLITEMS_KEY = "fav:colitems_v2"  # cid → {u: updatedAt, m/i: {oid: collectionItemId}}
 
@@ -347,6 +348,23 @@ async def _upsync_groups(result):
             "collection.upsert", {"name": (g["name"] or "collection")[:30],
                                   "type": kind_enum[item_kind]})
         cid = int((data or {}).get("id") or 0) if isinstance(data, dict) else 0
+        if not cid:
+            # F-S2-2(低配版):建集响应缺 id(集合其实可能已建成)时按名回收既有集合,
+            # 防"建成了却被判失败"每轮重复建集;比对名与建集同口径 [:30] 截断。
+            try:
+                cols = await civitai_client.trpc_query("collection.getAllUser", {})
+                if isinstance(cols, dict):
+                    cols = cols.get("collections") or cols.get("items") or []
+                want = (g["name"] or "collection")[:30]
+                for c in cols:
+                    if not isinstance(c, dict) or c.get("type") == "Article":
+                        continue  # 与下行同口径:文章书签集合与插件无关
+                    if str(c.get("name") or "")[:30] == want and c.get("id"):
+                        cid = int(c.get("id"))
+                        debug(f"建集响应缺 id,按名回收既有集合: 「{want}」 → {cid}")
+                        break
+            except Exception as e:  # 回收失败保持现行为:本轮放弃该组(cid=0)
+                debug(f"按名回收集合失败(忽略): {e}")
         if cid:
             fs.mark_group_synced(g["gid"], cid)
             g["civitai_id"] = cid
@@ -355,7 +373,8 @@ async def _upsync_groups(result):
 
     groups = {g["gid"]: g for g in fs.groups_list()}
     for g in groups.values():
-        if g["dirty"] and g["civitai_id"]:
+        if g["dirty"] and g["civitai_id"] and g.get("ctype") != "Bookmark":
+            # F-S2-5:Bookmark 系统集合(名字站方托管)改名一律不上行,只读
             try:  # 已绑定集合:本地改名上行
                 await civitai_client.trpc_mutation(
                     "collection.upsert", {"id": g["civitai_id"], "name": g["name"][:30]})
@@ -372,8 +391,8 @@ async def _upsync_groups(result):
             if mem["deleted"] or mem["pushed"]:
                 continue
             g = groups.get(mem["gid"])
-            if not g:
-                continue
+            if not g or g.get("ctype") == "Bookmark":
+                continue  # F-S2-5:系统集合成员由站方 ❤ 托管,saveItem 会被 ❤ 状态打架
             try:
                 cid = await ensure_collection(g, it["kind"])
                 if not cid:
@@ -416,6 +435,11 @@ async def sync_now():
     info(f"同步开始: mirror={_cfg.get('mirror') or '(默认)'}"
          f" proxy={'有' if _cfg.get('proxy') else '无'}"
          f" key={'有' if (_cfg.get('api_key') or '') else '无'}")
+    def _heartbeat():
+        # F-S2-8:锁心跳 — 大库首拉/逐条限速上推可能超过锁 TTL(30 分钟),各阶段间续期;
+        # 值仍为本轮 token,finally 的持有核对删除不受影响
+        cache_store.kv_put(_SYNC_LOCK_KEY, token, ttl=1800)
+
     try:
         d = {"seen": {}, "truncated": True}
         try:
@@ -436,8 +460,11 @@ async def sync_now():
                 result["tombstoned"] = rc["tombstoned"]
             except Exception as e:
                 result["errors"].append("远端对账: " + str(e)[:160])
+        _heartbeat()
         await _upsync_models(result)
+        _heartbeat()
         await _upsync_groups(result)
+        _heartbeat()
         await bg.run_bg(fs.purge_tombstones)
         result["status"] = "ok"
         info("同步结束: " + " ".join(

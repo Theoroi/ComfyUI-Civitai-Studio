@@ -21,8 +21,8 @@ import aiohttp
 from . import api_cache, config
 from .log import info, warn, error, debug, dbg_json  # 统一日志(E2;debug=出站/响应全量)
 
-# 主站用 civitai.red(与 docs/civitai/civitai_pull.py 实测一致):
-# API 与下载端点齐全,且不被 Cloudflare 盯;civitai.com 对代理出口 IP 经常弹网页挑战
+# 默认主站 civitai.com;civitai.red 为可自配镜像(config.mirror 可切):
+# 镜像 API 与下载端点齐全,且不被 Cloudflare 盯;civitai.com 对代理出口 IP 经常弹网页挑战
 DEFAULT_BASE = "https://civitai.com"
 
 # 接受 civitai.com 签发 API Key(Bearer)的主机;镜像 civitai.red 同样接受(2026-09 复测)

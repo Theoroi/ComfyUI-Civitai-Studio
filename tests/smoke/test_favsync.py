@@ -391,4 +391,107 @@ assert gloc["dirty"] == 1 and not gloc["civitai_id"], gloc
 gmerged = fs.upsert_group("MyCol", civitai_id=4242)
 assert gmerged["gid"] == gloc["gid"], (gmerged, gloc)  # 同名合并,防"同名不同 id"
 
+# ---- 13) 审计 F-S2 批回归 ----
+ts13 = _ts_of(ISO)
+
+# 13a) F-S2-1:墓碑复活门控 — 仅 dirty=0(站方权威墓碑,mark_remote_tombstone 产物)
+# 可随远端重新出现而复活;dirty=1(本地取消在途)一律终局。
+# ⚠️ 改判说明(审计红线索引 F-S2-1 指令):旧门控允许 dirty=1 资产墓碑随远端复活
+# (为旧引擎遗留脏墓碑兜底),但会把"用户刚取消而远端集合仍挂着"悄悄回滚成已收藏;
+# 新语义下旧引擎遗留脏墓碑不再自动复活,此处按新语义直接断言 blocked。
+fs.toggle(fs.KIND_ASSET, "6101", {"name": "fresh"})
+fs.toggle(fs.KIND_ASSET, "6101")  # 用户取消 → 墓碑 deleted=1 dirty=1(本地取消在途)
+st = fs.upsert_remote(fs.KIND_ASSET, "6101", name="pullback",
+                      remote_updated=ts13 + 99, resurrect=True)
+assert st == "blocked", st
+it6101 = fs.get_item(fs.KIND_ASSET, "6101")
+assert it6101["deleted"] == 1 and it6101["dirty"] == 1, it6101
+# dirty=0 远端墓碑 + 远端重新出现 → 复活
+fs.upsert_remote(fs.KIND_ASSET, "6102", name="rt", remote_updated=ts13)
+fs.mark_remote_tombstone(fs.KIND_ASSET, "6102")
+assert fs.get_item(fs.KIND_ASSET, "6102")["deleted"] == 1
+st = fs.upsert_remote(fs.KIND_ASSET, "6102", name="rt-revived",
+                      remote_updated=ts13 + 99, resurrect=True)
+assert st == "updated", st
+it6102 = fs.get_item(fs.KIND_ASSET, "6102")
+assert not it6102["deleted"] and not it6102["dirty"] and it6102["name"] == "rt-revived", it6102
+
+# 13b) F-S2-5:Bookmark 系统集合只读 — 改名不上行、挂载不 saveItem
+sys_gid = gs12["Liked Models"]["gid"]
+fs.upsert_group("Liked Models Renamed", gid=sys_gid, dirty=1)  # 本地改名(绑定与 ctype 保留)
+gsb = {g["gid"]: g for g in fs.groups_list()}[sys_gid]
+assert gsb["dirty"] == 1 and gsb["ctype"] == "Bookmark" and gsb["civitai_id"] == 201, gsb
+fs.toggle(fs.KIND_MODEL, "7100", {"name": "in-sys", "group_id": sys_gid})  # 手动挂进系统集合
+_MUTS.clear()
+asyncio.run(fav_sync._upsync_groups({"groups_up": 0, "items_up": 0, "items_rm": 0, "errors": []}))
+procs13 = [p for p, _ in _MUTS]
+# 系统集合(201)改名不上行;MyCol(4242,普通组,12d 合并后仍 dirty=1)照常上行,不在此断言内
+assert not [1 for p, js in _MUTS
+            if p == "collection.upsert" and js.get("id") == 201], _MUTS
+assert not [1 for p, js in _MUTS
+            if p == "collection.saveItem" and js.get("modelId") == 7100], _MUTS  # 挂载不 saveItem
+
+# 13c) F-S2-6:非数字 oid 拒收 — assign 路由 400;import_json 整单 ValueError(走既有 400 路径)
+fp.folder_names_and_paths = {"loras": ([os.path.join(tmp, "loras")], {".safetensors"})}
+fp.get_folder_paths = lambda key: [os.path.join(tmp, "loras")] if key == "loras" else []
+from civitai_studio.routes import favorites as fav_routes
+
+
+class _Req13:
+    def __init__(self, body):
+        self._b = body
+
+    async def json(self):
+        return self._b
+
+
+resp = asyncio.run(fav_routes.favorites_assign(
+    _Req13({"kind": "asset", "oid": "12ab", "group_ids": ["g_x"]})))
+assert resp.status == 400, resp
+resp = asyncio.run(fav_routes.favorites_assign(_Req13({"kind": "asset", "oid": ""})))
+assert resp.status == 400, resp
+rejected = False
+try:
+    fs.import_json({"groups": [], "items": [{"kind": "asset", "oid": "abc", "name": "bad-oid"}]})
+except ValueError:
+    rejected = True
+assert rejected, "非数字 oid 的导入条目应拒收(ValueError→路由 400)"
+
+# 13d) F-S2-2:建集响应缺 id → 按名回收既有集合 id;仍找不到才放弃
+fs.upsert_group("RecycleCol", dirty=1)
+grid = {g["name"]: g for g in fs.groups_list()}["RecycleCol"]["gid"]
+fs.toggle(fs.KIND_MODEL, "7200", {"name": "rc", "group_id": grid})
+
+
+async def mutation_noid(proc, js):
+    _MUTS.append((proc, js))
+    if proc == "collection.upsert":
+        return {"ok": True}  # 响应缺 id(触发按名回收)
+    if proc == "collection.saveItem":
+        return {"id": 5300}
+    return {}
+
+
+fav_sync.civitai_client.trpc_mutation = mutation_noid
+_set_trpc({"collection.getAllUser": lambda js: {"collections": [
+    {"id": 777, "name": "RecycleCol", "type": "Model"},
+    {"id": 778, "name": "NoWhere", "type": "Model"},
+]}})
+_MUTS.clear()
+asyncio.run(fav_sync._upsync_groups({"groups_up": 0, "items_up": 0, "items_rm": 0, "errors": []}))
+grec = {g["name"]: g for g in fs.groups_list()}["RecycleCol"]
+assert grec["civitai_id"] == 777 and grec["dirty"] == 0, grec  # 回收 id 并绑定
+si13 = [js for p, js in _MUTS if p == "collection.saveItem" and js.get("modelId") == 7200]
+assert si13 and si13[0]["collections"][0]["collectionId"] == 777, _MUTS  # 回收 id 直接用于 saveItem
+assert [m for m in fs.memberships(fs.KIND_MODEL, "7200")][0]["pushed"] == 1
+# 仍找不到同名 → 放弃(cid=0),组保持未绑定
+fs.upsert_group("GhostCol", dirty=1)
+ggid = {g["name"]: g for g in fs.groups_list()}["GhostCol"]["gid"]
+fs.toggle(fs.KIND_MODEL, "7300", {"name": "gh", "group_id": ggid})
+_MUTS.clear()
+asyncio.run(fav_sync._upsync_groups({"groups_up": 0, "items_up": 0, "items_rm": 0, "errors": []}))
+ggh = {g["name"]: g for g in fs.groups_list()}["GhostCol"]
+assert not ggh["civitai_id"] and ggh["dirty"] == 1, ggh
+fav_sync.civitai_client.trpc_mutation = _real_mutation
+
 print("test_favsync.py OK")
