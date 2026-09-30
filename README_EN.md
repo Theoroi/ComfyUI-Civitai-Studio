@@ -2,7 +2,7 @@
 
 A ComfyUI sidebar plugin: Civitai **online browser + local model manager + download queue**. Search models on Civitai, download them straight into your ComfyUI model folders, track installed versions, check for updates, locate/delete local files.
 
-> Inspired by [ComfyUI-Civitai-Toolkit](https://github.com/BAIKEMARK/ComfyUI-Civitai-Toolkit) (MIT) and a private helper script (`civitai_pull.py`). A lightweight rewrite: no database, no full-library hash scanning, plus a **real download queue (resumable + SHA256 verified)**.
+> Inspired by [ComfyUI-Civitai-Toolkit](https://github.com/BAIKEMARK/ComfyUI-Civitai-Toolkit) (MIT) and a private helper script (`civitai_pull.py`). A lightweight rewrite: no external database dependency (a single-file local sqlite is managed automatically), no full-library hash scanning, plus a **real download queue (resumable + SHA256 verified)**.
 
 [中文说明](README.md) | **English**
 
@@ -13,10 +13,10 @@ A ComfyUI sidebar plugin: Civitai **online browser + local model manager + downl
 - **🌐 Browse**: search Civitai (type / base model / sort / period / NSFW filters) with infinite scroll; installed models are badged; detail view with version switcher, trigger words, file list and preview gallery — click a preview to inspect generation params (prompt / sampler / seed / resources, one-click copy).
 - **⬇ Download**: pick a target folder (auto-mapped by model type to checkpoints / loras / vae / controlnet etc.) + subfolder + filename; serial/parallel queue, live speed, **resumable downloads**, optional **SHA256 verification**; writes `<file>.civitai.json` metadata (version_id / trigger words / hash) on completion.
 - **📁 Local library**: scan all local models by folder; search, reveal in Explorer, delete (with confirm), **check updates** (compares sidecar version_id against Civitai's latest — no giant-file hashing), one-click download of new versions into the same folder; **rename** (sidecar follows); **expand details** (cover / metadata / trigger words / description / files / copyable Model & Version IDs / refresh metadata); **manually associate** unlinked files (filename-based smart search or paste a link, pick the version to confirm).
-- **⚙ Settings**: API key, HTTP proxy, API host, download concurrency, image-proxy toggle, SHA256 toggle, description persistence toggle (default off), tag autocomplete toggle, favorites auto-sync, legacy image-favorites pull (default off), disk cache limit (50-2000MB) + clear cache / deep rescan.
+- **⚙ Settings**: API key, HTTP proxy, API host, download concurrency, image-proxy toggle, SHA256 toggle, description persistence toggle (default off), tag autocomplete toggle (default on), favorites auto-sync, disk cache limit (50-2000MB) + clear cache / deep rescan.
 - **🧩 Workflow nodes**: Civitai Image Search (thumbnail picker; outputs positive / negative / trigger_words / local_checkpoint / image), LoRA Recipe, Show Text, Export with A1111 geninfo (IMAGE passthrough); a minimal verification workflow ships in `examples/image_search_verify.json`.
 - **🖼 Gallery**: site-wide image feed with base-model / NSFW / tag / period / format filters, six sorts (newest / oldest / most reactions / comments / collected / random) and six quick presets; file-format badges on cards; the lightbox shows generation params, category tags and license badges — images without embedded params fall back to Civitai's unofficial generation-data API for the checkpoint/LoRA chain (click to copy IDs).
-- **★ Favorites**: a dedicated Favorites tab (assets / models, groups, sorting, search) that **two-way syncs** with your Civitai account — model favorites read & write (SocialWrite scope needed), collections aligned with local groups (CollectionsRead/Write), image favorites follow collections; the legacy favorites table stays off by default.
+- **★ Favorites**: a dedicated Favorites tab (assets / models, groups, sorting, search) that **two-way syncs** with your Civitai account — model favorites read & write (SocialWrite scope needed), collections aligned with local groups (CollectionsRead/Write), image favorites follow collections.
 - **🏷 Tag tools**: scrape category tags (id + name) from the image page, accumulated into a local `tag_mapping.json` for filtering and autocomplete.
 
 ## Compatibility
@@ -41,7 +41,7 @@ Restart ComfyUI — a **Civitai** icon (pi-images) appears in the left sidebar.
 
 ### Networking (CN users)
 
-- **Default API host is `civitai.red`** (following the upstream Toolkit repo's `civitai_pull.py` practice): full API + download endpoints, rarely blocked by Cloudflare; switch back to `https://civitai.com` in Settings if needed.
+- **Default API host is `https://civitai.com`**; if Cloudflare blocks you, switch「API host」in Settings to the mirror `https://civitai.red` (full API + download endpoints, rarely blocked by Cloudflare).
 - Configure an **HTTP or SOCKS5 proxy** in Settings: bare addresses default to HTTP, `localhost` is rewritten to `127.0.0.1`. API, downloads and previews all go through the backend, so the proxy covers everything.
 - SOCKS support needs `aiohttp-socks` (declared in requirements.txt; without it HTTP proxies still work and SOCKS shows an install hint).
 - Occasional "returned a web page instead of JSON" = your proxy exit IP got a Cloudflare challenge; the plugin rebuilds the connection and retries 3 times — otherwise switch nodes.
@@ -51,13 +51,14 @@ Restart ComfyUI — a **Civitai** icon (pi-images) appears in the left sidebar.
 
 Generate one at [civitai.com/user/account](https://civitai.com/user/account) and paste it in Settings. Needed for login-gated models, NSFW content and higher API rate limits. Stored in plaintext locally at `<user_dir>/civitai_studio/config.json`.
 
-Note: **the key is only sent to official hosts (civitai.com / civitai.green)**; mirrors such as civitai.red reject civitai.com keys with a 403 (verified), so it is withheld there automatically. On download 401/403 the plugin automatically retries with the token and via the official host.
+Note: **the key is sent to all Civitai hosts (civitai.com / civitai.green, plus the optional civitai.red mirror)** — mirrors accept civitai.com-issued Bearer keys too (verified 2026-09); leave the API key empty or skip the mirror if you don't want your key sent to it. On download 401/403 the plugin automatically retries with the token and via the official host.
 
 ## Data locations
 
 - Settings: `<ComfyUI>/user/civitai_studio/config.json`
 - Model metadata: `<file>.civitai.json` next to each model file (travels with the file, shareable). With「description persistence」on it also holds `description_html` (capped at 51200 chars) / `tags` / `cover_url` so details work offline; the local library's detail view has a「Refresh metadata」action.
 - Download temp files: `<target>/xxx.<hash>.part` (resumable; safe to delete any `*.part` when a job fails)
+- Cache & queue: `<ComfyUI>/user/civitai_studio/cache/` (cache.sqlite: fingerprints / favorites / associations / download jobs; media/: image-proxy cache, counted toward the cache limit)
 
 ## Uninstall
 

@@ -1,4 +1,4 @@
-"""路由契约测试:46 端点注册快照(防意外删路由)+请求形状抽样(400/404/缺 key 降级)."""
+"""路由契约测试:48 端点注册快照(防意外删路由)+请求形状抽样(400/404/缺 key 降级)."""
 import os, sys, tempfile, types
 
 tmp = tempfile.mkdtemp(prefix="cs_contract_")
