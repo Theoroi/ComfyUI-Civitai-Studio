@@ -12,7 +12,6 @@ sqlite 不可用时降级:读返回空,写静默丢弃(收藏功能退化为不�
 import json
 import os
 import sqlite3
-import threading
 import time
 
 import folder_paths
@@ -23,7 +22,8 @@ from .log import info, warn, error  # 统一日志(E2)
 KIND_MODEL = "model"
 KIND_ASSET = "asset"
 
-_LOCK = threading.RLock()
+_LOCK = cache_store._LOCK  # 统一单连接锁(F-S2-4):与 cache_store 共用一把 RLock 跨模块
+                           # 串行化同一 sqlite 连接,防 A 模块事务被 B 模块 commit 半提交
 _TOMBSTONE_TTL = 30 * 86400.0
 
 

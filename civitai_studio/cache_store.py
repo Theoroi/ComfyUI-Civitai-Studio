@@ -21,6 +21,8 @@ import folder_paths
 from . import config
 from .log import info, warn, error  # 统一日志(E2)
 
+# 全插件唯一单连接锁(F-S2-4):favorites_store._LOCK 引用本对象(favorites_store
+# 不自建锁),跨模块串行化同一 sqlite 连接;嵌套调用靠 RLock 同线程可重入
 _LOCK = threading.RLock()
 _CONN = None
 _BROKEN = False  # sqlite 确认损坏且重建仍失败:此后所有操作静默降级为空实现
