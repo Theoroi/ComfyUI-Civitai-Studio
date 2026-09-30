@@ -61,8 +61,6 @@ function fmtSelHtml(cur) {
     return ["all", "jpg", "png", "webp", "gif", "video"].map((f) =>
         `<option value="${f}" ${(cur || "all") === f ? "selected" : ""}>${f === "all" ? esc(t("fmtAll")) : f === "video" ? esc(t("fmtVideo")) : f.toUpperCase()}</option>`).join("");
 }
-const NSFW_LEVELS = [0, 1, 2];
-
 const JS_VERSION = "0.9.0";
 
 // ---------- i18n ----------
@@ -79,8 +77,7 @@ const STR = {
         frontendUpgradeHint: "前端版本过旧,请升级 ComfyUI",
         readyLog: "已就绪",
         searchPlaceholder: "搜索 Civitai 模型…", allTypes: "全部类型",
-        basePlaceholder: "全部底模(可输入新枚举)",
-        browseTagPh: "筛选 tag(可多选)", tagClickable: "点击:复制 / 搜索",
+        tagClickable: "点击:复制 / 搜索",
         baseFilterHint: "未选底模(下拉多选,任一命中)", tagFilterHint: "未选标签(下拉多选)",
         modeOR: "OR(任一)", modeAND: "AND(全部·实验)",
         hidePaidLabel: "隐藏需付费(未购)", hidePaidBought: "隐藏需付费(含已购)", showAllLabel: "含需付费",
@@ -97,18 +94,18 @@ const STR = {
         statusLoading: "加载中…", statusLoaded: "已加载 {n} 个", statusMore: " — 向下滚动加载更多",
         retry: "重试", noModels: "没有找到模型,换个关键词试试。",
         loadFailed: "加载失败: ", detailLoadFailed: "详情加载失败: ",
-        back: "← 返回", backList: "返回列表", openOnCivitai: "在 Civitai 打开 ↗",
+        openOnCivitai: "在 Civitai 打开 ↗",
         by: "by", unknown: "未知", unknownCreator: "未知作者", versionLabel: "版本",
         installed: "已安装", installedMark: " ✔已装", modelDesc: "模型说明",
         verDescTitle: "关于这个版本", paidReq: "需付费", paidFree: "无需付费", paidActive: "已购授权",
         commercial: "商用:", none: "无", derivNo: "禁衍生", derivYes: "允许衍生", relic: "可换许可",
         nsfwLevelLabel: "NSFW:",
-        triggerWords: "触发词", copyAll: "复制全部", files: "文件", primaryFile: "主文件",
+        triggerWords: "触发词", copyAll: "复制全部", files: "文件",
         noFiles: "该版本没有文件", previews: "预览图 ({n}) — 点击查看生成参数",
-        genParams: "生成参数", noGenParams: "这张图没有公开生成参数。",
+        genParams: "生成参数",
         positivePrompt: "正面提示词", negativePrompt: "负面提示词", copy: "复制",
-        copied: "已复制", copyFail: "复制失败", resources: "相关资源",
-        kvModel: "模型", kvSampler: "采样器", kvSteps: "步数", kvSize: "尺寸",
+        copied: "已复制", copyFail: "复制失败",
+        kvSampler: "采样器", kvSteps: "步数", kvSize: "尺寸",
         download: "⬇ 下载", startDownload: "开始下载", submitting: "提交中…",
         dlDialogTitle: "下载 — {name}", fileLabel: "文件", targetFolder: "目标目录", modelTypeLabel: "模型类型(可改)",
         subfolder: "子文件夹(可选,自动创建)", subfolderPh: "例如: NSFW/角色",
@@ -118,7 +115,7 @@ const STR = {
         cantDownload: "无法下载", versionNotFound: "未找到该版本,请重新检查更新后再试",
         destFetchFailed: "获取目录失败: ", noRegFolders: "未找到已注册的模型文件夹",
         openDownloadFailed: "无法打开下载", queuedToast: "已加入下载队列",
-        queueFailed: "下载任务创建失败", unknownAuthor: "未知作者",
+        queueFailed: "下载任务创建失败",
         localSearchPh: "搜索本地模型…", checkUpdates: "检查更新", rescanTitle: "重新扫描",
         scanning: "扫描模型目录中…", rescanning: "正在重新扫描模型目录…",
         noModelFiles: "没有找到模型文件。", truncatedNote: "注意:文件数超过扫描上限。",
@@ -130,10 +127,8 @@ const STR = {
         deleted: "已删除", deleteFailed: "删除失败", revealFailed: "打开文件夹失败",
         loadingCivitai: "加载 Civitai 信息…", expandLoadFailed: "详情加载失败: ",
         offlineBanner: "离线:显示本地缓存的说明(可能非最新)",
-        civName: "Civitai 名称", statsLabel: "数据", clickCopy: "点击复制",
-        dlThisVersion: "下载此版本", reAssociate: "重新关联", refreshMeta: "刷新元数据",
+        reAssociate: "重新关联", refreshMeta: "刷新元数据",
         refreshing: "刷新中…", metaRefreshed: "元数据已刷新", metaRefreshFailed: "刷新元数据失败",
-        expandAll: "展开全部", collapse: "收起",
         renameTitle: "重命名 — {name}", newFileName: "新文件名(含扩展名)",
         renameMsg: "仅重命名模型文件,数据库关联与 .civitai.json(如有)同步平移;工作流中引用的旧文件名将失效。",
         renamed: "已重命名", renameFailed: "重命名失败",
@@ -149,7 +144,7 @@ const STR = {
         updateCheckDone: "更新检查完成", updateCheckFailed: "更新检查失败",
         updatesFound: "发现可更新的模型 — ", checkedAB: "已检查 {a}/{b} 个(单次上限 30,可对单个模型点「查更新」)",
         checkedN: "已检查 {n} 个", failNote: ",{n} 个查询失败(多为模型已在站方删除)",
-        fetchingNewVersion: "获取新版本失败", newVersionAvail: "有新版本: ",
+        fetchingNewVersion: "获取新版本失败",
         dlTabHint: "下载到 ComfyUI 模型目录,支持断点续传", clearFinished: "清除已完成",
         noJobs: "暂无下载任务。去「浏览」页面挑个模型吧。",
         pollFailBanner: "下载状态刷新失败(已连续多次),请检查 ComfyUI 后端;恢复后此提示会自动消失。",
@@ -203,9 +198,9 @@ const STR = {
         resetDone: "收藏库已重置,点「同步 Civitai」重新下拉", resetBtn: "重置", manageBtn: "管理",
         newColPh: "新收藏夹名称", pickerNew: "＋ 新收藏", groupCreated: "收藏夹「{name}」已创建",
         ffoldTitle: "折叠/展开筛选区",
-        favGroupAll: "全部分组", favGroupNone: "未分组", favGroupLabel: "分组",
+        favGroupAll: "全部分组", favGroupNone: "未分组",
         favSync: "同步 Civitai", favSyncing: "同步中…",
-        favSyncDone: "同步完成:新增模型 +{models_down} · 新增图片 +{images_down} · 分组 +{groups_down} · 挂载 +{mounts} · 上推 {items_up} · 远端移除 {items_rm} · ★上推 {upsynced}(失败 {upsync_failed}){legacy_purged_note}",
+        favSyncDone: "同步完成:新增模型 +{models_down} · 新增图片 +{images_down} · 分组 +{groups_down} · 挂载 +{mounts} · 上推 {items_up} · 远端移除 {items_rm} · ★上推 {upsynced}(失败 {upsync_failed})",
         favSyncTrunc: "(集合较多,本次仅同步前一部分)",
         pushPending: "↑ 待上行", pushDone: "✓ 已上行", pushLocalOnly: "仅本地",
         groupPickTitle: "选择收藏夹(可多选)", groupPickNone: "不选 = 未分组",
@@ -240,13 +235,13 @@ const STR = {
         galPresetNewDay: "🌅 今日最新", galPresetHotDay: "🔥 今日热门", galPresetHotWeek: "🔥 本周热门",
         galPresetBestWeek: "⭐ 本周高分", galPresetHotMonth: "📈 本月热门", galPresetBestMonth: "⭐ 本月高分",
         fmtAll: "全部格式", fmtVideo: "视频", fmtTip: "客户端筛选,只作用于已加载条目",
-        galBase: "底模", loadMore: "加载更多", tryMore: "尝试加载更多", useAsOutput: "选为输出", selectedAsOutput: "已选为输出",
-        sfwLabel: "全年龄", nsfwLabel: "包含 NSFW", galTagId: "Tag ID 或名称(逗号分隔)",
+        loadMore: "加载更多", useAsOutput: "选为输出", selectedAsOutput: "已选为输出",
+        sfwLabel: "全年龄", nsfwLabel: "包含 NSFW",
         noTags: "无标签", tagsPaused: "标签抓取已暂停({sec} 秒后恢复)", noSelectionHint: "未选择(点击缩略图选择)",
         tagScrapeLabel: "读取图片分类标签", tagScrapeTip: "读取非公开 API 获取图片分类标签，需要 Civitai API Key", tagsLoading: "标签加载中…",
         tagAndLabel: "多标签 AND 语义", tagAndTip: "实验:逐标签查询求交集,请求量更大", clearTags: "清空",
         noTagsSel: "未选标签(下拉多选)",
-        tagsOff: "标签抓取已在设置中关闭", capHint: "已达显示上限(100)",
+        tagsOff: "标签抓取已在设置中关闭",
         galleryEmpty: "没有图片。", galleryAuthor: "作者",
     },
     en: {
@@ -261,8 +256,7 @@ const STR = {
         frontendUpgradeHint: "Frontend too old — please upgrade ComfyUI",
         readyLog: "ready",
         searchPlaceholder: "Search Civitai models…", allTypes: "All types",
-        basePlaceholder: "All base models (type to enter)",
-        browseTagPh: "Filter tags (multi)", tagClickable: "Click: copy / search",
+        tagClickable: "Click: copy / search",
         baseFilterHint: "No base models selected (pick from dropdown)", tagFilterHint: "No tags selected (pick from dropdown)",
         modeOR: "OR (any)", modeAND: "AND (all, exp.)",
         hidePaidLabel: "Hide unpaid paid-content", hidePaidBought: "Hide paid (incl. purchased)", showAllLabel: "Include paid",
@@ -279,18 +273,18 @@ const STR = {
         statusLoading: "Loading…", statusLoaded: "{n} loaded", statusMore: " — scroll down for more",
         retry: "Retry", noModels: "No models found — try different keywords.",
         loadFailed: "Load failed: ", detailLoadFailed: "Failed to load details: ",
-        back: "← Back", backList: "Back to list", openOnCivitai: "Open on Civitai ↗",
+        openOnCivitai: "Open on Civitai ↗",
         by: "by", unknown: "unknown", unknownCreator: "unknown creator", versionLabel: "Version",
         installed: "Installed", installedMark: " ✔ installed", modelDesc: "Model description",
         verDescTitle: "About this version", paidReq: "Paid required", paidFree: "No payment required", paidActive: "Paid access",
         commercial: "Commercial:", none: "none", derivNo: "No derivatives", derivYes: "Derivatives OK", relic: "Relicensable",
         nsfwLevelLabel: "NSFW:",
-        triggerWords: "Trigger words", copyAll: "Copy all", files: "Files", primaryFile: "primary file",
+        triggerWords: "Trigger words", copyAll: "Copy all", files: "Files",
         noFiles: "No files for this version", previews: "Previews ({n}) — click for generation params",
-        genParams: "Generation params", noGenParams: "This image has no public generation params.",
+        genParams: "Generation params",
         positivePrompt: "Positive prompt", negativePrompt: "Negative prompt", copy: "Copy",
-        copied: "Copied", copyFail: "Copy failed", resources: "Related resources",
-        kvModel: "Model", kvSampler: "Sampler", kvSteps: "Steps", kvSize: "Size",
+        copied: "Copied", copyFail: "Copy failed",
+        kvSampler: "Sampler", kvSteps: "Steps", kvSize: "Size",
         download: "⬇ Download", startDownload: "Start download", submitting: "Submitting…",
         dlDialogTitle: "Download — {name}", fileLabel: "File", targetFolder: "Target folder", modelTypeLabel: "Model type (override)",
         subfolder: "Subfolder (optional, created automatically)", subfolderPh: "e.g. NSFW/character",
@@ -300,7 +294,7 @@ const STR = {
         cantDownload: "Cannot download", versionNotFound: "Version not found — check for updates again",
         destFetchFailed: "Failed to list folders: ", noRegFolders: "No registered model folders found",
         openDownloadFailed: "Cannot open download", queuedToast: "Added to download queue",
-        queueFailed: "Failed to queue download", unknownAuthor: "unknown creator",
+        queueFailed: "Failed to queue download",
         localSearchPh: "Search local models…", checkUpdates: "Check updates", rescanTitle: "Rescan",
         scanning: "Scanning model folders…", rescanning: "Rescanning model folders…",
         noModelFiles: "No model files found.", truncatedNote: "Note: file count exceeds the scan cap.",
@@ -312,10 +306,8 @@ const STR = {
         deleted: "Deleted", deleteFailed: "Delete failed", revealFailed: "Failed to open folder",
         loadingCivitai: "Loading Civitai info…", expandLoadFailed: "Failed to load details: ",
         offlineBanner: "Offline: showing the locally cached description (may be stale)",
-        civName: "Civitai name", statsLabel: "Stats", clickCopy: "Click to copy",
-        dlThisVersion: "Download this version", reAssociate: "Re-associate", refreshMeta: "Refresh metadata",
+        reAssociate: "Re-associate", refreshMeta: "Refresh metadata",
         refreshing: "Refreshing…", metaRefreshed: "Metadata refreshed", metaRefreshFailed: "Refresh failed",
-        expandAll: "Expand", collapse: "Collapse",
         renameTitle: "Rename — {name}", newFileName: "New filename (with extension)",
         renameMsg: "Renames the model file; the DB association and any .civitai.json move with it. Workflow references to the old filename will break.",
         renamed: "Renamed", renameFailed: "Rename failed",
@@ -331,7 +323,7 @@ const STR = {
         updateCheckDone: "Update check finished", updateCheckFailed: "Update check failed",
         updatesFound: "Models with updates — ", checkedAB: "checked {a}/{b} (cap 30 per run; use per-item Check for the rest)",
         checkedN: "checked {n}", failNote: ", {n} lookups failed (usually models deleted upstream)",
-        fetchingNewVersion: "Failed to fetch the new version", newVersionAvail: "New version: ",
+        fetchingNewVersion: "Failed to fetch the new version",
         dlTabHint: "Downloads go to your ComfyUI model folders, resumable", clearFinished: "Clear finished",
         noJobs: "No downloads yet — pick a model in Browse.",
         pollFailBanner: "Refreshing download states failed repeatedly — check the ComfyUI backend; this notice clears itself on recovery.",
@@ -384,9 +376,9 @@ const STR = {
         resetDone: "Favorites reset — press Sync Civitai to re-pull", resetBtn: "Reset", manageBtn: "Manage",
         newColPh: "New collection name", pickerNew: "+ New collection", groupCreated: "Collection \"{name}\" created",
         ffoldTitle: "Collapse/expand filters",
-        favGroupAll: "All groups", favGroupNone: "Ungrouped", favGroupLabel: "Group",
+        favGroupAll: "All groups", favGroupNone: "Ungrouped",
         favSync: "Sync Civitai", favSyncing: "Syncing…",
-        favSyncDone: "Synced: new models +{models_down} · new images +{images_down} · groups +{groups_down} · mounts +{mounts} · pushed {items_up} · removed {items_rm} · ★ {upsynced} (failed {upsync_failed}){legacy_purged_note}",
+        favSyncDone: "Synced: new models +{models_down} · new images +{images_down} · groups +{groups_down} · mounts +{mounts} · pushed {items_up} · removed {items_rm} · ★ {upsynced} (failed {upsync_failed})",
         favSyncTrunc: "(many collections, only part synced this round)",
         pushPending: "↑ pending", pushDone: "✓ synced", pushLocalOnly: "local only",
         groupPickTitle: "Pick collections (multi)", groupPickNone: "none = ungrouped",
@@ -421,10 +413,10 @@ const STR = {
         galPresetNewDay: "🌅 New today", galPresetHotDay: "🔥 Hot today", galPresetHotWeek: "🔥 Hot this week",
         galPresetBestWeek: "⭐ Top this week", galPresetHotMonth: "📈 Hot this month", galPresetBestMonth: "⭐ Top this month",
         fmtAll: "All formats", fmtVideo: "Video", fmtTip: "Client-side filter, applies to loaded items only",
-        galBase: "Base model", loadMore: "Load more", tryMore: "Try loading more", useAsOutput: "Use as output", selectedAsOutput: "Selected as output",
-        sfwLabel: "SFW only", nsfwLabel: "Include NSFW", galTagId: "Tag ID or name, comma-separated",
+        loadMore: "Load more", useAsOutput: "Use as output", selectedAsOutput: "Selected as output",
+        sfwLabel: "SFW only", nsfwLabel: "Include NSFW",
         noTags: "No tags", tagsPaused: "Tag fetch paused ({sec}s), retrying later", noSelectionHint: "Nothing selected (click a thumbnail)",
-        tagScrapeLabel: "Fetch image category tags", tagScrapeTip: "Uses the unofficial API; requires a Civitai API key", tagsLoading: "Loading tags…", tagsOff: "Tag scraping disabled in settings", capHint: "Display cap reached (100)",
+        tagScrapeLabel: "Fetch image category tags", tagScrapeTip: "Uses the unofficial API; requires a Civitai API key", tagsLoading: "Loading tags…", tagsOff: "Tag scraping disabled in settings",
         tagAndLabel: "Multi-tag AND", tagAndTip: "Experimental: per-tag queries + intersection, more requests", clearTags: "Clear",
         noTagsSel: "No tags (pick from dropdown)",
         galleryEmpty: "No images.", galleryAuthor: "Author",
@@ -439,10 +431,10 @@ let S = {
         sort: "Most Downloaded", period: "AllTime",
         nsfw: 1, items: [], nextCursor: "", loading: false, dirty: true, pendingReset: false,
     },
-    local: { models: [], search: "", type: "", loading: false, updates: {}, truncated: false, openId: null, detailCache: {} },
+    local: { models: [], search: "", type: "", loading: false, updates: {}, truncated: false, detailCache: {} },
     dl: { jobs: [], lastSig: "", failStreak: 0 },
     gal: { items: [], next: [], sort: "Newest", period: "AllTime", base: "", tag: "", imageId: "", nsfwLevel: 0, thumbSize: 256, loading: false, error: "", favOnly: false, nsfwLv: new Set() },
-    ui: { tab: "browse", root: null, scrollTop: 0, detailId: null, backendStale: false },
+    ui: { tab: "browse", root: null, backendStale: false },
 };
 
 function t(key, vars) {
@@ -1466,7 +1458,7 @@ function renderDetail(model, container, opts = {}) {
 
 function rewriteDescImages(root) {
     // 模型说明里的外链图也走代理开关,并禁 referrer(防打点/防直连失败);挂图直接隐藏
-    $$(".cs-desc-body img, .cs-expand-desc img", root).forEach((img) => {
+    $$(".cs-desc-body img", root).forEach((img) => {
         const orig = img.getAttribute("src") || "";
         if (!orig) return;
         img.dataset.direct = orig;
@@ -4209,7 +4201,6 @@ function favSyncLineText(r) {
                   down: (r.models_down || 0) + (r.images_down || 0) };
     try { localStorage.setItem("cs_fav_lastsync", JSON.stringify(rec)); } catch (_) {}
     let txt = t("favSyncLine", { time: new Date(rec.ts).toLocaleString(), up: rec.up, down: rec.down });
-    if (r.legacy_purged) txt += (S.lang === "zh" ? ` · 清理 legacy 残留 ${r.legacy_purged}` : ` · purged ${r.legacy_purged} legacy`);
     if (r.scope_hint) txt += " · " + r.scope_hint;
     if (r.errors && r.errors.length) txt += " · " + t("syncFailShort") + ": " + humanizeErr(String(r.errors[0]));
     return txt;
@@ -4228,9 +4219,6 @@ async function favDoSync(silent) {
             setFavSyncLine(favSyncLineText(r), (r.scope_hint || (r.errors && r.errors.length)) ? "warn" : "");
             if (r.scope_hint) toast("warn", r.scope_hint, "");
             else if (!silent) {
-                r.legacy_purged_note = r.legacy_purged
-                    ? (S.lang === "zh" ? "，清理 legacy 残留 " + r.legacy_purged : ", purged " + r.legacy_purged + " legacy")
-                    : "";  // 占位符实参:t() 只替换提供的键(评审R2 UX-3)
                 toast("success", t("favSyncDone", r) + (r.truncated ? " " + t("favSyncTrunc") : ""), "");
             }
             else if (r.upsync_failed) toast("warn", t("favFailed"), String(r.errors?.[0] || ""));
@@ -4462,12 +4450,6 @@ function pinSidebarHeight(root) {
     _sidebarRO.observe(scroller);
 }
 
-function restoreBrowseState() {
-    // 重开面板:恢复滚动位置
-    const content = $("#cs-browse-content");
-    if (content) content.scrollTop = S.ui.scrollTop || 0;
-}
-
 // ---------- 样式 ----------
 function injectStyles() {
     if (document.getElementById("civitai-studio-styles")) return;
@@ -4576,16 +4558,8 @@ function injectStyles() {
 .cs-local-sub { display:flex; gap:4px; align-items:center; flex-wrap:wrap; margin:3px 0; }
 .cs-local-path { font-size:10px; color:var(--desc-text-color,#999); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .cs-local-actions { display:flex; flex-wrap:wrap; gap:4px; flex-shrink:0; justify-content:flex-end; max-width:230px; }
-.cs-expand { margin:-2px 0 8px; background:var(--comfy-box-bg, var(--comfy-input-bg,#333)); border:1px solid var(--border-color,#444); border-radius:6px; padding:8px; }
-.cs-expand-body { display:flex; gap:10px; }
-.cs-expand-cover { width:110px; aspect-ratio:3/4; object-fit:cover; border-radius:6px; flex-shrink:0; align-self:flex-start; }
-.cs-expand-main { flex:1; min-width:0; }
-.cs-expand-desc { font-size:12px; background:rgba(0,0,0,.2); border-radius:6px; padding:8px; margin-top:6px; overflow-wrap:break-word; }
-.cs-expand-desc img { max-width:100%; height:auto; }
 .cs-expand-actions { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; }
 .cs-expand-loading { padding:10px; color:var(--desc-text-color,#999); font-size:12px; text-align:center; }
-.cs-copyable { cursor:pointer; }
-.cs-copyable:hover { color:var(--accent-color,#4a90e2); }
 .cs-search-row { display:flex; gap:6px; }
 .cs-search-row input { flex:1; min-width:0; }
 .cs-as-results { max-height:220px; overflow-y:auto; display:flex; flex-direction:column; gap:4px; }
@@ -4596,8 +4570,6 @@ function injectStyles() {
 .cs-as-item-name { font-size:12px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .cs-as-version-row { display:flex; gap:8px; align-items:center; }
 .cs-as-thumb { width:36px; height:48px; object-fit:cover; border-radius:4px; flex-shrink:0; border:1px solid var(--border-color,#444); }
-.cs-local-detail .cs-expand-body { flex-direction:column; }
-.cs-local-detail .cs-expand-cover { width:100%; }
 .cs-local-update { font-size:11px; margin-top:4px; color:#e2a23f; display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
 .cs-local-update.cs-ok { color:#4caf50; }
 .cs-gal-grid { display:flex; flex-wrap:wrap; gap:6px; padding-bottom:20px; align-content:flex-start; }
@@ -4677,8 +4649,6 @@ function injectStyles() {
 .cs-float-modal .cs-float-body { max-height:calc(100vh - 120px); }
 @keyframes cs-rotate { to { transform: rotate(360deg); } }
 .cs-spin { width:14px; height:14px; border:2px solid #555; border-top-color:var(--accent-color,#4a90e2); border-radius:50%; animation:cs-rotate .8s linear infinite; display:inline-block; flex:0 0 auto; }
-.cs-gal-filters { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:8px; }
-.cs-gal-filters > * { width:100%; min-width:0; }
 .cs-media-view img, .cs-media-view video { max-width:100%; max-height:64vh; border-radius:8px; display:block; margin:0 auto; background:rgba(0,0,0,.35); }
 .cs-media-view video { height:auto; max-height:64vh; object-fit:contain; } /* E2E c:横屏视频去固定高 */
 .cs-thumb video { pointer-events:none; }
@@ -5335,7 +5305,6 @@ app.registerExtension({
             const origCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
                 const r = origCreated?.apply(this, arguments);
-                app.csPatchSerialize?.(); // graph 实例可能已被 loadGraphData 替换,补挂序列化清洗
                 this.csSig = "";
                 this.csResults = [];
                 const node = this;
@@ -5760,7 +5729,6 @@ app.registerExtension({
                     fetchBrowse(true); // 批4 E2E B3:强刷后首开 dirty=false 且无数据 → 空面板,兜底重拉
                 } else {
                     renderResults(true);
-                    restoreBrowseState();
                 }
                 refreshTagCombos(); // 批4 E2E B3:首开 tagMap 未就绪导致筛选下拉空,拉取后重渲染全部 picker
                 pollDownloads();
