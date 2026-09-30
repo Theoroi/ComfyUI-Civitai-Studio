@@ -3051,19 +3051,18 @@ function renderGallery(reset) {
             ev.stopPropagation();
             S.favs = S.favs || new Set();
             try {
-                const adding = !S.favs.has(String(img.id));
-                const r2 = await apiPost("/civitai_studio/favorites/toggle", { id: String(img.id) });
-                if (r2.fav) S.favs.add(String(img.id)); else S.favs.delete(String(img.id));
-                ev.target.style.color = r2.fav ? "#ffd75e" : "";
+                const adding = !S.favs.has(String(img.id)); // 调用前判定(与旧行为等价)
+                const on = await toggleFav("asset", String(img.id), { name: img.username || "", cover: img.url });
+                ev.target.style.color = on ? "#ffd75e" : "";
                 // E2E #8:新增收藏弹收藏夹选择器(默认未分组);取消收藏不弹
-                if (r2.fav && adding) {
+                if (on && adding) {
                     const cur = ((S.favData?.items || []).find((x) => x.kind === "asset" && String(x.oid) === String(img.id)) || {}).group_ids || [];
                     openGroupPicker(ev, "asset", cur, async (gids) => {
                         try { await apiPost("/civitai_studio/favorites/assign", { kind: "asset", oid: String(img.id), group_ids: gids }); }
                         catch (e2) { toast("error", t("favFailed"), e2.message); }
                     });
                 }
-                if (st.favOnly && !r2.fav) {  // 只看收藏下取消→即时移除(评审R2)
+                if (st.favOnly && !on) {  // 只看收藏下取消→即时移除(评审R2)
                     st.items.forEach((i2) => { delete i2.__rendered; });
                     renderGallery(true);
                 }
