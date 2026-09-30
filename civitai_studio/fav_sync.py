@@ -92,12 +92,13 @@ def _extract_item_id(data):
     return None
 
 
-async def _down_groups():
+async def _down_groups(heartbeat=None):
     """集合 → 本地分组;集合条目 → fav_items + 挂载镜像(跨集合多挂,批1-6).
 
     条目主键(itemId)随挂载缓存 — removeFromCollection 对账的必需品(批1-4)。
     增量:集合 updatedAt 未变 → 复用 kv 缓存的条目表跳过全量翻页;截断/失败的集合
     不写缓存、本轮不参与对账。
+    heartbeat: 可选续锁回调,集合循环每轮调用(N-V1-1:大库首拉整段可能超锁 TTL)。
     返回 {"groups": 组数, "models_down"/"images_down": 首入库条目数,
     "mounts": 新挂载数, "seen": {cid: {"m"/"i": {oid: itemId}}}, "truncated": 枚举不完整}"""
     cols = await civitai_client.trpc_query("collection.getAllUser", {})
@@ -120,6 +121,8 @@ async def _down_groups():
         return {"groups": 0, "models_down": 0, "images_down": 0, "mounts": 0,
                 "seen": {}, "truncated": True}
     for c in cols:
+        if heartbeat:
+            heartbeat()  # N-V1-1:逐集合推进中续锁,防大库首拉整段超过锁 TTL
         cid, name, ctype = c.get("id"), c.get("name"), c.get("type")
         if not cid or not name or ctype == "Article":
             continue  # 文章书签集合与插件无关
@@ -359,6 +362,8 @@ async def _upsync_groups(result):
                 for c in cols:
                     if not isinstance(c, dict) or c.get("type") == "Article":
                         continue  # 与下行同口径:文章书签集合与插件无关
+                    if c.get("mode") == "Bookmark":
+                        continue  # N-V1-2:站方系统集合(❤ 托管)不回收,防普通组被绑到 ❤ 集合
                     if str(c.get("name") or "")[:30] == want and c.get("id"):
                         cid = int(c.get("id"))
                         debug(f"建集响应缺 id,按名回收既有集合: 「{want}」 → {cid}")
@@ -435,15 +440,26 @@ async def sync_now():
     info(f"同步开始: mirror={_cfg.get('mirror') or '(默认)'}"
          f" proxy={'有' if _cfg.get('proxy') else '无'}"
          f" key={'有' if (_cfg.get('api_key') or '') else '无'}")
+    hb_stopped = False
+
     def _heartbeat():
         # F-S2-8:锁心跳 — 大库首拉/逐条限速上推可能超过锁 TTL(30 分钟),各阶段间续期;
-        # 值仍为本轮 token,finally 的持有核对删除不受影响
-        cache_store.kv_put(_SYNC_LOCK_KEY, token, ttl=1800)
+        # 值仍为本轮 token,finally 的持有核对删除不受影响。
+        # N-V1-1:compare-and-set — 值仍是本轮 token 才续期;已被并发轮换走时盲覆写
+        # 会把锁偷回来造成双轮并行,故 warn 一条并停止续期
+        nonlocal hb_stopped
+        if hb_stopped:
+            return
+        if cache_store.kv_get(_SYNC_LOCK_KEY) == token:
+            cache_store.kv_put(_SYNC_LOCK_KEY, token, ttl=1800)
+        else:
+            hb_stopped = True
+            warn("同步锁已被他人持有,本轮心跳停止(不再续期)")
 
     try:
         d = {"seen": {}, "truncated": True}
         try:
-            d = await _down_groups()
+            d = await _down_groups(heartbeat=_heartbeat)
             result["groups_down"] = d["groups"]
             result["models_down"] = d["models_down"]
             result["images_down"] = d["images_down"]

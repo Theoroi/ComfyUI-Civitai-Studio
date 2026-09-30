@@ -494,4 +494,75 @@ ggh = {g["name"]: g for g in fs.groups_list()}["GhostCol"]
 assert not ggh["civitai_id"] and ggh["dirty"] == 1, ggh
 fav_sync.civitai_client.trpc_mutation = _real_mutation
 
+# ---- 14) 全量复检 V1:N-V1-2 按名回收排除系统集合 + N-V1-1 锁心跳 CAS ----
+# 14a) 建集响应缺 id → 按名回收:同名 Bookmark(mode) 系统集合不得被绑,只绑普通集合
+fs.upsert_group("BMCol", dirty=1)
+gbm = {g["name"]: g for g in fs.groups_list()}["BMCol"]["gid"]
+fs.toggle(fs.KIND_MODEL, "7400", {"name": "bm", "group_id": gbm})
+
+
+async def mutation_noid14(proc, js):
+    _MUTS.append((proc, js))
+    if proc == "collection.upsert":
+        return {"ok": True}  # 缺 id → 触发按名回收
+    if proc == "collection.saveItem":
+        return {"id": 5400}
+    return {}
+
+
+fav_sync.civitai_client.trpc_mutation = mutation_noid14
+_set_trpc({"collection.getAllUser": lambda js: {"collections": [
+    {"id": 811, "name": "BMCol", "type": "Model", "mode": "Bookmark"},
+    {"id": 812, "name": "BMCol", "type": "Model"},
+]}})
+_MUTS.clear()
+asyncio.run(fav_sync._upsync_groups({"groups_up": 0, "items_up": 0, "items_rm": 0, "errors": []}))
+gbm2 = {g["name"]: g for g in fs.groups_list()}["BMCol"]
+assert gbm2["civitai_id"] == 812 and gbm2["dirty"] == 0, gbm2  # 绑普通集合而非 811
+si14 = [js for p, js in _MUTS if p == "collection.saveItem" and js.get("modelId") == 7400]
+assert si14 and si14[0]["collections"][0]["collectionId"] == 812, _MUTS
+fav_sync.civitai_client.trpc_mutation = _real_mutation
+
+# 14b) 锁心跳 compare-and-set:本轮 token → 续期;被并发轮换走 → 不覆写不删除
+def _kvrow14():
+    return cache_store._CONN.execute(
+        "SELECT value, expires_at FROM kv_cache WHERE key=?",
+        (fav_sync._SYNC_LOCK_KEY,)).fetchone()
+
+
+# 正例:下行进行中心跳把 expires_at 顶到新值、值保持为本轮 token
+_snap14 = {}
+
+
+def _getalluser14b(js):
+    _snap14["base"] = _kvrow14()  # 占锁后、首个心跳前
+    return _cols_payload()
+
+
+def _items14b(js):
+    _snap14.setdefault("hb", _kvrow14())  # 首个条目拉取前至少已跑过一轮集合心跳
+    return _items_payload(js)
+
+
+_set_trpc({"collection.getAllUser": _getalluser14b,
+           "collection.getAllCollectionItems": _items14b})
+r14b = asyncio.run(fav_sync.sync_now())
+assert r14b["status"] == "ok", r14b
+assert cache_store.kv_get(fav_sync._SYNC_LOCK_KEY) is None, "正常轮 finally 应释放锁"
+assert _snap14["hb"] and _snap14["hb"][0] == _snap14["base"][0], _snap14  # 值保持
+assert _snap14["hb"][1] >= _snap14["base"][1], _snap14  # expires_at 已续期
+
+# 负例:下行中锁被"并发轮"换走 → 心跳不覆写,finally 不误删他人 token
+def _steal14(js):
+    cache_store.kv_put(fav_sync._SYNC_LOCK_KEY, "thief", ttl=1800)
+    return _cols_payload()
+
+
+_set_trpc({"collection.getAllUser": _steal14,
+           "collection.getAllCollectionItems": _items_payload})
+r14c = asyncio.run(fav_sync.sync_now())
+assert r14c["status"] == "ok", r14c  # 锁被换走只停续期,不中断本轮
+assert cache_store.kv_get(fav_sync._SYNC_LOCK_KEY) == "thief", "心跳/收尾不得覆写或删除他人 token"
+cache_store.kv_delete(fav_sync._SYNC_LOCK_KEY)  # 清理,不留脏锁
+
 print("test_favsync.py OK")
