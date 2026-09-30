@@ -19,7 +19,7 @@ from contextlib import asynccontextmanager
 import aiohttp
 
 from . import api_cache, config
-from .log import info, warn, error  # 统一日志(E2)
+from .log import info, warn, error, debug, dbg_json  # 统一日志(E2;debug=出站/响应全量)
 
 # 主站用 civitai.red(与 docs/civitai/civitai_pull.py 实测一致):
 # API 与下载端点齐全,且不被 Cloudflare 盯;civitai.com 对代理出口 IP 经常弹网页挑战
@@ -249,6 +249,7 @@ async def open_stream(url, extra_headers=None, timeout=None, allow_redirects=Fal
         kwargs["params"] = _clean_params(params)
     if not via_connector:
         kwargs["proxy"] = p or None
+    debug(f"STREAM GET {url}")
     return await sess.get(url, **kwargs)
 
 
@@ -367,6 +368,8 @@ async def _trpc_request(proc, js, mutation, extra_headers=None):
     kwargs = {"headers": _headers_for(url, base_extra)}
     if not via_connector:
         kwargs["proxy"] = p or None
+    debug(f"tRPC {'mutation' if mutation else 'query'} → {proc}")
+    dbg_json(f"tRPC {proc} 请求", js)
     if mutation:
         kwargs["json"] = {"json": js}
         ctx = sess.post(url, **kwargs)
@@ -380,6 +383,7 @@ async def _trpc_request(proc, js, mutation, extra_headers=None):
                 data = await resp.json(content_type=None)
             except Exception:
                 raise CivitaiError(f"tRPC {proc} 返回非 JSON(HTTP {resp.status})")
+            debug(f"tRPC {proc} ← HTTP {resp.status}")
             if resp.status != 200:
                 err = {}
                 if isinstance(data, dict):
@@ -394,7 +398,9 @@ async def _trpc_request(proc, js, mutation, extra_headers=None):
             if not isinstance(result, dict):
                 return None
             payload = result.get("data")
-            return payload.get("json") if isinstance(payload, dict) else None
+            out = payload.get("json") if isinstance(payload, dict) else None
+            dbg_json(f"tRPC {proc} 响应", out)
+            return out
     except (asyncio.TimeoutError, aiohttp.ClientError) as e:
         raise CivitaiError(net_error_message(e)) from e
 
@@ -412,6 +418,7 @@ async def get_json(path, params=None, timeout=None):
     url = api_root() + path
     if timeout is None:
         timeout = aiohttp.ClientTimeout(total=30, connect=10)
+    debug(f"GET {path} params={_clean_params(params) or {}}")
     wait = _cooldown_until - time.time()
     if wait > 0:
         await asyncio.sleep(wait)  # 已有并发请求触发限流:先共享退避再发
@@ -420,11 +427,13 @@ async def get_json(path, params=None, timeout=None):
         try:
             async with await open_stream(url, params=params, timeout=timeout, allow_redirects=True) as resp:
                 # 状态码先判,网关故障的空/HTML 响应体不必解析
+                debug(f"GET {path} ← HTTP {resp.status}")
                 if resp.status in _RETRYABLE_STATUS:
                     try:
                         ra = float(resp.headers.get("Retry-After") or 0)
                     except ValueError:
                         ra = 0
+                    warn(f"GET {path} ← HTTP {resp.status},自动重试(退避 {min(ra, 5) + 0.8:.1f}s)")
                     raise HtmlChallengeError(f"HTTP {resp.status}(服务端限流/网关抖动,自动重试)",
                                              delay=min(ra, 5) + 0.8)
                 if resp.status != 200:
@@ -453,6 +462,8 @@ async def get_json(path, params=None, timeout=None):
                             f"{resp.status})— 多半被拦截或代理节点异常,换个节点/稍后重试"
                         )
                     raise CivitaiError(f"Civitai 返回非 JSON 数据 (HTTP {resp.status}): {text[:200]}")
+                debug(f"GET {path} ← HTTP 200 ({len(json.dumps(data, ensure_ascii=False)) if isinstance(data, (dict, list)) else '?'} 字节)")
+                dbg_json(f"GET {path} 响应", data)
                 return data
         except HtmlChallengeError as e:
             last_error = e
@@ -467,6 +478,7 @@ async def get_json(path, params=None, timeout=None):
             if "Proxy" in type(e).__name__:
                 raise CivitaiError(net_error_message(e)) from e
             raise
+    error(f"GET {path} 连续 3 次失败: {last_error}")
     if last_error is None:
         raise CivitaiError("请求失败")
     if isinstance(last_error, HtmlChallengeError):

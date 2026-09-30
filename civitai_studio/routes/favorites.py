@@ -60,6 +60,7 @@ async def favorites_toggle(request):
 
 @_post("/civitai_studio/favorites/assign")
 async def favorites_assign(request):
+    """分组赋值:group_ids 数组=多选挂载(跨集合多挂);兼容旧 group_id 单值。"""
     body = await _read_json_dict(request)
     if body is None:
         return _json_error("请求体必须是 JSON 对象", 400)
@@ -67,9 +68,17 @@ async def favorites_assign(request):
     oid = str(body.get("oid") or "")
     if not oid:
         return _json_error("缺少 oid", 400)
-    gid = body.get("group_id")
-    await local_index.run_bg(fs.set_group, kind, oid, (str(gid) if gid else None))
-    return _ok()
+    gids = body.get("group_ids")
+    if not isinstance(gids, list):
+        gid = body.get("group_id")
+        gids = [gid] if gid else []
+    gids = [str(g) for g in gids if g]
+    # 批4 F1:记 UI 实际下发的分组(带组名),排"误挂系统集合"类反馈时有据可查
+    names = {g["gid"]: g["name"] for g in await local_index.run_bg(fs.groups_list)}
+    info("[Civitai-Studio] [UI] 分组赋值: %s %s → [%s]" % (
+        kind, oid, ", ".join("%s(%s)" % (g, names.get(g, "?")) for g in gids) or "无"))
+    n = await local_index.run_bg(fs.set_memberships, kind, oid, gids)
+    return _ok(changed=n)
 
 
 @_post("/civitai_studio/favorites/groups")
@@ -83,10 +92,26 @@ async def favorites_groups(request):
     if body.get("delete"):
         if not gid:
             return _json_error("缺少 gid", 400)
+        remote_deleted = False
+        remote_err = ""
+        if body.get("remote"):  # 连远端:必须前端弹窗确认后才会带此标记
+            g = next((g for g in await local_index.run_bg(fs.groups_list) if g["gid"] == gid), None)
+            cid = (g or {}).get("civitai_id")
+            if cid:
+                try:
+                    await civitai_client.trpc_mutation("collection.delete", {"id": int(cid)})
+                    remote_deleted = True
+                except Exception as e:
+                    remote_err = str(e)[:160]
         await local_index.run_bg(fs.delete_group, gid)
-        return _ok()
+        return _ok(remote_deleted=remote_deleted, remote_error=remote_err)
     if not name:
         return _json_error("缺少分组名", 400)
+    if not gid:  # 批4 E2E 5b:同名组直接复用,杜绝"同名不同 id"的本地分叉(上行再造远端重复)
+        hit = next((x for x in await local_index.run_bg(fs.groups_list)
+                    if (x["name"] or "").strip() == name), None)
+        if hit:
+            return _ok(group=hit, existed=True)
     g = await local_index.run_bg(fs.upsert_group, name, gid, None, 1)  # 本地建/改:dirty=1 待上行
     return _ok(group=g)
 
@@ -115,6 +140,15 @@ async def favorites_import(request):
     except (ValueError, RuntimeError) as e:
         return _json_error(str(e), 400)
     return _ok(imported=n)
+
+
+@_post("/civitai_studio/favorites/reset")
+async def favorites_reset(request):
+    """收藏库全量重置(批A):三表清空+缓存清除,下次同步全量重新下拉。
+    ⚠️ 本地★一并清除 — 前端弹窗强制确认并建议先导出。"""
+    await local_index.run_bg(fs.reset_all)
+    info("[Civitai-Studio] 收藏库已重置(全清),下次同步全量重新下拉")
+    return _ok()
 
 
 @_post("/civitai_studio/favorites/sync")

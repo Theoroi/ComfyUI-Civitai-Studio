@@ -18,7 +18,7 @@ from .. import (api_cache, cache_store, civitai_client, config, downloader, fav_
                 favorites_store as fs, local_index, media_meta)
 from ..bg import spawn as bg_spawn
 from ..version import VERSION, build
-from ..log import info, warn, error
+from ..log import info, warn, error, debug, apply_debug
 from .common import (  # noqa: F401 — 共享工具与跨区状态
     _parse_model_ref, _json_error, _ok, _read_json_dict, _scan_async,
     _ENUMS_TTL, _enums_cache, _VERSION_CACHE, _VERSION_TTL,
@@ -182,8 +182,29 @@ async def get_config(request):
         "tag_and_mode": cfg.get("tag_and_mode", False),
         "cache_max_mb": cfg.get("cache_max_mb", 500),
         "fav_autosync": cfg.get("fav_autosync", False),
-        "fav_pull_legacy": cfg.get("fav_pull_legacy", False),
+        "log_debug": cfg.get("log_debug", False),
+        "nsfw_blur": cfg.get("nsfw_blur") or [],
     })
+
+
+@_post("/civitai_studio/ui_log")
+async def ui_log(request):
+    """前端 toast/关键动作回传日志(批2):sev ∈ info|warn|error,消息原样落 ComfyUI 日志.
+
+    动机(E2E 26 续):用户排障只看后端日志;UI 上的 success/failure 弹窗必须同样
+    留痕——success→info,failure→error。fire-and-forget,失败静默(日志通道不能反噬 UI)。"""
+    body = await _read_json_dict(request)
+    sev = str((body or {}).get("sev") or "info").lower()
+    msg = str((body or {}).get("msg") or "")[:400]
+    if not msg:
+        return _ok()
+    if sev == "error":
+        error("[UI] " + msg)
+    elif sev == "warn":
+        warn("[UI] " + msg)
+    else:
+        info("[UI] " + msg)
+    return _ok()
 
 
 @_post("/civitai_studio/config")
@@ -209,10 +230,20 @@ async def set_config(request):
                 return _json_error(f"{key} 必须是整数", 400)
             partial[key] = max(lo, min(hi, value))
     for key in ("proxy_images", "verify_hash", "persist_description", "tag_scrape", "tag_and_mode",
-                "fav_autosync", "fav_pull_legacy"):
+                "fav_autosync", "log_debug"):
         if key in body:
             partial[key] = bool(body.get(key))
+    if "nsfw_blur" in body:
+        # 分级位掩码数组:只接受 1/2/4/8/16 的组合(批F)
+        try:
+            bits = sorted({int(x) for x in (body.get("nsfw_blur") or [])})
+        except (TypeError, ValueError):
+            return _json_error("nsfw_blur 必须是整数数组", 400)
+        if any(b not in (1, 2, 4, 8, 16) for b in bits):
+            return _json_error("nsfw_blur 只接受分级位 1/2/4/8/16", 400)
+        partial["nsfw_blur"] = bits
     cfg = config.update(partial)
+    apply_debug(bool(cfg.get("log_debug")))  # 调试日志即时生效,无需重启
     key = cfg.get("api_key") or ""
     return web.json_response({
         "status": "ok",

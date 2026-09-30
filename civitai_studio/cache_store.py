@@ -61,6 +61,18 @@ CREATE TABLE IF NOT EXISTS fav_items (
     PRIMARY KEY(kind, oid)
 );
 CREATE INDEX IF NOT EXISTS idx_fav_items_group ON fav_items(group_id);
+CREATE TABLE IF NOT EXISTS fav_item_groups (
+    kind TEXT NOT NULL,            -- 与 fav_items.kind 对应
+    oid TEXT NOT NULL,
+    gid TEXT NOT NULL,             -- fav_groups.gid
+    item_id INTEGER,               -- Civitai collectionItems 主键(removeFromCollection 必需)
+    source TEXT DEFAULT 'local',   -- remote=集合下行镜像 / local=手动分组
+    pushed INTEGER DEFAULT 0,      -- 1=已 saveItem 到远端集合
+    deleted INTEGER DEFAULT 0,     -- 软删:本地移出分组,待 removeFromCollection 对账后硬删
+    added_at REAL,
+    PRIMARY KEY(kind, oid, gid)
+);
+CREATE INDEX IF NOT EXISTS idx_fig_gid ON fav_item_groups(gid);
 CREATE TABLE IF NOT EXISTS fav_groups (
     gid TEXT PRIMARY KEY,
     name TEXT NOT NULL,

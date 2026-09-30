@@ -54,6 +54,8 @@ def _conn():
     if conn is not None:
         _ensure_gpushed(conn)
         _ensure_ctype(conn)
+        _clear_legacy_ctype(conn)
+        _migrate_memberships(conn)
     return conn
 
 
@@ -88,6 +90,240 @@ def _ensure_ctype(conn):
         _ctype_checked = True
     except sqlite3.Error:
         pass
+
+
+_LEGACY_CLEARED = False
+
+
+def _clear_legacy_ctype(conn):
+    """批A:legacy 哨兵机制退役 — 存量 Legacy 组降级为普通本地组(可经组管理删除)."""
+    global _LEGACY_CLEARED
+    if _LEGACY_CLEARED:
+        return
+    try:
+        conn.execute("UPDATE fav_groups SET ctype=NULL WHERE ctype='Legacy'")
+        conn.commit()
+        cache_store.kv_put("fav:legacy_ctype_cleared_v1", True)
+        _LEGACY_CLEARED = True
+    except Exception:
+        pass
+
+
+_FIG_MIGRATED = False
+
+
+def _migrate_memberships(conn):
+    """一次性迁移:fav_items.group_id/gpushed → fav_item_groups 会员行(跨集合挂组,批1-6).
+    旧行只有单 group_id + gpushed(JSON gid 数组);全部视作 source='local',
+    gpushed 里的 gid 记 pushed=1(已上行,item_id 未知→移除对账时按需查询)。
+    Legacy 哨兵组不入会员表(整组垃圾,由 purge_legacy_group 清理)。幂等(kv 旗标)。"""
+    global _FIG_MIGRATED
+    if _FIG_MIGRATED:
+        return
+    try:
+        if cache_store.kv_get("fav:fig_migrated_v1"):
+            _FIG_MIGRATED = True
+            return
+        # 不能走 groups_list()/_conn():本函数在 _conn() 内被调,会无限递归
+        legacy_gids = set()  # legacy 哨兵已退役(ctype 清理迁移在前)
+        rows = conn.execute("SELECT kind, oid, group_id, gpushed FROM fav_items").fetchall()
+        n = 0
+        for kind, oid, group_id, gpushed in rows:
+            pushed = set(json.loads(gpushed)) if gpushed else set()
+            gids = set()
+            if group_id and group_id not in legacy_gids:
+                gids.add(group_id)
+            gids |= {g for g in pushed if g not in legacy_gids}
+            for gid in gids:
+                conn.execute(
+                    "INSERT OR IGNORE INTO fav_item_groups(kind, oid, gid, item_id, source,"
+                    " pushed, deleted, added_at) VALUES(?,?,?,NULL,'local',?,0,?)",
+                    (kind, str(oid), gid, 1 if gid in pushed else 0, time.time()),
+                )
+                n += 1
+        conn.commit()
+        cache_store.kv_put("fav:fig_migrated_v1", True)
+        _FIG_MIGRATED = True
+        if n:
+            info(f"[Civitai-Studio] 收藏会员表迁移完成:{n} 条挂载关系")
+    except Exception as e:
+        error("[Civitai-Studio] 收藏会员表迁移失败(下轮重试):", e)
+
+
+def memberships(kind=None, oid=None, gid=None, include_deleted=False):
+    """会员行查询:条目→组挂载关系(跨集合多挂的唯一事实源).
+    返回 [{kind, oid, gid, item_id, source, pushed, deleted, added_at}]"""
+    conn = _conn()
+    if conn is None:
+        return []
+    sql = "SELECT kind, oid, gid, item_id, source, pushed, deleted, added_at FROM fav_item_groups WHERE 1=1"
+    args = []
+    if kind:
+        sql += " AND kind=?"
+        args.append(kind)
+    if oid:
+        sql += " AND oid=?"
+        args.append(str(oid))
+    if gid:
+        sql += " AND gid=?"
+        args.append(gid)
+    if not include_deleted:
+        sql += " AND deleted=0"
+    with _LOCK:
+        try:
+            return [
+                {"kind": r[0], "oid": r[1], "gid": r[2], "item_id": r[3], "source": r[4],
+                 "pushed": r[5], "deleted": r[6], "added_at": r[7]}
+                for r in conn.execute(sql, args).fetchall()
+            ]
+        except Exception as e:
+            error("[Civitai-Studio] 会员读取失败:", e)
+            return []
+
+
+def _sync_primary_group(conn, kind, oid):
+    """把最老的活动会员回写 fav_items.group_id(前端旧字段/导出兼容列,非事实源)."""
+    try:
+        r = conn.execute(
+            "SELECT gid FROM fav_item_groups WHERE kind=? AND oid=? AND deleted=0"
+            " ORDER BY added_at ASC, gid ASC LIMIT 1", (kind, str(oid)),
+        ).fetchone()
+        conn.execute("UPDATE fav_items SET group_id=? WHERE kind=? AND oid=?",
+                     (r[0] if r else None, kind, str(oid)))
+    except sqlite3.Error:
+        pass
+
+
+def membership_add(kind, oid, gid, source="local", item_id=None, pushed=0, ts=None):
+    """挂载条目到分组.返回 True=新建了活动行(同步计数只认新建);
+    已存在软删行(本地移出待对账)不复活——本地移出优先于远端镜像,直到对账完成."""
+    conn = _conn()
+    if conn is None or not gid:
+        return False
+    with _LOCK:
+        try:
+            r = conn.execute(
+                "SELECT item_id, pushed, deleted FROM fav_item_groups WHERE kind=? AND oid=? AND gid=?",
+                (kind, str(oid), gid)).fetchone()
+            if r:
+                if r[2]:
+                    return False  # 软删待对账:本地移出胜过远端/重复挂载
+                if item_id is not None or pushed:
+                    conn.execute(
+                        "UPDATE fav_item_groups SET item_id=COALESCE(?,item_id),"
+                        " pushed=MAX(pushed,?) WHERE kind=? AND oid=? AND gid=?",
+                        (item_id, pushed, kind, str(oid), gid))
+                    conn.commit()
+                return False
+            conn.execute(
+                "INSERT INTO fav_item_groups(kind, oid, gid, item_id, source, pushed, deleted, added_at)"
+                " VALUES(?,?,?,?,?,?,0,?)",
+                (kind, str(oid), gid, item_id, source, pushed, ts or time.time()))
+            _sync_primary_group(conn, kind, oid)
+            conn.commit()
+            return True
+        except sqlite3.Error as e:
+            error("[Civitai-Studio] 会员写入失败:", e)
+            return False
+
+
+def membership_remove(kind, oid, gid, hard=False):
+    """摘除挂载.pushed=1 的行软删(待 removeFromCollection 对账);未上行的直接硬删.
+    hard=True(远端缺席对账/对账成功)无条件硬删."""
+    conn = _conn()
+    if conn is None or not gid:
+        return False
+    with _LOCK:
+        try:
+            if hard:
+                cur = conn.execute("DELETE FROM fav_item_groups WHERE kind=? AND oid=? AND gid=?",
+                                   (kind, str(oid), gid))
+            else:
+                cur = conn.execute(
+                    "UPDATE fav_item_groups SET deleted=1 WHERE kind=? AND oid=? AND gid=? AND deleted=0"
+                    " AND pushed=1", (kind, str(oid), gid))
+                if cur.rowcount == 0:  # 没推过的挂载没有远端形态:直接硬删
+                    cur = conn.execute("DELETE FROM fav_item_groups WHERE kind=? AND oid=? AND gid=?",
+                                       (kind, str(oid), gid))
+            n = cur.rowcount or 0
+            _sync_primary_group(conn, kind, oid)
+            conn.commit()
+            return n > 0
+        except sqlite3.Error as e:
+            error("[Civitai-Studio] 会员移除失败:", e)
+            return False
+
+
+def set_memberships(kind, oid, gids):
+    """UI 分组赋值(多选):把条目的活动挂载对齐到 gids.
+    新增→source=local pushed=0(等上推);移除→pushed=1 软删(待对账)/未推硬删.
+    返回变更数。"""
+    conn = _conn()
+    if conn is None:
+        return 0
+    want = [str(g) for g in (gids or []) if g]
+    with _LOCK:
+        try:
+            cur_rows = conn.execute(
+                "SELECT gid, pushed FROM fav_item_groups WHERE kind=? AND oid=? AND deleted=0",
+                (kind, str(oid))).fetchall()
+            have = {r[0]: r[1] for r in cur_rows}
+            sys_gids = {r[0] for r in conn.execute(
+                "SELECT gid FROM fav_groups WHERE ctype='Bookmark'").fetchall()}
+            n = 0
+            for gid in want:
+                if gid not in have:
+                    conn.execute(
+                        "INSERT INTO fav_item_groups(kind, oid, gid, item_id, source, pushed, deleted, added_at)"
+                        " VALUES(?,?,?,NULL,'local',0,0,?)", (kind, str(oid), gid, time.time()))
+                    n += 1
+            for gid in have:
+                if gid in sys_gids:
+                    continue  # 批4 F1:系统集合(Liked Models)挂载只读,不因 UI 多选对齐被摘
+                if gid not in want:
+                    if have[gid]:
+                        conn.execute("UPDATE fav_item_groups SET deleted=1 WHERE kind=? AND oid=? AND gid=?",
+                                     (kind, str(oid), gid))
+                    else:
+                        conn.execute("DELETE FROM fav_item_groups WHERE kind=? AND oid=? AND gid=?",
+                                     (kind, str(oid), gid))
+                    n += 1
+            _sync_primary_group(conn, kind, oid)
+            conn.commit()
+            return n
+        except sqlite3.Error as e:
+            error("[Civitai-Studio] 分组赋值失败:", e)
+            return 0
+
+
+def mark_membership_pushed(kind, oid, gid, item_id=None):
+    """saveItem 成功:记 pushed=1 + 集合条目主键(removeFromCollection 必需)."""
+    conn = _conn()
+    if conn is None:
+        return
+    with _LOCK:
+        try:
+            conn.execute(
+                "UPDATE fav_item_groups SET pushed=1, item_id=COALESCE(?, item_id)"
+                " WHERE kind=? AND oid=? AND gid=?",
+                (item_id, kind, str(oid), gid))
+            conn.commit()
+        except sqlite3.Error:
+            pass
+
+
+def mark_membership_removed(kind, oid, gid):
+    """removeFromCollection 成功:软删行硬删(对账闭环)."""
+    conn = _conn()
+    if conn is None:
+        return
+    with _LOCK:
+        try:
+            conn.execute("DELETE FROM fav_item_groups WHERE kind=? AND oid=? AND gid=?",
+                         (kind, str(oid), gid))
+            conn.commit()
+        except sqlite3.Error:
+            pass
 
 
 def _migrate_legacy():
@@ -132,12 +368,29 @@ def list_items(kind=None, group_id=None, include_deleted=False):
             if kind:
                 sql += " AND kind=?"
                 args.append(kind)
-            if group_id:  # 空串表示"未分组":group_id IS NULL
-                sql += " AND group_id=?" if group_id != "_" else " AND group_id IS NULL"
-                if group_id != "_":
+            if group_id:  # "_"=未分组(无任何活动挂载);其余按会员表过滤(group_ids 为事实源)
+                if group_id == "_":
+                    sql += " AND NOT EXISTS (SELECT 1 FROM fav_item_groups f WHERE"
+                    sql += " f.kind=fav_items.kind AND f.oid=fav_items.oid AND f.deleted=0)"
+                else:
+                    sql += " AND EXISTS (SELECT 1 FROM fav_item_groups f WHERE f.gid=?"
+                    sql += " AND f.kind=fav_items.kind AND f.oid=fav_items.oid AND f.deleted=0)"
                     args.append(group_id)
             rows = conn.execute(sql + " ORDER BY updated_at DESC", args).fetchall()
-            return [_row(r) for r in rows]
+            out = [_row(r) for r in rows]
+            # 挂载关系(fav_item_groups)是分组事实源;group_ids=条目当前全部组(跨集合多挂),
+            # mem_pushed=各组上行状态(E2E #10 上推角标数据源)
+            by_key, push_key = {}, {}
+            for r in conn.execute(
+                "SELECT kind, oid, gid, pushed FROM fav_item_groups WHERE deleted=0"
+                " ORDER BY added_at ASC"
+            ).fetchall():
+                by_key.setdefault((r[0], r[1]), []).append(r[2])
+                push_key.setdefault((r[0], r[1]), {})[r[2]] = r[3]
+            for it in out:
+                it["group_ids"] = by_key.get((it["kind"], it["oid"]), [])
+                it["mem_pushed"] = push_key.get((it["kind"], it["oid"]), {})
+            return out
         except Exception as e:
             error("[Civitai-Studio] 收藏读取失败:", e)
             return []
@@ -152,7 +405,13 @@ def get_item(kind, oid):
             r = conn.execute(
                 f"SELECT {_COLS} FROM fav_items WHERE kind=? AND oid=?", (kind, str(oid))
             ).fetchone()
-            return _row(r) if r else None
+            if not r:
+                return None
+            it = _row(r)
+            ms = memberships(kind, str(oid))  # 挂载为事实源,与 list_items 同口径
+            it["group_ids"] = [m["gid"] for m in ms]
+            it["mem_pushed"] = {m["gid"]: m["pushed"] for m in ms}
+            return it
         except Exception:
             return None
 
@@ -173,6 +432,10 @@ def toggle(kind, oid, fields=None):
                     "UPDATE fav_items SET deleted=1, dirty=1, updated_at=? WHERE kind=? AND oid=?",
                     (now, kind, oid),
                 )
+                # 取消收藏=退出本地收藏库:挂载一并退场(pushed=1 软删待 removeFromCollection,
+                # 未推的硬删)——否则远端集合里的条目会在下轮下行把墓碑复活成"created"
+                for g in (cur.get("group_ids") or []):
+                    membership_remove(kind, oid, g, hard=False)
                 conn.commit()
                 return False
             base = cur or {}
@@ -185,6 +448,12 @@ def toggle(kind, oid, fields=None):
                  json.dumps(extra, ensure_ascii=False) if extra else None,
                  json.dumps(base["gpushed"], ensure_ascii=False) if base.get("gpushed") else None),
             )
+            if f.get("group_id"):  # ★+指定组一次落库:同记会员行(UI 弹组选择器的写入路径)
+                conn.execute(
+                    "INSERT OR IGNORE INTO fav_item_groups(kind, oid, gid, item_id, source,"
+                    " pushed, deleted, added_at) VALUES(?,?,?,NULL,'local',0,0,?)",
+                    (kind, oid, f["group_id"], now))
+            _sync_primary_group(conn, kind, oid)
             conn.commit()
             return True
         except Exception as e:
@@ -193,15 +462,19 @@ def toggle(kind, oid, fields=None):
 
 
 def upsert_remote(kind, oid, *, name=None, cover=None, group_id=None, extra=None,
-                  remote_updated=None, deleted=False):
-    """远端条目落地.裁决(依审计收紧):
-    - 本地墓碑 → 一律保持(终局):本地取消不被远端拉回,复活须本地显式★;
-      否则无上推通道的资产取消会在下次同步被静默撤销
+                  remote_updated=None, override_group=False, resurrect=False):
+    """远端条目落地.裁决:
+    - 本地墓碑 → 一律保持(终局):本地取消不被远端拉回;其上行移除闭环是
+      removeFromCollection 成功后 mark_synced 删行,下轮下行远端已无此条目
     - 活动行 dirty → 让位(本地改动等上推)
-    - 其余:收为/刷新为 src=remote dirty=0;updated_at 记远端时间(无则本地时刻)"""
+    - 组归属:override_group=True(集合条目,远端权威镜像)时传 group_id 即覆盖;
+      False 时只填空缺、绝不覆盖既有组(保护用户手动分组)
+    - 其余:收为/刷新为 src=remote dirty=0;updated_at 记远端时间(无则本地时刻)
+    返回落库状态 "created"(首入库,同步计数)/"updated"(刷新)/"blocked"(墓碑或
+    dirty 挡下) — 计数不得把刷新/挡下算进"下拉"(E2E 7 根因之二)。"""
     conn = _conn()
     if conn is None:
-        return
+        return "blocked"
     oid = str(oid)
     ru = float(remote_updated or 0.0)
     now = time.time()
@@ -209,13 +482,24 @@ def upsert_remote(kind, oid, *, name=None, cover=None, group_id=None, extra=None
         try:
             cur = get_item(kind, oid)
             if cur and cur["deleted"]:
-                return  # 墓碑终局
+                # 资产(无收藏状态上行通道)墓碑 + 远端集合仍挂着它 + 本地没有在途
+                # 移除(软删挂载) → 旧引擎遗留的脏墓碑,复活镜像远端(E2E 真值对照:
+                # 两张 Images 集合图卡死在 deleted=1 dirty=1 永不下拉)
+                _soft = [m for m in memberships(kind, oid, include_deleted=True) if m["deleted"]]
+                if resurrect and kind == KIND_ASSET and not _soft:
+                    conn.execute("UPDATE fav_items SET deleted=0, dirty=0, updated_at=?"
+                                 " WHERE kind=? AND oid=?", (ru or now, kind, oid))
+                    conn.commit()
+                    cur = get_item(kind, oid)
+                if cur and cur["deleted"]:
+                    return "blocked"  # 墓碑终局
             if cur and cur["dirty"]:
-                return  # 本地改动待上推
+                return "blocked"  # 本地改动待上推
             base = cur or {}
+            gid = group_id if (override_group and group_id) else (base.get("group_id") or group_id)
             conn.execute(
                 _INS,
-                (kind, oid, group_id or base.get("group_id"),
+                (kind, oid, gid,
                  name or base.get("name"), cover or base.get("cover"),
                  base.get("added_at") or now, ru or now, "remote", 0, 0,
                  json.dumps(extra, ensure_ascii=False) if extra else
@@ -223,22 +507,16 @@ def upsert_remote(kind, oid, *, name=None, cover=None, group_id=None, extra=None
                  json.dumps(base["gpushed"], ensure_ascii=False) if base.get("gpushed") else None),
             )
             conn.commit()
+            return "updated" if base else "created"  # 复活也记 created(真落地)
         except Exception as e:
             error("[Civitai-Studio] 远端收藏写入失败:", e)
+            return "blocked"
 
 
 def set_group(kind, oid, group_id):
-    """分组是本地组织行为,不动 dirty(分组不应触发模型收藏上推/冻结远端更新)."""
-    conn = _conn()
-    if conn is None:
-        return
-    with _LOCK:
-        try:
-            conn.execute("UPDATE fav_items SET group_id=? WHERE kind=? AND oid=?",
-                         (group_id or None, kind, str(oid)))
-            conn.commit()
-        except Exception as e:
-            error("[Civitai-Studio] 收藏分组失败:", e)
+    """分组是本地组织行为,不动 dirty(分组不应触发模型收藏上推/冻结远端更新).
+    事实源是 fav_item_groups(跨集合多挂);单 group_id 参数=对齐到唯一组。"""
+    set_memberships(kind, oid, [group_id] if group_id else [])
 
 
 def mark_synced(kind, oid, expected_updated=None):
@@ -295,6 +573,12 @@ def upsert_group(name, gid=None, civitai_id=None, dirty=0, updated_at=None, ctyp
                 # 同步反复落地同一集合:按 civitai_id 复用既有 gid,防分组无限膨胀
                 r = conn.execute("SELECT gid FROM fav_groups WHERE civitai_id=?",
                                  (civitai_id,)).fetchone()
+                if not r:
+                    # 批4 E2E 5b:同名未绑定组(本地新建待上行)与下行同名集合合并,
+                    # 防"同名不同 id"的本地分叉上行后再造远端重复集合
+                    r = conn.execute(
+                        "SELECT gid FROM fav_groups WHERE name=? AND (civitai_id IS NULL OR civitai_id=0)"
+                        " ORDER BY updated_at DESC LIMIT 1", (name,)).fetchone()
                 if r:
                     gid = r[0]
             if not gid:
@@ -332,59 +616,37 @@ def upsert_group(name, gid=None, civitai_id=None, dirty=0, updated_at=None, ctyp
             return None
 
 
-LEGACY_CTYPE = "Legacy"
-
-
-def ensure_legacy_group():
-    """Legacy 分组(旧版图片收藏专用落点):ctype='Legacy' 哨兵 — 上行引擎跳过它,
-    永不建远端集合/推条目;分组下拉只在资产 kind 下展示。幂等。"""
-    for g in groups_list():
-        if g.get("ctype") == LEGACY_CTYPE:
-            return g["gid"]
-    # 用户早建过同名普通组:仅收编"干净"的(dirty=0 且未绑定集合)——dirty 组正等上推
-    # 建远端集合,已绑定组有归属语义,改 ctype 会静默冻结其上行(评审R1 F4)
-    for g in groups_list():
-        if g["name"] == "Legacy" and not g.get("civitai_id") and not g.get("ctype") and not g["dirty"]:
-            conn = _conn()
-            if conn is not None:
-                with _LOCK:
-                    try:
-                        conn.execute("UPDATE fav_groups SET ctype=? WHERE gid=?",
-                                     (LEGACY_CTYPE, g["gid"]))
-                        conn.commit()
-                    except sqlite3.Error:
-                        pass
-            return g["gid"]
-    g = upsert_group("Legacy", dirty=0, ctype=LEGACY_CTYPE)
-    return g["gid"] if g else None
-
-
-def purge_legacy_ungrouped():
-    """清空 legacy 拉取残留:src=remote + 未分组 + 未 dirty 的资产行只可能来自
-    旧版 /images?favorites=true 下行(集合条目必带 group_id,本地★必为 src=local),
-    关闭 legacy 下行后它们在 Civitai web 上已不可见 → 物理删除。返回删除行数。"""
+def reset_all():
+    """收藏库全量重置(用户拍板:全清)— 三表清空 + 同步缓存/迁移旗标清除,
+    下次同步从 Civitai 全量重新下拉。⚠️ 本地★一并清除,重置前请先导出备份。"""
     conn = _conn()
     if conn is None:
-        return 0
+        raise RuntimeError("sqlite 不可用")
     with _LOCK:
-        try:
-            cur = conn.execute(
-                "DELETE FROM fav_items WHERE kind=? AND src='remote' AND group_id IS NULL"
-                " AND dirty=0 AND deleted=0", (KIND_ASSET,))
-            conn.commit()
-            return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
-        except Exception as e:
-            error("[Civitai-Studio] legacy 残留清理失败:", e)
-            return 0
+        conn.execute("DELETE FROM fav_items")
+        conn.execute("DELETE FROM fav_item_groups")
+        conn.execute("DELETE FROM fav_groups")
+        conn.commit()
+    cache_store.kv_delete("fav:colitems_v2")
+    cache_store.kv_delete("fav:fig_migrated_v1")
+    cache_store.kv_delete("fav:legacy_ctype_cleared_v1")
+    cache_store.kv_delete("legacy_purged_v2")
+    global _FIG_MIGRATED
+    _FIG_MIGRATED = False
 
 
 def delete_group(gid):
-    """删组不删条目:组内条目回到未分组."""
+    """删组不删条目:组内条目回到未分组(挂载行一并删除)."""
     conn = _conn()
     if conn is None:
         return
     with _LOCK:
         try:
+            affected = conn.execute(
+                "SELECT kind, oid FROM fav_item_groups WHERE gid=? AND deleted=0", (gid,)).fetchall()
+            conn.execute("DELETE FROM fav_item_groups WHERE gid=?", (gid,))
+            for kind, oid in affected:
+                _sync_primary_group(conn, kind, oid)
             conn.execute("UPDATE fav_items SET group_id=NULL WHERE group_id=?", (gid,))
             conn.execute("DELETE FROM fav_groups WHERE gid=?", (gid,))
             conn.commit()
@@ -443,6 +705,21 @@ def purge_tombstones(older_than=_TOMBSTONE_TTL):
             pass
 
 
+def mark_remote_tombstone(kind, oid):
+    """对账墓碑(站方已把条目移出全部集合):deleted=1, dirty=0 — 30 天后随
+    purge_tombstones 兜底清除;不复活为活动行,除非远端重新出现(重新入库)。"""
+    conn = _conn()
+    if conn is None:
+        return
+    with _LOCK:
+        try:
+            conn.execute("UPDATE fav_items SET deleted=1, dirty=0, updated_at=?"
+                         " WHERE kind=? AND oid=?", (time.time(), kind, str(oid)))
+            conn.commit()
+        except Exception:
+            pass
+
+
 def mark_remote_absent(kind, seen_oids, now=None):
     """远端缺席对账:src=remote、未 dirty、仍活动的条目本次远端列表未出现 → 落墓碑
     (远端已取消收藏).只对模型做——资产收藏与集合条目重叠,缺席≠取消."""
@@ -471,20 +748,17 @@ def mark_remote_absent(kind, seen_oids, now=None):
 
 def export_json():
     return {
-        "version": 2,
+        "version": 3,
         "exported_at": time.time(),
         "groups": groups_list(),
         "items": list_items(include_deleted=True),
+        "memberships": memberships(include_deleted=True),
     }
 
 
 def _import_src(it):
-    """导入行 src 归一:未分组 remote 资产改标 local——该签名行与 legacy 残留一次性
-    清理(purge_legacy_ungrouped)的删除条件完全重合,导入的数据不应被同步吞掉(评审R1 F3)."""
-    src = it.get("src") or "local"
-    if it.get("kind") == KIND_ASSET and src == "remote" and not it.get("group_id"):
-        return "local"
-    return src
+    """导入行 src 归一:缺省 local."""
+    return it.get("src") or "local"
 
 
 def import_json(payload, replace=False):
@@ -502,6 +776,7 @@ def import_json(payload, replace=False):
             if replace:
                 conn.execute("DELETE FROM fav_items")
                 conn.execute("DELETE FROM fav_groups")
+                conn.execute("DELETE FROM fav_item_groups")
             for g in groups:
                 if not isinstance(g, dict) or not g.get("name"):
                     continue
@@ -532,6 +807,25 @@ def import_json(payload, replace=False):
                      if isinstance(it.get("gpushed"), list) else None),
                 )
                 n += 1
+            # 挂载:导入文件带 memberships 用之(v3);否则按 group_id 派生(v2 兼容)
+            ms = payload.get("memberships")
+            if not isinstance(ms, list):
+                ms = [{"kind": it["kind"], "oid": it["oid"], "gid": it["group_id"]}
+                      for it in items if isinstance(it, dict) and it.get("group_id")
+                      and it.get("kind") in (KIND_MODEL, KIND_ASSET)]
+            for m in ms:
+                if not isinstance(m, dict) or not m.get("gid"):
+                    continue
+                conn.execute(
+                    "INSERT OR REPLACE INTO fav_item_groups(kind, oid, gid, item_id, source,"
+                    " pushed, deleted, added_at) VALUES(?,?,?,?,?,?,?,?)",
+                    (str(m.get("kind")), str(m.get("oid")), str(m["gid"]), m.get("item_id"),
+                     str(m.get("source") or "local"), 1 if m.get("pushed") else 0,
+                     1 if m.get("deleted") else 0, float(m.get("added_at") or now)),
+                )
+            for row in conn.execute(
+                "SELECT DISTINCT kind, oid FROM fav_item_groups WHERE deleted=0").fetchall():
+                _sync_primary_group(conn, row[0], row[1])
             conn.commit()
             return {"groups": len(groups), "items": n}
         except Exception as e:

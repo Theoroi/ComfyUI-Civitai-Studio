@@ -62,6 +62,8 @@ class CivitaiImageSearch:
             "tags_selected": ("STRING", {"default": ""}),
             "period": (["AllTime", "Month", "Week", "Day"],),
             "sort": (["Newest", "Most Reactions", "Most Comments", "Most Collected", "Oldest", "Random"],),
+            # 批E E2E:limit 不再是可调节项 — 前端隐藏 widget 并钉值 50(保留 INPUT_TYPES
+            # 兼容旧工作流序列化);后端 clamp 继续兜底
             "limit": ("INT", {"default": 50, "min": 10, "max": 100, "step": 10}),
             "index": ("INT", {"default": 0, "min": 0, "max": 199}),
         },

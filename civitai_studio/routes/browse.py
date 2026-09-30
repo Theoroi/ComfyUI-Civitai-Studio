@@ -93,9 +93,13 @@ async def search_models(request):
     # 翻页用 cursor(metadata.nextCursor)透传。
     if q.get("cursor"):
         params["cursor"] = q["cursor"]
-    for key in ("query", "types", "baseModels", "sort", "period"):
+    for key in ("query", "types", "baseModels", "sort", "period", "tag"):  # tag:实测 /models 仅支持单值
         if q.get(key):
-            params[key] = q[key]
+            # baseModels 多值(E2E g):前端逗号串 → 重复键(站方多值查询格式)
+            if key == "baseModels" and "," in q[key]:
+                params[key] = [v.strip() for v in q[key].split(",") if v.strip()]
+            else:
+                params[key] = q[key]
     try:
         data = await civitai_client.get_json("/models", params=params)
     except civitai_client.CivitaiError as e:
@@ -138,7 +142,11 @@ async def version_images(request):
         params["postId"] = q["postId"]
     for key in ("baseModels", "tags"):
         if q.get(key):
-            params[key] = q[key]
+            # 多值(E2E g):逗号串 → 重复键(站方多值查询格式)
+            if "," in q[key]:
+                params[key] = [v.strip() for v in q[key].split(",") if v.strip()]
+            else:
+                params[key] = q[key]
     # 官方文档:meta 需 withMeta=true 显式请求,否则 feed 条目一律不带生成参数
     params["withMeta"] = "true"
     if q.get("sort"):

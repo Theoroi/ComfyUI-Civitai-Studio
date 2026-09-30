@@ -23,6 +23,7 @@ EXPECTED = sorted([
     ("GET", "/civitai_studio/version"), ("GET", "/civitai_studio/version/{vid}"),
     ("GET", "/civitai_studio/workflow_extracts"), ("POST", "/civitai_studio/cache_clear"),
     ("POST", "/civitai_studio/config"), ("POST", "/civitai_studio/download"),
+    ("POST", "/civitai_studio/ui_log"), ("POST", "/civitai_studio/favorites/reset"),
     ("POST", "/civitai_studio/downloads/cancel"), ("POST", "/civitai_studio/downloads/clear"),
     ("POST", "/civitai_studio/downloads/retry"), ("POST", "/civitai_studio/embedded_meta"),
     ("POST", "/civitai_studio/extract_workflow"), ("POST", "/civitai_studio/favorites/assign"),
@@ -43,11 +44,11 @@ if routes.ROUTES is None:
     print("PASS test_routes_contract (production branch, snapshot N/A)")
     raise SystemExit(0)
 got = sorted(routes.ROUTES)
-assert len(got) == 46, f"路由数变化: {len(got)} (期望 46) — 若有意增删请同步更新本快照"
+assert len(got) == 48, f"路由数变化: {len(got)} (期望 48) — 若有意增删请同步更新本快照"
 assert got == EXPECTED, set(got) ^ set(EXPECTED)
 
 # 请求形状抽样:错误体形状一致({"error": str})
 err = routes._json_error(" boom ", 400)
 assert err.status == 400 and err.content_type == "application/json"
 
-print("PASS test_routes_contract (46 endpoints)")
+print(f"PASS test_routes_contract ({len(got)} endpoints)")

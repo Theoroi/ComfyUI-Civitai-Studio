@@ -24,8 +24,9 @@ DEFAULTS = {
     "tag_scrape": True,     # 是否读取非公开 API 抓取图片分类标签
     "tag_and_mode": False,  # 实验选项:多标签筛选改漏斗式 AND(默认 OR,API 原生语义)
     "cache_max_mb": 500,    # 磁盘缓存上限 MB(50~2000),见 docs/plans/completed/cache-design.md
-    "fav_autosync": False,  # 收藏与 Civitai 账号自动同步(开面板时触发,冲突按最新时间覆盖)
-    "fav_pull_legacy": False,  # 下拉旧版图片收藏(改版前遗留表,web 已不可见);默认关,开启落 Legacy 分组
+    "fav_autosync": False,
+    "log_debug": False,
+    "nsfw_blur": [8, 16],    # NSFW 模糊遮罩:命中的分级位(PG=1,PG13=2,R=4,X=8,XXX=16)图片加模糊,默认 X/XXX      # 调试日志:出站请求/响应/同步逐条决策落控制台(等效 --verbose,免启动参数)  # 收藏与 Civitai 账号自动同步(开面板时触发,冲突按最新时间覆盖)
 }
 
 
