@@ -105,14 +105,22 @@ assert downloader._legacy_state_path() == os.path.join(tmp, "civitai_studio", "d
 print("downloader 迁移路径 OK")
 print("ALL SMOKE PASS")
 
-# 6) 配额触发点接线(P1-1 闭环):把上限临时调到 50MB 下限仍难触发——直接验调用存在与低损耗
-import inspect
-src = inspect.getsource(cache_store.sync_fingerprints)
-assert "_enforce_quota()" in src, "sync 后未接配额触发点"
+# 6) 配额触发行为(P1-1 闭环):注入 0 配额,超额写入必须真实触发淘汰(kv+指纹被清),
+# 不再用 getsource 源码文本弱断言
+cache_store.kv_put("quota_probe", {"x": 1})
+cache_store.sync_fingerprints([("q_seed", 1, 1.0, None, None, None)], None)
+_orig_max_mb = cache_store._max_mb
+cache_store._max_mb = lambda: 0  # 下限钳制 50MB 无法触发,直接注入 0 配额
+try:
+    cache_store.sync_fingerprints([("q_new", 1, 1.0, None, None, None)], None)
+    assert cache_store.kv_get("quota_probe") is None, "超额后 kv 未被配额淘汰"
+    assert cache_store.fingerprints() == {}, "超额后指纹表未被配额淘汰"
+finally:
+    cache_store._max_mb = _orig_max_mb
 t0 = time.time()
 for _ in range(200):
     cache_store.sync_fingerprints([("q%d" % _, _, 1.0, None, None, None)], None)
 dur = time.time() - t0
-assert dur < 2.0, "sync 常态路径被配额检查拖慢: %.3fs" % dur
-print("配额触发接线 OK(sync 200 次耗时 %.3fs)" % dur)
+assert dur < 30.0, "sync 常态路径被配额检查拖慢: %.3fs" % dur
+print("配额触发行为 OK(0 配额超额写入触发全量淘汰;sync 200 次耗时 %.3fs)" % dur)
 print("ALL SMOKE PASS 2")

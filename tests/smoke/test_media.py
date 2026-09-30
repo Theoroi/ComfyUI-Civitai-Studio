@@ -49,8 +49,16 @@ print("媒体缓存冒烟全过")
 cache_store.media_store("https://x/c.png", "image/png", b"c" * 1000)
 u = cache_store.usage()
 assert u >= 1000, u
-# 配额联动:_max_mb 下限 50MB 触发不了,直接验证 media_evict 被 _enforce_quota 引用
-import inspect
-assert "media_evict(limit)" in inspect.getsource(cache_store._enforce_quota)
+# 配额联动(行为断言):注入 0 配额 → _enforce_quota 必须真实调用 media_evict 清掉媒体文件
+_orig_max_mb = cache_store._max_mb
+cache_store._max_mb = lambda: 0  # 下限钳制 50MB 无法触发,直接注入 0 配额
+try:
+    cache_store.kv_put("quota_probe", 1)  # kv_put 后置配额检查 → 连带媒体淘汰
+    leftover = ([f for f in os.listdir(cache_store.media_dir()) if f.endswith(".bin")]
+                if os.path.isdir(cache_store.media_dir()) else [])
+    assert leftover == [], "超额后媒体 .bin 未被配额淘汰: %r" % leftover
+    assert cache_store.media_lookup("https://x/c.png") is None, "超额后媒体元数据未被淘汰"
+finally:
+    cache_store._max_mb = _orig_max_mb
 print("usage 递归统计 OK:", u)
 print("ALL MEDIA PASS 2")
