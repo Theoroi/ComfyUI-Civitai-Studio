@@ -389,6 +389,7 @@ async def _trpc_request(proc, js, mutation, extra_headers=None):
                 if isinstance(data, dict):
                     err = ((data.get("error") or {}).get("json")) or {}
                 msg = err.get("message") or f"HTTP {resp.status}"
+                warn(f"tRPC {proc} ← HTTP {resp.status}: {str(msg)[:160]}")  # 批5.1:请求错误落日志
                 if err.get("code") == -32003 or "required scope" in str(msg):
                     raise TrpcScopeError(f"{proc}: 当前 API Key 缺少所需作用域 — 请到 Civitai 账户设置重建 Key 并勾选相应权限")
                 raise CivitaiError(f"tRPC {proc}: {str(msg)[:200]}")
@@ -434,7 +435,12 @@ async def get_json(path, params=None, timeout=None):
                     except ValueError:
                         ra = 0
                     delay = min(max(7 * (2 ** attempt), ra), 120)  # 批5 b:7/14/28/56/112s,Retry-After 更大则从其
-                    warn(f"GET {path} ← HTTP {resp.status},自动重试 {attempt + 1}/5(退避 {delay:.0f}s)")
+                    try:
+                        snippet = (await resp.text())[:200].replace("\n", " ")  # 批5.1:错误体进日志(如 503 overloaded 原话)
+                    except Exception:
+                        snippet = ""
+                    warn(f"GET {path} ← HTTP {resp.status},自动重试 {attempt + 1}/5(退避 {delay:.0f}s)"
+                         + (f" | {snippet}" if snippet else ""))
                     raise HtmlChallengeError(f"HTTP {resp.status}(服务端限流/网关抖动,自动重试)", delay=delay)
                 if resp.status != 200:
                     try:

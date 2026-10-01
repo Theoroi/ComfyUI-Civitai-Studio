@@ -61,7 +61,7 @@ function fmtSelHtml(cur) {
     return ["all", "jpg", "png", "webp", "gif", "video"].map((f) =>
         `<option value="${f}" ${(cur || "all") === f ? "selected" : ""}>${f === "all" ? esc(t("fmtAll")) : f === "video" ? esc(t("fmtVideo")) : f.toUpperCase()}</option>`).join("");
 }
-const JS_VERSION = "0.9.1";
+const JS_VERSION = "0.9.2";
 
 // ---------- i18n ----------
 const STR = {
@@ -675,6 +675,25 @@ function toast(sev, summary, detail) {
     } catch (e2) { /* 日志通道永不反噬 UI */ }
 }
 
+// 批5.1:请求错误落日志(同 path+status 10s 限频,防画廊连败刷屏);控制台 + 服务端 [UI] 双写
+const _netErrAt = {};
+function logNetError(url, status, msg) {
+    const path = String(url || "").split("?")[0];
+    const key = status + "|" + path;
+    const now = Date.now();
+    if (_netErrAt[key] && now - _netErrAt[key] < 10000) return;
+    _netErrAt[key] = now;
+    const line = `[HTTP ${status}] ${path} ${String(msg || "").slice(0, 200)}`;
+    console.error("[Civitai-Studio][net] " + line);
+    try {
+        api.fetchApi("/civitai_studio/ui_log", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sev: "error", msg: line }),
+        }).catch(() => {});
+    } catch (e) { /* 日志通道永不反噬 UI */ }
+}
+
 async function apiJson(url, opts) {
     // ComfyUI API 响应无缓存头,webview 启发式缓存会把旧响应(例如服务端重启前
     // 的默认热榜)冒充新结果;no-store + 时间戳双保险绕开
@@ -682,15 +701,23 @@ async function apiJson(url, opts) {
     if ((!opts || !opts.method) && url.startsWith("/civitai_studio/")) {
         fullUrl += (url.includes("?") ? "&" : "?") + "_=" + Date.now();
     }
-    const resp = await api.fetchApi(fullUrl, { ...(opts || {}), cache: "no-store" });
+    let resp;
+    try {
+        resp = await api.fetchApi(fullUrl, { ...(opts || {}), cache: "no-store" });
+    } catch (e) {
+        logNetError(url, 0, (e && e.message) || "网络异常"); // 批5.1:网络层失败(断网/代理挂)也落日志
+        throw e;
+    }
     let data = null;
     try { data = await resp.json(); } catch (e) { /* empty body */ }
     if (!resp.ok) {
+        const msg = (data && data.error) || `HTTP ${resp.status}`;
+        logNetError(url, resp.status, msg); // 批5.1:请求错误信息写入日志
         if (resp.status === 405 && url.startsWith("/civitai_studio/")) {
             // POST 落到了静态文件处理器 = 服务端还没有这条新路由
             throw new Error(t("route405"));
         }
-        throw new Error((data && data.error) || `HTTP ${resp.status}`);
+        throw new Error(msg);
     }
     return data;
 }

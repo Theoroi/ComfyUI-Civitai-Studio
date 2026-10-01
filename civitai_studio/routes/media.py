@@ -69,9 +69,11 @@ async def image_proxy(request):
                             headers[k] = resp.headers[k]
                     return web.Response(status=206, body=body, content_type=ctype, headers=headers)
                 if resp.status != 200:
+                    warn(f"图片中转失败: HTTP {resp.status} url={url[:120]}")  # 批5.1:请求错误落日志
                     return _json_error(f"图片中转失败: HTTP {resp.status}", 502)
                 ctype = (resp.content_type or "").split(";")[0]
                 if not (ctype.startswith("image/") or ctype.startswith("video/")):
+                    warn(f"图片中转失败: 非 media 内容 {ctype} url={url[:120]}")  # 批5.1
                     return _json_error("图片中转失败: 上游返回的不是图片/视频(可能被 WAF 拦截),可尝试更换代理节点", 502)
                 body = await resp.content.read(20 * 1024 * 1024 + 1)
                 if len(body) > 20 * 1024 * 1024:
@@ -83,6 +85,7 @@ async def image_proxy(request):
                                              "Accept-Ranges": "bytes"})
         return _json_error("图片重定向次数过多", 502)
     except Exception as e:
+        warn(f"图片中转异常: {civitai_client.net_error_message(e)} url={url[:120]}")  # 批5.1:请求错误落日志
         return _json_error(f"图片中转失败: {civitai_client.net_error_message(e)}", 502)
 
 

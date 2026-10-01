@@ -2,6 +2,13 @@
 
 格式参照 Keep a Changelog;项目版本号见 `pyproject.toml` 与 `civitai_studio/version.py`。
 
+## [0.9.2] - 2026-09-30(请求错误全量落日志)
+
+- **前端 apiJson**：HTTP 非 2xx 与网络层失败(断网/代理挂)→ 控制台 `[Civitai-Studio][net]` + 服务端 `[UI]` 日志双写,含状态码/路径/错误摘要;同 path+status 10s 限频防刷屏
+- **服务端 GET 重试分支**：warn 行补响应体片段——503 时能看到站方原话(如 "Image search is temporarily overloaded"),不再只有状态码
+- **tRPC 非 200**：proc+状态+错误摘要在 tRPC 层即落 warn(此前只有调用层转译后的 error)
+- **图片代理**：上游非 200/非 media 内容/异常三个失败分支落 warn(含 url)
+
 ## [0.9.1] - 2026-09-30(批5:E2E 反馈第二轮)
 
 ### 菜单/👁 家族(1/2/3/15)
