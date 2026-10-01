@@ -418,12 +418,12 @@ async def get_json(path, params=None, timeout=None):
     url = api_root() + path
     if timeout is None:
         timeout = aiohttp.ClientTimeout(total=30, connect=10)
-    debug(f"GET {path} params={_clean_params(params) or {}}")
+    debug(f"GET {path}" + (("?" + urllib.parse.urlencode(params, doseq=True)) if params else ""))  # 批5 f:query 全文
     wait = _cooldown_until - time.time()
     if wait > 0:
         await asyncio.sleep(wait)  # 已有并发请求触发限流:先共享退避再发
     last_error = None
-    for attempt in range(3):  # WAF 拦截/限流/网络抖动:换连接重试
+    for attempt in range(5):  # 批5 b:退避 7s 起指数递增,最多 5 次尝试(WAF 拦截/限流/网络抖动:换连接重试)
         try:
             async with await open_stream(url, params=params, timeout=timeout, allow_redirects=True) as resp:
                 # 状态码先判,网关故障的空/HTML 响应体不必解析
@@ -433,9 +433,9 @@ async def get_json(path, params=None, timeout=None):
                         ra = float(resp.headers.get("Retry-After") or 0)
                     except ValueError:
                         ra = 0
-                    warn(f"GET {path} ← HTTP {resp.status},自动重试(退避 {min(ra, 5) + 0.8:.1f}s)")
-                    raise HtmlChallengeError(f"HTTP {resp.status}(服务端限流/网关抖动,自动重试)",
-                                             delay=min(ra, 5) + 0.8)
+                    delay = min(max(7 * (2 ** attempt), ra), 120)  # 批5 b:7/14/28/56/112s,Retry-After 更大则从其
+                    warn(f"GET {path} ← HTTP {resp.status},自动重试 {attempt + 1}/5(退避 {delay:.0f}s)")
+                    raise HtmlChallengeError(f"HTTP {resp.status}(服务端限流/网关抖动,自动重试)", delay=delay)
                 if resp.status != 200:
                     try:
                         data = await resp.json(content_type=None)
@@ -467,22 +467,22 @@ async def get_json(path, params=None, timeout=None):
                 return data
         except HtmlChallengeError as e:
             last_error = e
-            _cooldown_until = max(_cooldown_until, time.time() + min(e.delay, 5))
+            _cooldown_until = max(_cooldown_until, time.time() + min(e.delay, 120))
             await close_session()  # 强制换新连接,负载均衡场景下换一个出口
             await asyncio.sleep(e.delay)
         except (asyncio.TimeoutError, aiohttp.ClientError) as e:
             last_error = CivitaiError(net_error_message(e))
             await close_session()
-            await asyncio.sleep(0.8)
+            await asyncio.sleep(min(7 * (2 ** attempt), 60))  # 批5 b:网络抖动也走指数退避
         except Exception as e:
             if "Proxy" in type(e).__name__:
                 raise CivitaiError(net_error_message(e)) from e
             raise
-    error(f"GET {path} 连续 3 次失败: {last_error}")
+    error(f"GET {path} 连续 5 次失败: {last_error}")
     if last_error is None:
         raise CivitaiError("请求失败")
     if isinstance(last_error, HtmlChallengeError):
-        raise CivitaiError(f"{last_error}(已连续 3 次失败,请稍后重试或更换代理节点)")
+        raise CivitaiError(f"{last_error}(已连续 5 次失败,请稍后重试或更换代理节点)")
     raise last_error
 
 

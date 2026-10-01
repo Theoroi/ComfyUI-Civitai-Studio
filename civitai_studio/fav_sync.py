@@ -32,7 +32,7 @@ _PAGE_LIMIT = 100
 _MAX_PAGES = 20  # 单方向单次同步最多 20 页(2000 条),够用且防失控
 # ⚠️ cache_store.clear_cache 以字面量保留本键不清(F-S2-8,两处注释互指;改名需同步改)
 _SYNC_LOCK_KEY = "fav:sync_inflight"
-_COLITEMS_KEY = "fav:colitems_v2"  # cid → {u: updatedAt, m/i: {oid: collectionItemId}}
+_COLITEMS_KEY = "fav:colitems_v3"  # cid → {u: updatedAt, m/i: {oid: collectionItemId}}(批5:v3 强制一轮全量重拉,存量坏封面/.mp4 交付名修复落地)
 
 # 集合条目里的 image.url 是裸文件 UUID(非完整 CDN 链接);桶名是站方常量。
 # 构造失败只影响封面显隐(onerror 隐藏),不影响收藏数据本身。

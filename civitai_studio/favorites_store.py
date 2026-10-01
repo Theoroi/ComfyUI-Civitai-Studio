@@ -637,7 +637,8 @@ def reset_all():
         conn.execute("DELETE FROM fav_item_groups")
         conn.execute("DELETE FROM fav_groups")
         conn.commit()
-    cache_store.kv_delete("fav:colitems_v2")
+    cache_store.kv_delete("fav:colitems_v3")  # 当前版本
+    cache_store.kv_delete("fav:colitems_v2")  # 历史版本残留(批5 缓存键升级)
     cache_store.kv_delete("fav:fig_migrated_v1")
     cache_store.kv_delete("fav:legacy_ctype_cleared_v1")
     cache_store.kv_delete("legacy_purged_v2")

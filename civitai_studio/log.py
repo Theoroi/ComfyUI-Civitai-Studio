@@ -1,15 +1,15 @@
-"""统一日志 — logging.getLogger("civitai-studio"),前缀由 ComfyUI 根 formatter 提供.
+"""统一日志 — logging.getLogger("civitai-studio"),自管 stdout handler(批5 E2E e).
 
+格式:[时间] [级别] [Civitai-Studio:模块名] 正文 — 时间戳与模块前缀应 E2E 反馈新增;
+propagate=False(不走 ComfyUI 根 formatter,防双写;根 formatter 的 INFO 门不再约束本插件)。
 级别语义:error=功能受损/数据失败;warning=降级但自愈/配置指引;
 info=生命周期/统计/UI 弹窗回传;debug=全部出站请求与响应、同步逐条决策(默认关,
-ComfyUI 设置日志级别到 DEBUG 后可见 — 用户排障通道,E2E #26)。
-ComfyUI 根 logger 的 ColoredFormatter 自动加 [LEVEL] [logger名] 前缀(用户实测
-logger 名渲染为 [Civitai-Studio]),本模块不再拼任何前缀;历史调用点消息里手写的
-"[Civitai-Studio] "在此统一剥除,防出现 [Civitai-Studio] [Civitai-Studio] 双写。
-独立运行(无 ComfyUI handler)时无等级前缀,可接受。
+设置页 log_debug 开关即时生效 — apply_debug)。
+历史调用点消息里手写的 "[Civitai-Studio] "在此统一剥除,防双写。
 """
 
 import logging
+import sys
 
 log = logging.getLogger("civitai-studio")
 
@@ -35,29 +35,22 @@ def _trunc(text):
     return text
 
 
-_dbg_handler = None
+def _make_handler():
+    h = logging.StreamHandler(sys.stdout)
+    h.setFormatter(logging.Formatter(
+        "[%(asctime)s] [%(levelname)s] [Civitai-Studio:%(module)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"))
+    return h
+
+
+log.addHandler(_make_handler())
+log.propagate = False  # 批5 E2E e:时间戳+模块前缀自管,不再依赖 ComfyUI 根 formatter
 
 
 def apply_debug(on):
-    """配置 log_debug 开关(设置页保存后即时生效):
-    on=True → 专属 DEBUG handler(stdout)+propagate=False(防 ComfyUI INFO handler 双写);
-    on=False → 摘 handler 还原 propagate,走 ComfyUI 原生级别门。"""
-    global _dbg_handler
-    import sys
-    h = _dbg_handler
-    if on and h is None:
-        h = logging.StreamHandler(sys.stdout)
-        h.setLevel(logging.DEBUG)
-        h.setFormatter(logging.Formatter("[%(levelname)s] [Civitai-Studio] %(message)s"))
-        log.addHandler(h)
-        log.setLevel(logging.DEBUG)
-        log.propagate = False
-        _dbg_handler = h
-    elif not on and h is not None:
-        log.removeHandler(h)
-        log.setLevel(logging.NOTSET)
-        log.propagate = True
-        _dbg_handler = None
+    """配置 log_debug 开关(设置页保存后即时生效):on=True → DEBUG 可见;on=False → INFO 起."""
+    for h in log.handlers:
+        h.setLevel(logging.DEBUG if on else logging.INFO)
 
 
 def debug(msg, *args):

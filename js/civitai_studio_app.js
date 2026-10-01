@@ -61,7 +61,7 @@ function fmtSelHtml(cur) {
     return ["all", "jpg", "png", "webp", "gif", "video"].map((f) =>
         `<option value="${f}" ${(cur || "all") === f ? "selected" : ""}>${f === "all" ? esc(t("fmtAll")) : f === "video" ? esc(t("fmtVideo")) : f.toUpperCase()}</option>`).join("");
 }
-const JS_VERSION = "0.9.0";
+const JS_VERSION = "0.9.1";
 
 // ---------- i18n ----------
 const STR = {
@@ -433,7 +433,7 @@ let S = {
     },
     local: { models: [], search: "", type: "", loading: false, updates: {}, truncated: false, detailCache: {} },
     dl: { jobs: [], lastSig: "", failStreak: 0 },
-    gal: { items: [], next: [], sort: "Newest", period: "AllTime", base: "", tag: "", imageId: "", nsfwLevel: 0, thumbSize: 256, loading: false, error: "", favOnly: false, nsfwLv: new Set() },
+    gal: { items: [], next: [], sort: "Newest", period: "AllTime", base: "", tag: "", tagMode: "OR", tagAnd: null, imageId: "", nsfwLevel: 0, thumbSize: 256, loading: false, error: "", favOnly: false, nsfwLv: new Set() },
     ui: { tab: "browse", root: null, backendStale: false },
 };
 
@@ -865,6 +865,7 @@ async function fetchBrowse(reset) {
                 } catch (e2) { c.done = true; /* 单 tag 失败跳过,不拖垮合并 */ }
                 await new Promise((r2) => setTimeout(r2, 350)); // 轮间 delay(E2E e)
             }
+            _sortMergedBrowse(merged); // 批5 E2E 4:逐 tag 各自有序,拼接会按 tag 分组——按当前排序混排
             data = { items: merged, metadata: { nextCursor: st.tagOr.cursors.some((c) => !c.done) ? "tag-or" : "" } };
         } else {
             const q = browseParams(cursor);
@@ -901,6 +902,16 @@ async function fetchBrowse(reset) {
 
 function triggerBrowseRefresh() {
     fetchBrowse(true); // renderResults(true) 内部会重置 __rendered
+}
+
+// 批5 E2E 4:多 tag OR 合并结果按当前排序键混排
+function _sortMergedBrowse(items) {
+    const k = S.browse.sort;
+    const stat = k === "Most Downloaded" ? "downloadCount" : k === "Most Favorited" ? "favoriteCount"
+        : k === "Most Commented" ? "commentCount" : "thumbsUpCount"; // Highest Rated 与默认档按点赞
+    items.sort((a, b) => k === "Newest"
+        ? String(b.lastVersionAt || b.createdAt || "").localeCompare(String(a.lastVersionAt || a.createdAt || ""))
+        : (Number((b.stats || {})[stat]) || 0) - (Number((a.stats || {})[stat]) || 0));
 }
 
 // ---------- 在线浏览:渲染 ----------
@@ -1261,7 +1272,7 @@ async function openBrowseFloat(modelId, opts = {}) {
 const NSFW_LEVEL_LABELS = { 1: "PG", 2: "PG-13", 4: "R", 8: "X", 16: "XXX", 32: "Blocked" };
 
 // 批F:NSFW 模糊遮罩 — 命中勾选分级位的图片加 blur;悬停临时清晰(CSS :hover)
-S.cfg.nsfwBlurBits = S.cfg.nsfwBlurBits || [8, 16]; // 批4 E2E 20:默认启用模糊(X/XXX),配置读取失败也有兜底值
+S.cfg.nsfwBlurBits = S.cfg.nsfwBlurBits || [4, 8, 16]; // 批5 E2E 14:默认启用模糊(R/X/XXX;PG/PG-13 不模糊,👁 可勾)
 function nsfwBlurOn(item) {
     const lv = Number(item && item.nsfwLevel) || 0;
     if (!lv) return false;
@@ -1308,14 +1319,18 @@ function openNsfwBlurPicker(ev) {
     }
     document.body.appendChild(pop);
     const r = pop.getBoundingClientRect();
+    console.log("[Civitai-Studio][menu] blur picker shown");
     pop.style.left = Math.min(ev.clientX ?? 0, window.innerWidth - r.width - 8) + "px";
     pop.style.top = Math.min(ev.clientY ?? 0, window.innerHeight - r.height - 8) + "px";
-    const close = (e2) => {
-        if (pop.contains(e2.target)) return;
-        document.removeEventListener("pointerdown", close, true);
+    // 批5:window 捕获隔离 — 先于宿主 document handler 执行;弹层内部阻断传播
+    // (防宿主对 pointerdown preventDefault 按规范抑制后续 click — "菜单项点了没反应"根因),
+    // 弹层外部按下即关
+    const h = (e2) => {
+        if (pop.contains(e2.target)) { e2.stopPropagation(); return; }
+        window.removeEventListener("pointerdown", h, true);
         pop.remove();
     };
-    document.addEventListener("pointerdown", close, true);
+    window.addEventListener("pointerdown", h, true);
 }
 function modelBadgesHtml(model) {
     const chips = [];
@@ -2035,8 +2050,7 @@ async function openGroupPicker(ev, kind, selectedGids, onDone) {
                     try { refreshFavGroupSel(S.ui.root); } catch (_) {} // 批4 E2E 5a:收藏 tab 已打开时新组即时进筛选下拉
                     onDone([...sel]);
                 }
-                pop.remove();
-                document.removeEventListener("pointerdown", close, true);
+                close();
             } catch (err) { toast("error", t("favFailed"), err.message); }
         };
         inp.onkeydown = (e3) => {
@@ -2052,13 +2066,13 @@ async function openGroupPicker(ev, kind, selectedGids, onDone) {
     const r = pop.getBoundingClientRect();
     pop.style.left = Math.min(ev.clientX ?? 0, window.innerWidth - r.width - 8) + "px";
     pop.style.top = Math.min(ev.clientY ?? 0, window.innerHeight - r.height - 8) + "px";
-    const close = (e2) => {
-        if (pop.contains(e2.target)) return;
-        document.removeEventListener("pointerdown", close, true);
-        pop.remove();
+    const close = () => { window.removeEventListener("pointerdown", h, true); pop.remove(); };
+    // 批5:同 mini 菜单的 window 捕获隔离(内部阻断宿主 pointer 干预,外部即关)
+    const h = (e2) => {
+        if (pop.contains(e2.target)) { e2.stopPropagation(); return; }
+        close();
     };
-    document.addEventListener("pointerdown", close, true);
-    pop.addEventListener("pointerdown", (e2) => e2.stopPropagation());
+    window.addEventListener("pointerdown", h, true);
 }
 
 // 批C:通用鼠标位置小菜单(标签/底模点击的 复制/搜索 二选一)
@@ -2070,25 +2084,45 @@ function openMiniMenu(ev, options) {
         + "background:var(--comfy-input-bg,var(--bg-color,#2b2b30));color:var(--fg-color,#ddd);"
         + "border:1px solid var(--border-color,#3a3a40);border-radius:8px;"
         + "box-shadow:0 8px 24px rgba(0,0,0,.5);padding:4px;font-size:12px;cursor:default;";
+    let fired = "";
+    const fire = (op) => {
+        if (fired) return; // click/pointerup 双通道只执行一次
+        fired = op.label;
+        console.log("[Civitai-Studio][menu] item:", op.label);
+        close();
+        op.cb();
+    };
     for (const op of options) {
         const row = document.createElement("div");
         row.style.cssText = "padding:6px 10px;border-radius:5px;cursor:pointer;white-space:nowrap;";
         row.textContent = op.label;
         row.onmouseenter = () => { row.style.background = "var(--border-color,#3f3f46)"; };
         row.onmouseleave = () => { row.style.background = "transparent"; };
-        row.onclick = (e2) => { e2.stopPropagation(); close(); op.cb(); };
+        row.dataset.csMi = op.label;
+        row.__csCb = op;
         pop.appendChild(row);
     }
+    // 批5:委托式双通道激活 — click 被宿主抑制时 pointerup 仍可达
+    const activate = (e) => {
+        const row = e.target.closest("[data-cs-mi]");
+        if (row) fire(row.__csCb);
+    };
+    pop.addEventListener("click", activate);
+    pop.addEventListener("pointerup", activate);
+    console.log("[Civitai-Studio][menu] open:", options.map((o) => o.label).join("/"));
     document.body.appendChild(pop);
     const r = pop.getBoundingClientRect();
     pop.style.left = Math.min(ev.clientX ?? 0, window.innerWidth - r.width - 8) + "px";
     pop.style.top = Math.min(ev.clientY ?? 0, window.innerHeight - r.height - 8) + "px";
-    const close = (e2) => {
-        if (pop.contains(e2.target)) return;
-        document.removeEventListener("pointerdown", close, true);
+    // 批5:window 捕获隔离 — 先于宿主 document handler 执行;弹层内部阻断传播
+    // (防宿主对 pointerdown preventDefault 按规范抑制后续 click — "菜单项点了没反应"根因),
+    // 弹层外部按下即关
+    const h = (e2) => {
+        if (pop.contains(e2.target)) { e2.stopPropagation(); return; }
+        window.removeEventListener("pointerdown", h, true);
         pop.remove();
     };
-    document.addEventListener("pointerdown", close, true);
+    window.addEventListener("pointerdown", h, true);
 }
 
 // 批C:跳浏览按 tag/底模搜索(加入已选列表,不覆盖)
@@ -2921,6 +2955,52 @@ async function restoreGallerySnapshot(view) {
 }
 
 // ---------- 社区画廊(images API) ----------
+let _galLastReq = 0; // 批5 a:画廊请求最小间隔节流
+
+function _galTagIds(st) {
+    // 纯数字直接用;名称经本地映射(名称→ID)转换,查不到的跳过
+    if (!String(st.tag || "").trim()) return [];
+    return st.tag.replace("，", ",").split(",").map((x) => x.trim()).filter(Boolean)
+        .map((x) => (/^\d+$/.test(x) ? x : (S.tagMap && S.tagMap[x]) || null))
+        .filter(Boolean);
+}
+
+// 批5 E2E 7:多 tag AND = 漏斗式逐 tag 查询+游标,按第一 tag 顺序求交
+// (/images 的 tags 多值为 OR 原生语义,AND 只能自行求交;复用浏览 OR 的 per-tag 游标方案)
+async function _galleryAndPage(st, reset, ids) {
+    const sig = ids.join("|");
+    if (reset || !st.tagAnd || st.tagAnd.sig !== sig) {
+        st.tagAnd = { sig, cursors: ids.map((id) => ({ id, next: null, done: false, items: [] })) };
+    }
+    for (const c of st.tagAnd.cursors) {
+        if (c.done) continue;
+        const p = new URLSearchParams({ limit: "100", sort: st.sort, period: st.period });
+        p.set("nsfw", st.nsfwLevel > 0 ? "true" : "false");
+        if (String(st.imageId || "").trim()) p.set("imageId", String(st.imageId).trim());
+        if (st.base) p.set("baseModels", st.base);
+        p.set("tags", c.id);
+        if (!reset && c.next) for (const [k, v] of c.next) p.append(k, v);
+        const gap = Date.now() - _galLastReq;
+        if (gap < 900) await new Promise((r2) => setTimeout(r2, 900 - gap));
+        _galLastReq = Date.now();
+        const d = await apiGet("/civitai_studio/images?" + p.toString());
+        c.items = c.items.concat(d.items || []);
+        c.next = d.next_query || [];
+        c.done = !(c.next || []).length;
+    }
+    const rest = st.tagAnd.cursors.slice(1).map((c) => new Set(c.items.map((x) => String(x.id))));
+    const merged = [];
+    const seen = new Set();
+    for (const x of st.tagAnd.cursors[0].items) {
+        const id = String(x.id);
+        if (seen.has(id)) continue;
+        seen.add(id);
+        if (rest.every((s) => s.has(id))) merged.push(x);
+    }
+    const more = st.tagAnd.cursors.some((c) => !c.done);
+    return { items: merged, next: more ? [["__and__", "1"]] : [] };
+}
+
 async function fetchGallery(reset, opts = {}) {
     const st = S.gal;
     const silent = !!opts.silent; // 快照恢复后的后台刷新:不动 UI,数据变了才重排
@@ -2930,37 +3010,41 @@ async function fetchGallery(reset, opts = {}) {
     st.loading = true; // 静默同样置位:滚动加载/筛选刷新的互斥只认这一个判据
     if (!silent) renderGallery();
     try {
-        const p = new URLSearchParams({ limit: "24", sort: st.sort, period: st.period });
-        p.set("nsfw", st.nsfwLevel > 0 ? "true" : "false");
-        // 图片 ID 精确搜索:后端 /images 支持 imageId 单图直查(带 meta)
-        if (String(st.imageId || "").trim()) p.set("imageId", String(st.imageId).trim());
-        if (st.base) p.set("baseModels", st.base);
-        if (st.tag.trim()) {
-            // 纯数字直接用;名称经本地映射(名称→ID)转换,查不到的跳过
-            const ids = st.tag.replace("，", ",").split(",").map((x) => x.trim()).filter(Boolean)
-                .map((x) => (/^\d+$/.test(x) ? x : (S.tagMap && S.tagMap[x]) || null))
-                .filter(Boolean);
-            if (!ids.length) {
-                // 静默刷新时 tagMap 可能还没异步就绪:保住现有画面,等下次刷新
-                if (silent) { st.loading = false; return; }
-                // 填了 tag 但一个有效 ID 都解析不出来:直接显示空结果
-                st.items = []; st.next = []; st.error = "";
-                st.loading = false;
-                renderGallery(true);
-                return;
-            }
-            p.set("tags", ids.join(","));
+        const andIds = _galTagIds(st);
+        if (st.tag.trim() && !andIds.length) {
+            // 静默刷新时 tagMap 可能还没异步就绪:保住现有画面,等下次刷新
+            if (silent) { st.loading = false; return; }
+            // 填了 tag 但一个有效 ID 都解析不出来:直接显示空结果
+            st.items = []; st.next = []; st.error = "";
+            st.loading = false;
+            renderGallery(true);
+            return;
         }
-        if (!reset && st.next) for (const [k, v] of st.next) p.append(k, v);
-        const data = await apiGet("/civitai_studio/images?" + p.toString());
-        const items = data.items || [];
+        let items, next;
+        if (st.tagMode === "AND" && andIds.length > 1) {
+            ({ items, next } = await _galleryAndPage(st, reset, andIds)); // 批5 E2E 7:漏斗式逐 tag 求交
+        } else {
+            const p = new URLSearchParams({ limit: "24", sort: st.sort, period: st.period });
+            p.set("nsfw", st.nsfwLevel > 0 ? "true" : "false");
+            // 图片 ID 精确搜索:后端 /images 支持 imageId 单图直查(带 meta)
+            if (String(st.imageId || "").trim()) p.set("imageId", String(st.imageId).trim());
+            if (st.base) p.set("baseModels", st.base);
+            if (andIds.length) p.set("tags", andIds.join(","));
+            if (!reset && st.next) for (const [k, v] of st.next) p.append(k, v);
+            const gap = Date.now() - _galLastReq;
+            if (gap < 900) await new Promise((r2) => setTimeout(r2, 900 - gap)); // 批5 a:最小间隔防连发 503
+            _galLastReq = Date.now();
+            const data = await apiGet("/civitai_studio/images?" + p.toString());
+            items = data.items || [];
+            next = data.next_query || [];
+        }
         if (reset) {
             st.items = items;
         } else {
             const seen = new Set(st.items.map((x) => x.id));
             st.items = st.items.concat(items.filter((x) => !seen.has(x.id)));
         }
-        st.next = data.next_query || [];
+        st.next = next || [];
         st.error = "";
     } catch (e) {
         if (!silent || !st.items.length) st.error = t("loadFailed") + e.message; // 静默失败保住快照画面
@@ -2983,10 +3067,11 @@ function renderGallery(reset) {
     S.gal.__needsRender = false;
     const st = S.gal;
     $$(".cs-gal-more", grid).forEach((n) => n.remove()); // 手动续拉按钮每次重渲染先清,防增殖
-    if (st.error) {
+    if (st.error && !st.items.length) {
         grid.innerHTML = `<div class="cs-empty">${esc(st.error)}</div>`;
         return;
     }
+    // 批5 c:连续失败不再清屏——有缓存时保住已渲染缩略图,错误条以追加形式提示
     if (reset) {
         grid.innerHTML = "";
         st.jrow = []; st.jrowAr = 0; // 两端对齐行排版的在途行(跨"加载更多"批次续行)
@@ -3073,6 +3158,13 @@ function renderGallery(reset) {
         if (st.jrowAr * targetH + (st.jrow.length - 1) * gap >= W) flushRow();
     }
     flushRow();
+    if (st.error && st.items.length) {
+        const err = document.createElement("div");
+        err.style.cssText = "flex:0 0 100%;text-align:center;color:#e2a23f;font-size:12px;padding:6px;cursor:pointer;";
+        err.textContent = st.error + (st.next.length ? " — " + t("retry") : "");
+        err.onclick = () => { st.error = ""; fetchGallery(false); };
+        grid.appendChild(err);
+    }
     if (!st.items.length && !st.loading) {
         grid.innerHTML = `<div class="cs-empty">${esc(t("galleryEmpty"))}</div>`;
     }
@@ -3223,9 +3315,18 @@ function buildGalleryView(root) {
     // tag 选择器(与节点共用 createTagPicker 组件):chips + 下拉添加器 + 自由输入
     {
         const tagNames = () => String(st.tag || "").split(",").map((s) => s.trim()).filter(Boolean);
+        // 批5 E2E 7:tag AND/OR 选择框加回(仅 tag;底模单值无 AND 语义),经 rowExtra 进 picker 行
+        const galTagMode = document.createElement("select");
+        galTagMode.title = t("modeOR") + " / " + t("modeAND");
+        galTagMode.style.cssText = "flex:0 0 112px;font-size:11px;padding:2px;";
+        galTagMode.innerHTML = `<option value="OR">${esc(t("modeOR"))}</option><option value="AND">${esc(t("modeAND"))}</option>`;
+        try { st.tagMode = localStorage.getItem("cs_gal_tag_mode") || "OR"; } catch (_) {}
+        galTagMode.value = st.tagMode;
+        galTagMode.onchange = () => { st.tagMode = galTagMode.value; try { localStorage.setItem("cs_gal_tag_mode", st.tagMode); } catch (_) {} fetchGallery(true); };
         const tp = createTagPicker($("#cs-gal-tag-picker", view), {
             names: tagNames(),
             allowInput: false,
+            rowExtra: galTagMode,
             candidates: () => Object.keys(S.tagMap || {}),
             onChange: (names) => {
                 st.tag = names.join(",");
@@ -3260,10 +3361,14 @@ function buildGalleryView(root) {
         const list = (d.ActiveBaseModel || d.BaseModel || []);
         if (list.length) galBaseCands.list = sortEnumNames(list);
     }).catch(() => {});
-    $("#cs-gal-content", view).addEventListener("scroll", (e) => {
-        const el = e.target;
+    const galScrollCheck = (el) => {
+        if (!view.classList.contains("active")) return;
         if (el.scrollTop + el.clientHeight >= el.scrollHeight - 400 && !st.loading && st.next.length) fetchGallery(false);
-    });
+    };
+    $("#cs-gal-content", view).addEventListener("scroll", (e) => galScrollCheck(e.target));
+    // 批5 E2E 11:pinSidebarHeight 失败时滚动发生在外层容器——双挂载兜底
+    const galOuter = view.closest(".sidebar-content-container");
+    if (galOuter) galOuter.addEventListener("scroll", (e) => galScrollCheck(e.target), { passive: true });
     restoreGallerySnapshot(view); // 异步:面板重开后恢复上次画廊(状态先行,渲染延迟到切 tab)
 }
 
@@ -4368,13 +4473,24 @@ function buildRoot(el) {
     buildFavoritesView($(".cs-body", root));
     $$(".cs-tab-btn[data-tab]", root).forEach((b) => { b.onclick = () => switchTab(b.dataset.tab); });
     $("#cs-settings-btn", root).onclick = openSettings;
-    $("#cs-blur-btn").addEventListener("click", (e) => {
-        try { openNsfwBlurPicker(e); } catch (err) {
-            // 批4 E2E 20:👁 无浮层不可再静默——错误进控制台与 UI 日志,下一轮能定位
-            console.error("[Civitai-Studio] blur picker failed:", err);
-            toast("error", t("loadFailedTitle"), String((err && err.message) || err));
-        }
-    });
+    const blurBtn = $("#cs-blur-btn", root); // 批5 E2E 3:scoped 到本 root,防重复容器取错节点
+    if (blurBtn) {
+        let lastFired = 0;
+        const open = (e) => {
+            const now = Date.now();
+            if (now - lastFired < 400) return; // click/pointerup 双通道防抖
+            lastFired = now;
+            console.log("[Civitai-Studio][menu] blur btn click");
+            try { openNsfwBlurPicker(e); } catch (err) {
+                console.error("[Civitai-Studio] blur picker failed:", err);
+                toast("error", t("loadFailedTitle"), String((err && err.message) || err));
+            }
+        };
+        blurBtn.addEventListener("click", open);
+        blurBtn.addEventListener("pointerup", open); // 批5:click 被宿主抑制时的备用通道
+    } else {
+        console.error("[Civitai-Studio] #cs-blur-btn missing in topbar");
+    }
     pinSidebarHeight(root);
     switchTab("browse");
     maybeOnboard(root);
@@ -5052,14 +5168,19 @@ function renderNodeThumbs(node) {
     const PAGE_N = 50;
     const paged = all.length > PAGE_N;
     if (paged) {
-        node.csPage = Math.max(0, Math.min(node.csPage || 0, Math.ceil(all.length / PAGE_N) - 1));
+        const pagesN = Math.ceil(all.length / PAGE_N);
+        if (node.csPendingPage != null) { // 批5 E2E 13:回源完成后自动跳到目标页,免二次点击
+            if (node.csPendingPage < pagesN) node.csPage = node.csPendingPage;
+            node.csPendingPage = null;
+        }
+        node.csPage = Math.max(0, Math.min(node.csPage || 0, pagesN - 1));
     } else {
         node.csPage = 0;
     }
     const items = paged ? all.slice((node.csPage || 0) * PAGE_N, (node.csPage || 0) * PAGE_N + PAGE_N) : all;
     const bar = document.createElement("div");
     bar.className = "cs-thumb-bar";
-    bar.style.cssText = "width:100%;display:flex;align-items:center;gap:8px;font-size:11px;color:#999;flex-wrap:wrap;"; // 窄节点折行不挤 spinner(评审R2)
+    bar.style.cssText = "position:sticky;top:0;z-index:5;background:var(--comfy-menu-bg,#242428);width:100%;display:flex;align-items:center;gap:8px;font-size:11px;color:#999;flex-wrap:wrap;padding:2px 0;"; // 批5 d:吸顶不随内容滚走(评审R2 原折行保留)
     bar.innerHTML = `<span>${esc(S.lang === "zh"
         ? "点击放大/选择 · tag 仅数字 ID · "
         : "Click to enlarge / select · tag = numeric IDs · ")}${items.length}</span>`;
@@ -5171,6 +5292,7 @@ function renderNodeThumbs(node) {
             pager.appendChild(idx);
             pager.appendChild(mkBtn(t("nodeNext"), () => {
                 node.csPage = (node.csPage || 0) + 1;
+                node.csPendingPage = node.csPage; // 批5 E2E 13:回源完成后自动落位
                 // 批4 E2E 19b:越过缓存尾部 → 回源续拉下一批(完成后重渲染,越界页码由头部钳制收敛)
                 if ((node.csPage || 0) * PAGE_N >= all.length) node.csLoadMore?.();
                 else renderNodeThumbs(node);
@@ -5688,11 +5810,12 @@ app.registerExtension({
         }
         try {
             S.cfg = { ...S.cfg, ...(await apiGet("/civitai_studio/config")) };
-            S.cfg.nsfwBlurBits = S.cfg.nsfw_blur || S.cfg.nsfwBlurBits || [8, 16]; // 批F:遮罩分级位
+            S.cfg.nsfwBlurBits = S.cfg.nsfw_blur || S.cfg.nsfwBlurBits || [4, 8, 16]; // 批F:遮罩分级位
             S.browse.nsfw = Number(S.cfg.nsfw ?? 1); // 恢复持久化的 NSFW 偏好
         } catch (e) {
             console.warn("[Civitai-Studio] 读取配置失败:", e);
         }
+        refreshTagCombos(); // 批5 E2E 10:开面板前预载 tag 映射,首开筛选下拉即刻有候选
         // 前后端版本自检:服务端代码比前端旧 = 重启前的内存态,直接横幅提示
         try {
             const v = await apiGet("/civitai_studio/version");
@@ -5724,8 +5847,16 @@ app.registerExtension({
             render(el) {
                 detectLang(); // 跟随 ComfyUI 语言设置(切语言后重开面板生效)
                 buildRoot(el);
+                console.log("[Civitai-Studio] panel open: dirty=" + S.browse.dirty + " items=" + S.browse.items.length);
                 if (S.browse.dirty || !S.browse.items.length) {
                     fetchBrowse(true); // 批4 E2E B3:强刷后首开 dirty=false 且无数据 → 空面板,兜底重拉
+                    // 批5 E2E 10:防首开竞态——2s 后仍空且无错再补一发
+                    setTimeout(() => {
+                        if (!S.browse.items.length && !S.browse.loading && !S.browse.error) {
+                            console.log("[Civitai-Studio] first-open recheck refetch");
+                            fetchBrowse(true);
+                        }
+                    }, 2000);
                 } else {
                     renderResults(true);
                 }

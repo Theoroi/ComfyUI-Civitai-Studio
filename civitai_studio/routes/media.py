@@ -44,15 +44,30 @@ async def image_proxy(request):
         return resp
     timeout = aiohttp.ClientTimeout(total=15, connect=8)  # 单跳 15s,5 跳留在会话退役窗口内
     current = url
+    rng = request.headers.get("Range")  # 批5 E2E 19:<video> 取首帧/拖动发 Range,miss 路径透传
     try:
         # 逐跳手动跟随重定向,每一跳(含跳转后)都过域名白名单,鉴权头按目标主机自动决定
         for _hop in range(5):
-            async with await civitai_client.open_stream(current, timeout=timeout) as resp:
+            extra = {"Range": rng} if (rng and _hop == 0) else None
+            async with await civitai_client.open_stream(current, timeout=timeout,
+                                                        extra_headers=extra) as resp:
                 if resp.status in (301, 302, 303, 307, 308) and resp.headers.get("Location"):
                     current = str(URL(resp.headers["Location"]).join(URL(current)))
                     if not civitai_client.host_allowed_image(current):
                         return _json_error("重定向到不允许的图片地址", 400)
                     continue
+                if resp.status == 206:  # 批5 E2E 19:部分内容直通(不缓存),视频首帧/拖动不再空
+                    ctype = (resp.content_type or "").split(";")[0]
+                    if not (ctype.startswith("image/") or ctype.startswith("video/")):
+                        return _json_error("图片中转失败: 上游返回的不是图片/视频", 502)
+                    body = await resp.content.read(20 * 1024 * 1024 + 1)
+                    if len(body) > 20 * 1024 * 1024:
+                        return _json_error("分段超过 20MB 上限", 502)
+                    headers = {"Accept-Ranges": "bytes"}
+                    for k in ("Content-Range", "Content-Length"):
+                        if resp.headers.get(k):
+                            headers[k] = resp.headers[k]
+                    return web.Response(status=206, body=body, content_type=ctype, headers=headers)
                 if resp.status != 200:
                     return _json_error(f"图片中转失败: HTTP {resp.status}", 502)
                 ctype = (resp.content_type or "").split(";")[0]
@@ -64,7 +79,8 @@ async def image_proxy(request):
                 # 键用原始 url(与 media_lookup 对齐;302 终点的 ctype/内容才是实际下发的)
                 bg_spawn(local_index.run_bg(cache_store.media_store, url, ctype, body))
                 return web.Response(body=body, content_type=ctype,
-                                    headers={"Cache-Control": "public, max-age=86400"})
+                                    headers={"Cache-Control": "public, max-age=86400",
+                                             "Accept-Ranges": "bytes"})
         return _json_error("图片重定向次数过多", 502)
     except Exception as e:
         return _json_error(f"图片中转失败: {civitai_client.net_error_message(e)}", 502)

@@ -26,7 +26,7 @@ DEFAULTS = {
     "cache_max_mb": 500,    # 磁盘缓存上限 MB(50~2000),见 docs/plans/completed/cache-design.md
     "fav_autosync": False,  # 收藏与 Civitai 账号自动同步(开面板时触发,冲突按最新时间覆盖)
     "log_debug": False,     # 调试日志:出站请求/响应/同步逐条决策落控制台(等效 --verbose,免启动参数)
-    "nsfw_blur": [8, 16],   # NSFW 模糊遮罩:命中的分级位(PG=1,PG13=2,R=4,X=8,XXX=16)图片加模糊,默认 X/XXX
+    "nsfw_blur": [4, 8, 16],  # NSFW 模糊遮罩:命中的分级位(PG=1,PG13=2,R=4,X=8,XXX=16)图片加模糊,默认 X/XXX
 }
 
 
