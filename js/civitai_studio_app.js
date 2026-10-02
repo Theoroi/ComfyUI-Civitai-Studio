@@ -61,7 +61,7 @@ function fmtSelHtml(cur) {
     return ["all", "jpg", "png", "webp", "gif", "video"].map((f) =>
         `<option value="${f}" ${(cur || "all") === f ? "selected" : ""}>${f === "all" ? esc(t("fmtAll")) : f === "video" ? esc(t("fmtVideo")) : f.toUpperCase()}</option>`).join("");
 }
-const JS_VERSION = "0.9.3";
+const JS_VERSION = "0.9.4";
 
 // ---------- i18n ----------
 const STR = {
@@ -765,7 +765,10 @@ function copyText(text, btn) {
 
 // 批4 E2E 12-14:mini 菜单里的[复制]无按钮上下文,必须 toast 反馈,否则"点了没反应"
 function copyWithToast(text) {
-    copyTextSafe(text, (ok) => toast(ok ? "success" : "error", ok ? t("copied") : t("copyFail"), ""));
+    copyTextSafe(text, (ok) => {
+        console.log("[Civitai-Studio][menu] copy done:", ok); // 批6:复制无 toast 之谜判据(onDone 是否回调/结果)
+        toast(ok ? "success" : "error", ok ? t("copied") : t("copyFail"), "");
+    });
 }
 
 // ---------- 通用模态框(悬浮元素:无遮罩、可拖动;✕/Esc/点画布关闭) ----------
@@ -1300,8 +1303,17 @@ const NSFW_LEVEL_LABELS = { 1: "PG", 2: "PG-13", 4: "R", 8: "X", 16: "XXX", 32: 
 
 // 批F:NSFW 模糊遮罩 — 命中勾选分级位的图片加 blur;悬停临时清晰(CSS :hover)
 S.cfg.nsfwBlurBits = S.cfg.nsfwBlurBits || [4, 8, 16]; // 批5 E2E 14:默认启用模糊(R/X/XXX;PG/PG-13 不模糊,👁 可勾)
+const _NSFW_NAME_BITS = { pg: 1, "pg-13": 2, pg13: 2, mature: 4, r: 4, x: 8, xxx: 16, blocked: 32 };
+function nsfwBitsOf(item) {
+    // 批6(用户建议+实测):模糊判定优先 browsingLevel(数字位掩码,精确到 XXX——
+    // 实测 browsingLevel=16 的条目 nsfwLevel 显示 "X",字符串枚举把 XXX 并进 X 会错档);
+    // nsfwLevel 作回退(数字位掩码或 None/Soft/Mature/X 字符串枚举)
+    const v = item && (item.browsingLevel ?? item.nsfwLevel);
+    if (typeof v === "number") return v;
+    return _NSFW_NAME_BITS[String(v || "").trim().toLowerCase()] || 0;
+}
 function nsfwBlurOn(item) {
-    const lv = Number(item && item.nsfwLevel) || 0;
+    const lv = nsfwBitsOf(item);
     if (!lv) return false;
     return (S.cfg.nsfwBlurBits || []).some((b) => lv & b);
 }
@@ -1336,8 +1348,8 @@ function openNsfwBlurPicker(ev) {
             if (cb.checked) bits.add(Number(bit)); else bits.delete(Number(bit));
             S.cfg.nsfwBlurBits = [...bits].sort((a, b2) => a - b2);
             apiPost("/civitai_studio/config", { nsfw_blur: S.cfg.nsfwBlurBits }).catch(() => {});
-            document.querySelectorAll(".cs-nsfw-blurable").forEach((el) => {
-                el.style.filter = nsfwBlurOn({ nsfwLevel: Number(el.dataset.nsfwLevel) }) ? "blur(18px)" : "";
+            document.querySelectorAll("[data-nsfw-level]").forEach((el) => {
+                el.style.filter = nsfwBlurOn({ nsfwLevel: el.dataset.nsfwLevel }) ? "blur(18px)" : ""; // 批6:全量重算(归一化字符串枚举)
             });
         };
         lb2.appendChild(cb);
@@ -1517,8 +1529,8 @@ function galleryItemHtml(img) {
     const direct = esc(img.url);
     const save = `<button class="cs-save-btn" title="${esc(t("saveBtnTitle"))}" data-save-url="${direct}">⬇</button>`;
     const blur = nsfwBlurStyle(img); // 批F:NSFW 模糊遮罩(hover 临时清晰)
-    const bcls = blur ? " cs-nsfw-blurable" : "";
-    const battr = blur ? ` data-nsfw-level="${Number(img.nsfwLevel) || 0}"` : "";
+    // 批6:无条件带 data(nsfwBits 归一),勾选变更即时重算
+    const battr = ` data-nsfw-level="${nsfwBitsOf(img)}"`;
     if (isVideoItem(img)) { // 与全局口径一致:webm/mov 也走 video 分支(复审R2-4)
         return `<div class="cs-gallery-item">${save}<video muted loop playsinline preload="metadata"${battr} class="cs-nsfw-blurable" style="${blur}"
                     src="${src}#t=0.001" data-direct="${direct}"
@@ -2117,7 +2129,10 @@ function openMiniMenu(ev, options) {
         fired = op.label;
         console.log("[Civitai-Studio][menu] item:", op.label);
         close();
-        op.cb();
+        try { op.cb(); } catch (err) {
+            console.error("[Civitai-Studio][menu] cb failed:", err);
+            toast("error", t("loadFailedTitle"), String((err && err.message) || err));
+        }
     };
     for (const op of options) {
         const row = document.createElement("div");
@@ -3138,15 +3153,14 @@ function renderGallery(reset) {
             + `<button class="cs-save-btn" style="right:auto;left:4px;${favOn ? "color:#ffd75e;" : ""}" title="${esc(t("favBtnTitle"))}" data-fav="${esc(img.id)}">★</button>`;
         if (isVideoItem(img)) {
             // 视频条目:静音取首帧作封面,点击悬浮层播放
-            const blurV = nsfwBlurStyle(img); // 批4 E2E 20:视频条目同样接遮罩
+            // 批6:无条件带类+data(nsfwBits 归一),勾选变更可即时重算;filter 按命中内联
             item.innerHTML = `${save}${fmtBadgeHtml(img)}<video muted loop playsinline preload="metadata"`
-                + (blurV ? ` class="cs-nsfw-blurable" data-nsfw-level="${Number(img.nsfwLevel) || 0}" style="filter:blur(18px);"` : "")
+                + ` class="cs-nsfw-blurable" data-nsfw-level="${nsfwBitsOf(img)}" style="${nsfwBlurStyle(img)}"`
                 + ` src="${esc(imgSrc(img.url))}#t=0.001" data-direct="${esc(img.url)}"
                     onerror="this.style.display='none'"></video>`;
         } else {
-            const blur = nsfwBlurStyle(img); // 批4 E2E 20:主画廊网格此前完全没接遮罩(只有节点条与收藏行)
             item.innerHTML = `${save}${fmtBadgeHtml(img)}<img loading="lazy"`
-                + (blur ? ` class="cs-nsfw-blurable" data-nsfw-level="${Number(img.nsfwLevel) || 0}" style="filter:blur(18px);"` : "")
+                + ` class="cs-nsfw-blurable" data-nsfw-level="${nsfwBitsOf(img)}" style="${nsfwBlurStyle(img)}"`
                 + ` src="${esc(imgSrc(cdnThumb(img.url)))}" data-direct="${esc(img.url)}"
                     onerror="this.style.display='none'"/>`;
         }
@@ -4222,9 +4236,9 @@ function renderFavGrid(view) {
         } else if (cover) {
             const im = document.createElement("img");
             im.loading = "lazy";
-            const blurF = nsfwBlurStyle({ nsfwLevel: (it.extra || {}).nsfwLevel }); // 批F(收藏行 extra 需下行补 nsfwLevel)
-            im.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;" + blurF;
-            if (blurF) { im.classList.add("cs-nsfw-blurable"); im.dataset.nsfwLevel = Number((it.extra || {}).nsfwLevel) || 0; }
+            im.classList.add("cs-nsfw-blurable"); // 批6:无条件带,勾选变更即时重算
+            im.dataset.nsfwLevel = nsfwBitsOf(it.extra || {});
+            im.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;" + nsfwBlurStyle(it.extra || {});
             im.src = imgSrc(cdnThumb(cover));
             im.onerror = () => { if (!im.dataset.retried) { im.dataset.retried = "1"; im.src = altSrc(cover); } else im.style.display = "none"; };
             cell.appendChild(im);
@@ -5196,9 +5210,11 @@ function renderNodeThumbs(node) {
     const paged = all.length > PAGE_N;
     if (paged) {
         const pagesN = Math.ceil(all.length / PAGE_N);
-        if (node.csPendingPage != null) { // 批5 E2E 13:回源完成后自动跳到目标页,免二次点击
+        // 批6 E2E 9:pending 只在缓存确实增长后才消费——fetch 前的那次渲染(spinner)
+        // 会先走到这里,旧实现把它清掉导致"点两次才跳"
+        if (node.csPendingPage != null && all.length > (node.csPendingFrom || 0)) {
             if (node.csPendingPage < pagesN) node.csPage = node.csPendingPage;
-            node.csPendingPage = null;
+            node.csPendingPage = null; node.csPendingFrom = 0;
         }
         node.csPage = Math.max(0, Math.min(node.csPage || 0, pagesN - 1));
     } else {
@@ -5319,7 +5335,7 @@ function renderNodeThumbs(node) {
             pager.appendChild(idx);
             pager.appendChild(mkBtn(t("nodeNext"), () => {
                 node.csPage = (node.csPage || 0) + 1;
-                node.csPendingPage = node.csPage; // 批5 E2E 13:回源完成后自动落位
+                node.csPendingPage = node.csPage; node.csPendingFrom = all.length; // 批6:记录点击时缓存长度
                 // 批4 E2E 19b:越过缓存尾部 → 回源续拉下一批(完成后重渲染,越界页码由头部钳制收敛)
                 if ((node.csPage || 0) * PAGE_N >= all.length) node.csLoadMore?.();
                 else renderNodeThumbs(node);

@@ -183,6 +183,7 @@ async def get_config(request):
         "cache_max_mb": cfg.get("cache_max_mb", 500),
         "fav_autosync": cfg.get("fav_autosync", False),
         "log_debug": cfg.get("log_debug", False),
+        "log_timestamp": cfg.get("log_timestamp", False),
         "nsfw_blur": cfg.get("nsfw_blur") or [],
     })
 
@@ -230,7 +231,7 @@ async def set_config(request):
                 return _json_error(f"{key} 必须是整数", 400)
             partial[key] = max(lo, min(hi, value))
     for key in ("proxy_images", "verify_hash", "persist_description", "tag_scrape", "tag_and_mode",
-                "fav_autosync", "log_debug"):
+                "fav_autosync", "log_debug", "log_timestamp"):
         if key in body:
             partial[key] = bool(body.get(key))
     if "nsfw_blur" in body:
@@ -243,7 +244,7 @@ async def set_config(request):
             return _json_error("nsfw_blur 只接受分级位 1/2/4/8/16", 400)
         partial["nsfw_blur"] = bits
     cfg = config.update(partial)
-    apply_debug(bool(cfg.get("log_debug")))  # 调试日志即时生效,无需重启
+    apply_debug(bool(cfg.get("log_debug")), bool(cfg.get("log_timestamp")))  # 调试/时间戳即时生效
     key = cfg.get("api_key") or ""
     return web.json_response({
         "status": "ok",

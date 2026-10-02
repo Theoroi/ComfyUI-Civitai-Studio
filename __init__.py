@@ -19,7 +19,8 @@ __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
 # 调试日志开关(config.log_debug):等效 --verbose 但只对本插件生效,免启动参数
 from .civitai_studio import log as _cs_log  # noqa: E402
 try:
-    _cs_log.apply_debug(bool(config.load().get("log_debug")))
+    _cs_log.apply_debug(bool(config.load().get("log_debug")),
+                       bool(config.load().get("log_timestamp")))
     if config.load().get("log_debug"):
         _log_info("调试日志已开启(log_debug=true)— 出站请求/响应/同步决策将以 DEBUG 落控制台")
 except Exception:  # 配置不可读不挡加载

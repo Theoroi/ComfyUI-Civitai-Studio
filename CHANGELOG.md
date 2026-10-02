@@ -2,6 +2,30 @@
 
 格式参照 Keep a Changelog;项目版本号见 `pyproject.toml` 与 `civitai_studio/version.py`。
 
+## [0.9.4] - 2026-10-03(批6:遮罩判定源/翻页真 bug/日志归因)
+
+### NSFW 遮罩(E2E 11/12 根因 + 用户建议)
+- **模糊判定切换 browsingLevel(用户建议)**:实测 `browsingLevel=16` 的条目 `nsfwLevel`
+  显示 "X"——字符串枚举把 XXX 并进 X 必错档;改为优先读响应的 browsingLevel 数字位掩码
+- **字符串枚举归一化**:REST /images 列表的 nsfwLevel 是 "Mature"/"X" 字符串,旧代码
+  `Number()→NaN→0` 导致任何分级都不模糊(11/12 直接根因);新增 PG/PG-13/Mature/X/XXX 映射
+- **勾选即时重算**:媒体元素无条件带 data-nsfw-level,👁 勾选后全量重算 filter
+  (旧实现只刷已带类的元素,新勾选的分级永不生效)
+
+### 节点翻页(E2E 9 真 bug)
+- "点两次才跳"的代码层根因:回源前那次渲染(spinner)把 pending 目标页消费掉了——
+  改为只在**缓存确实增长后**落位(csPendingFrom 守卫)。设计口径:回源失败(如站方
+  503 过载)时显示"缩略图拉取失败",需再点一次=失败重试,非设计缺陷
+
+### 菜单[复制](E2E 1/2 遗留)
+- fire() 加容错(cb 异常即 toast);copyWithToast 补 `copy done: true/false` 控制台遥测
+  ——下轮若仍无 toast,该行日志能定位 clipboard 挂起还是回调丢失
+
+### 日志(E2E a/b)
+- **模块名归因**:日志函数 stacklevel=2,`[Civitai-Studio:log]` 变为真实调用模块
+  (fav_sync/cache_store/civitai_client…)
+- **时间戳可关**:新增设置项 log_timestamp(默认关,POST config 即时生效;启动时同样跟随)
+
 ## [0.9.3] - 2026-10-03(日志两处修复)
 
 - **log_debug 开启后 debug 日志全灭(0.9.2 回归)**:重写日志模块时 apply_debug 只调了
