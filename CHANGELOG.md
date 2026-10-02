@@ -2,6 +2,15 @@
 
 格式参照 Keep a Changelog;项目版本号见 `pyproject.toml` 与 `civitai_studio/version.py`。
 
+## [0.9.3] - 2026-10-03(日志两处修复)
+
+- **log_debug 开启后 debug 日志全灭(0.9.2 回归)**:重写日志模块时 apply_debug 只调了
+  handler level,logger 本身仍继承 ComfyUI root 的 INFO 门——debug 记录(http outbound/
+  tRPC/同步逐条决策)在 logger 层即被丢弃。恢复 logger+handler 双层级别管理
+- **日志 flush OSError Errno 22 噪音**("---- Logging error ---"+全栈):插件持有的 stdout
+  是 ComfyUI app/logger.py 包装流,wsmgr 管道托管场景其 flush 会抛 OSError。handler 改
+  安全实现(写/刷失败静默丢行,不打断业务线程、不刷噪音)
+
 ## [0.9.2] - 2026-09-30(请求错误全量落日志)
 
 - **前端 apiJson**：HTTP 非 2xx 与网络层失败(断网/代理挂)→ 控制台 `[Civitai-Studio][net]` + 服务端 `[UI]` 日志双写,含状态码/路径/错误摘要;同 path+status 10s 限频防刷屏

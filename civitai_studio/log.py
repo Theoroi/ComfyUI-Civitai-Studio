@@ -35,8 +35,27 @@ def _trunc(text):
     return text
 
 
+class _SafeHandler(logging.StreamHandler):
+    """stdout 是 ComfyUI app/logger.py 的包装流;其 flush 在 wsmgr 管道托管/重定向场景
+    会抛 OSError Errno 22(logging 默认打 "--- Logging error ---"+全栈噪音且丢行,实测
+    0.9.2 同步统计行触发)。容错:写/刷失败静默丢行,不打断业务线程."""
+
+    def emit(self, record):
+        try:
+            self.stream.write(self.format(record) + self.terminator)
+            self.flush()
+        except (OSError, ValueError, AttributeError):
+            pass  # 管道失效/解释器退出中:静默
+
+    def flush(self):
+        try:
+            super().flush()
+        except (OSError, ValueError):
+            pass
+
+
 def _make_handler():
-    h = logging.StreamHandler(sys.stdout)
+    h = _SafeHandler(sys.stdout)
     h.setFormatter(logging.Formatter(
         "[%(asctime)s] [%(levelname)s] [Civitai-Studio:%(module)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S"))
@@ -44,13 +63,18 @@ def _make_handler():
 
 
 log.addHandler(_make_handler())
+log.setLevel(logging.INFO)  # 默认 INFO;apply_debug 提到 DEBUG(0.9.2 回归:logger 层门缺失致 debug 全灭)
 log.propagate = False  # 批5 E2E e:时间戳+模块前缀自管,不再依赖 ComfyUI 根 formatter
 
 
 def apply_debug(on):
-    """配置 log_debug 开关(设置页保存后即时生效):on=True → DEBUG 可见;on=False → INFO 起."""
+    """配置 log_debug 开关(启动时与设置页保存后都会调):on → logger+handler 提到 DEBUG,
+    http outbound/tRPC/同步逐条决策可见;off → INFO 起。必须同时调 logger.setLevel —
+    logger 层 NOTSET 会继承 ComfyUI root 的 INFO 门,debug 记录到不了 handler(0.9.2 实测回归)."""
+    level = logging.DEBUG if on else logging.INFO
+    log.setLevel(level)
     for h in log.handlers:
-        h.setLevel(logging.DEBUG if on else logging.INFO)
+        h.setLevel(level)
 
 
 def debug(msg, *args):

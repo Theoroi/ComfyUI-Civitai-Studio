@@ -61,7 +61,7 @@ function fmtSelHtml(cur) {
     return ["all", "jpg", "png", "webp", "gif", "video"].map((f) =>
         `<option value="${f}" ${(cur || "all") === f ? "selected" : ""}>${f === "all" ? esc(t("fmtAll")) : f === "video" ? esc(t("fmtVideo")) : f.toUpperCase()}</option>`).join("");
 }
-const JS_VERSION = "0.9.2";
+const JS_VERSION = "0.9.3";
 
 // ---------- i18n ----------
 const STR = {
