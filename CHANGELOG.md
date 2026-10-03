@@ -2,7 +2,7 @@
 
 格式参照 Keep a Changelog;项目版本号见 `pyproject.toml` 与 `civitai_studio/version.py`。
 
-## [0.10.0] - 2026-10-03(批10:轮播修复与分辨率设置)
+## [0.9.10] - 2026-10-03(批10:轮播修复与分辨率设置;patch 线——0.10.0 留给下个大功能批)
 
 - **轮播卡死真根因(批9 引入)**：swap 里对 `const el` 重赋值——ESM 严格模式抛
   TypeError,interval 第一次后全废(只换一张/计数不动/移出不复位三症状同源);改 let
