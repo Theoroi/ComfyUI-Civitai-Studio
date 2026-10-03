@@ -689,7 +689,7 @@ function toast(sev, summary, detail) {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ sev: logSev, msg: `${summary}${detail ? " | " + detail : ""}` }),
-        }).catch(() => {});
+        }).catch(() => { });
     } catch (e2) { /* 日志通道永不反噬 UI */ }
 }
 
@@ -708,7 +708,7 @@ function logNetError(url, status, msg) {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ sev: "error", msg: line }),
-        }).catch(() => {});
+        }).catch(() => { });
     } catch (e) { /* 日志通道永不反噬 UI */ }
 }
 
@@ -1074,7 +1074,7 @@ function makeCard(model) {
             el.playsInline = true;
             el.preload = "metadata";
             el.addEventListener("loadeddata", show);
-            card.addEventListener("mouseenter", () => el.play().catch(() => {}));
+            card.addEventListener("mouseenter", () => el.play().catch(() => { }));
             card.addEventListener("mouseleave", () => el.pause());
         } else {
             el.loading = "lazy";
@@ -1120,7 +1120,7 @@ function makeCard(model) {
                 if (m.type === "video") {
                     nv.muted = true; nv.loop = true; nv.playsInline = true; nv.preload = "metadata";
                     nv.src = imgSrc(cdnVideo(m.url)) + "#t=0.001"; // 批11 E2E 4:视频不再 original=true
-                    nv.play().catch(() => {});
+                    nv.play().catch(() => { });
                 } else {
                     nv.loading = "eager";
                     nv.alt = model.name;
@@ -1453,7 +1453,7 @@ function openNsfwBlurPicker(ev) {
         cb.onchange = () => {
             if (cb.checked) bits.add(Number(bit)); else bits.delete(Number(bit));
             S.cfg.nsfwBlurBits = [...bits].sort((a, b2) => a - b2);
-            apiPost("/civitai_studio/config", { nsfw_blur: S.cfg.nsfwBlurBits }).catch(() => {});
+            apiPost("/civitai_studio/config", { nsfw_blur: S.cfg.nsfwBlurBits }).catch(() => { });
             document.querySelectorAll("[data-nsfw-level]").forEach((el) => {
                 el.style.filter = nsfwBlurCss({ nsfwLevel: el.dataset.nsfwLevel }); // 批6:全量重算(归一化字符串枚举)
             });
@@ -1496,7 +1496,7 @@ function modelBadgesHtml(model) {
     // baseModel chips 单独一行 + "Base model" 前缀(E2E r3-19):与许可徽章混排时淹没
     const basesHtml = bases.length
         ? `<div class="cs-detail-badges" style="margin-top:4px"><span class="cs-badge2 cs-badge2-base">Base model</span>`
-          + bases.map((b) => `<span class="cs-badge2 cs-badge2-base" data-base="${esc(b)}" title="${esc(t("tagClickable"))}" style="cursor:pointer;">${esc(b)}</span>`).join("") + `</div>`
+        + bases.map((b) => `<span class="cs-badge2 cs-badge2-base" data-base="${esc(b)}" title="${esc(t("tagClickable"))}" style="cursor:pointer;">${esc(b)}</span>`).join("") + `</div>`
         : "";
     return (html ? `<div class="cs-detail-badges">${html}</div>` : "") + basesHtml;
 }
@@ -1522,10 +1522,10 @@ function renderDetail(model, container, opts = {}) {
         <div class="cs-detail-row">
             <label>${esc(t("versionLabel"))}</label>
             <select id="cs-version-sel">${versions.map((v, i) => {
-                const prefer = opts.preferVersionId && String(v.id) === String(opts.preferVersionId);
-                const selAttr = prefer ? " selected" : (i === 0 && !opts.preferVersionId ? " selected" : "");
-                return `<option value="${esc(String(v.id))}" data-idx="${i}"${selAttr}>${esc(v.name)} (${esc(v.baseModel || "?")})${v.local ? esc(t("installedMark")) : ""}</option>`;
-            }).join("")}
+        const prefer = opts.preferVersionId && String(v.id) === String(opts.preferVersionId);
+        const selAttr = prefer ? " selected" : (i === 0 && !opts.preferVersionId ? " selected" : "");
+        return `<option value="${esc(String(v.id))}" data-idx="${i}"${selAttr}>${esc(v.name)} (${esc(v.baseModel || "?")})${v.local ? esc(t("installedMark")) : ""}</option>`;
+    }).join("")}
             </select>
         </div>
         <div id="cs-version-body"></div>
@@ -1808,7 +1808,7 @@ async function renderResourceList(box, item, rawRes, civRes, vids, imgHashes, na
             chip.style.cssText = "display:inline-flex;align-items:center;gap:4px;border-radius:10px;padding:0 7px;"
                 + "font-size:11px;white-space:nowrap;cursor:pointer;"
                 + (ok ? "background:rgba(76,175,80,.16);border:1px solid #4caf5088;color:var(--fg-color,#eee);"
-                     : "background:rgba(226,162,63,.12);border:1px solid #e2a23f66;color:var(--fg-color,#eee);");
+                    : "background:rgba(226,162,63,.12);border:1px solid #e2a23f66;color:var(--fg-color,#eee);");
             chip.title = ok
                 ? (S.lang === "zh" ? "已安装:" : "Installed: ") + (installed.rel || installed.name || "")
                 : (ok ? "" : (S.lang === "zh" ? "未安装,点击查看模型" : "Not installed, click to view"));
@@ -1868,7 +1868,7 @@ async function renderResourceList(box, item, rawRes, civRes, vids, imgHashes, na
                 try {
                     const d = await apiGet("/civitai_studio/destinations?type=LoRA");
                     if ((d.destinations || []).length) root = d.destinations[0].root;
-                } catch (e) {}
+                } catch (e) { }
                 if (!root) {
                     toast("error", S.lang === "zh" ? "未找到 LoRA 目录" : "No LoRA dir", S.lang === "zh" ? "请检查模型目录配置" : "Check model paths");
                     btn.disabled = false;
@@ -1918,14 +1918,14 @@ function openImageDetail(item, opts = {}) {
             if (r && r.meta && (r.meta.prompt || r.meta.parameters || r.meta.workflow)) {
                 openImageDetail({ ...item, meta: r.meta }, { ...opts, __embedRetry: true });
             }
-        }).catch(() => {});
+        }).catch(() => { });
     }
     const kv = hasMeta
         ? [["Checkpoint", meta["Model"] || (meta.hashes || {}).model], ["Base Model", item.baseModel], [t("kvSampler"), meta.sampler], [t("kvSteps"), meta.steps],
-           ["CFG", meta.cfgScale], ["Seed", meta.seed], [t("kvSize"), (meta.width || "") + (meta.width ? "×" + meta.height : "")]]
+        ["CFG", meta.cfgScale], ["Seed", meta.seed], [t("kvSize"), (meta.width || "") + (meta.width ? "×" + meta.height : "")]]
         : [[t("galleryAuthor"), item.username], ["❤", fmtNum(item.stats?.heartCount ?? item.stats?.likeCount)],
-           // 批4 D1:无 meta 图(如 17391786)此前整块 kv 都不显示,底模走 REST 顶层 baseModel 字段
-           ["Base Model", item.baseModel]];
+        // 批4 D1:无 meta 图(如 17391786)此前整块 kv 都不显示,底模走 REST 顶层 baseModel 字段
+        ["Base Model", item.baseModel]];
     const kvHtml = kv.filter(([, v]) => v !== undefined && v !== null && v !== "")
         .map(([k, v]) => `<div><b>${esc(k)}</b><span>${esc(String(v))}</span></div>`).join("");
     // 资源条目统一收集:resources(外部图,含权重)+ civitaiResources(站内图,带 modelVersionId)
@@ -2059,7 +2059,7 @@ function openImageDetail(item, opts = {}) {
                     (tools.length ? `<div><b>${esc(S.lang === "zh" ? "工具" : "Tools")}</b><span>${esc(tools.join(", "))}</span></div>` : "")
                     + (techs.length ? `<div><b>${esc(S.lang === "zh" ? "技法" : "Techniques")}</b><span>${esc(techs.join(", "))}</span></div>` : ""));
             }
-        }).catch(() => {});
+        }).catch(() => { });
     }
 
     $$("[data-copy]", m.box).forEach((btn) => {
@@ -2085,7 +2085,7 @@ function openImageDetail(item, opts = {}) {
             try {
                 app.canvas.setDirty(true, true);
                 if (targets[0]) app.canvas.centerOnNode(targets[0]);
-            } catch (e2) {}
+            } catch (e2) { }
             const where = targets.map((n) => `#${n.id} ${n.title || n.type}`).join(" · ");
             const loraPart = result.loras ? t("applyLoraPart", { n: result.loras }) : "";
             toast("success", t("applyDone", { lora: loraPart }), where + (result.missing.length ? " | " + t("loraMissing", { names: result.missing.join(", ") }) : ""));
@@ -2114,7 +2114,7 @@ function rememberImage(id) {
         list.unshift(String(id));
         localStorage.setItem(key, JSON.stringify(list.slice(0, 50)));
     } catch (e) { /* 隐私模式等场景忽略 */ }
-    apiPost(`/civitai_studio/remember_image/${encodeURIComponent(String(id))}`).catch(() => {});
+    apiPost(`/civitai_studio/remember_image/${encodeURIComponent(String(id))}`).catch(() => { });
 }
 
 // 收藏切换(全入口统一走这里;本地 Set 同步维护,供画廊/节点★即时回显)
@@ -2124,7 +2124,7 @@ async function toggleFav(kind, oid, fields) {
     S[setKey] = S[setKey] || new Set();
     if (r.fav) S[setKey].add(String(oid)); else S[setKey].delete(String(oid));
     // 16:收藏 tab 正开着就即时重拉+重渲染,免"切一次 tab 才能看到"
-    if (S.ui.tab === "favorites" && S.favData) loadFavDataOnly().catch(() => {});
+    if (S.ui.tab === "favorites" && S.favData) loadFavDataOnly().catch(() => { });
     return !!r.fav;
 }
 
@@ -2202,7 +2202,7 @@ async function openGroupPicker(ev, kind, selectedGids, onDone) {
                         S.favData.groups = [{ gid: r.group.gid, name, ctype: null }, ...(S.favData.groups || [])];
                     }
                     toast("success", t("groupCreated", { name }), "");
-                    try { refreshFavGroupSel(S.ui.root); } catch (_) {} // 批4 E2E 5a:收藏 tab 已打开时新组即时进筛选下拉
+                    try { refreshFavGroupSel(S.ui.root); } catch (_) { } // 批4 E2E 5a:收藏 tab 已打开时新组即时进筛选下拉
                     onDone([...sel]);
                 }
                 close();
@@ -2335,7 +2335,7 @@ function selectAsOutput(item, preferred) {
     // 缓存选中图:它可能不在该节点的搜索结果里(csResults),信息面板刷新时兜底展示
     node.csInfoCache = item;
     renderNodeThumbs(node);
-    try { app.canvas.setDirty(true, true); } catch (e) {}
+    try { app.canvas.setDirty(true, true); } catch (e) { }
     toast("success", t("selectedAsOutput"), "image_id " + (item.id ?? ""));
 }
 
@@ -2463,9 +2463,9 @@ async function openDownloadDialog({ model, version, fileIndex = null, defaultRoo
             ${files.length > 1 ? `
             <label>${esc(t("fileLabel"))}
                 <select id="cs-dl-file">${files.map((f, i) => {
-                    const bits = fileMetaBits(f);
-                    return `<option value="${i}" ${i === selIdx ? "selected" : ""}>${esc(fileDisplayName(f))}${bits ? " · " + esc(bits) : ""} (${fmtSize((f.sizeKB || 0) * 1024)})</option>`;
-                }).join("")}
+        const bits = fileMetaBits(f);
+        return `<option value="${i}" ${i === selIdx ? "selected" : ""}>${esc(fileDisplayName(f))}${bits ? " · " + esc(bits) : ""} (${fmtSize((f.sizeKB || 0) * 1024)})</option>`;
+    }).join("")}
                 </select>
             </label>` : ""}
             ${typeKeys.length > 1 ? `
@@ -2740,7 +2740,7 @@ function toggleLocalDetail(m) {
         if (civ.description_html) {
             // 离线回退:sidecar 里有落盘的说明
             renderDetail({ name: civ.model_name, description: civ.description_html, stats: {}, modelVersions: [], id: civ.model_id },
-                         body, { preferVersionId: civ.version_id, local: m, offline: true });
+                body, { preferVersionId: civ.version_id, local: m, offline: true });
         } else {
             body.innerHTML = `<div class="cs-expand-loading">${esc(t("expandLoadFailed") + e.message)}</div>`;
         }
@@ -2904,8 +2904,10 @@ function associateDialog(m) {
         try {
             let body;
             if (selected) {
-                body = { category: m.category, rel: m.rel, model_id: selected.model_id,
-                         version_id: versionWrap.style.display !== "none" && versionSel.value ? versionSel.value : undefined };
+                body = {
+                    category: m.category, rel: m.rel, model_id: selected.model_id,
+                    version_id: versionWrap.style.display !== "none" && versionSel.value ? versionSel.value : undefined
+                };
             } else if (refInput.value.trim()) {
                 body = { category: m.category, rel: m.rel, ref: refInput.value.trim() };
             } else {
@@ -2970,7 +2972,7 @@ function idb() {
             };
             rq.onsuccess = () => {
                 const db = rq.result;
-                db.onversionchange = () => { try { db.close(); } catch {} }; // 让位未来版本升级
+                db.onversionchange = () => { try { db.close(); } catch { } }; // 让位未来版本升级
                 res(db);
             };
             rq.onerror = () => res(null); // 无 IDB(隐私模式等):降级为无快照/无 blob 缓存
@@ -2995,7 +2997,7 @@ async function idbSet(store, key, val) {
     if (!db) return;
     try {
         db.transaction(store, "readwrite").objectStore(store).put(val, key);
-    } catch {}
+    } catch { }
 }
 
 // 缩略图 blob 缓存:命中免 CDN;objectURL 按 url 复用防会话内泄漏;容量上限按键序近似裁剪
@@ -3009,13 +3011,13 @@ async function attachThumbBlob(imgEl, url) {
     const cached = _thumbObjUrls.get(url);
     if (cached) { imgEl.src = cached; imgEl.style.display = ""; return; }
     let inflight = _thumbPending.get(url);
-    if (inflight) { await inflight.catch(() => {}); if (_thumbObjUrls.has(url)) { imgEl.src = _thumbObjUrls.get(url); imgEl.style.display = ""; } return; }
+    if (inflight) { await inflight.catch(() => { }); if (_thumbObjUrls.has(url)) { imgEl.src = _thumbObjUrls.get(url); imgEl.style.display = ""; } return; }
     inflight = (async () => {
         let blob = null;
         try {
             const rec = await idbGet("thumbs", url);
             if (rec?.blob && Date.now() - (rec.ts || 0) < THUMB_BLOB_TTL) blob = rec.blob;
-        } catch {}
+        } catch { }
         if (!blob) {
             try {
                 const resp = await fetch(url);
@@ -3024,7 +3026,7 @@ async function attachThumbBlob(imgEl, url) {
             } catch { return; }
             idbSet("thumbs", url, { blob, ts: Date.now() }).then(() => {
                 if (++_thumbPuts % 25 === 0) idbTrimThumbs(THUMB_CAP);
-            }).catch(() => {});
+            }).catch(() => { });
         }
         const obj = URL.createObjectURL(blob);
         _thumbObjUrls.set(url, obj);
@@ -3033,7 +3035,7 @@ async function attachThumbBlob(imgEl, url) {
         if (_thumbObjUrls.size > 600) { // 会话内存上限:最旧先 revoke
             for (const [k, v] of _thumbObjUrls) {
                 if (_thumbObjUrls.size <= 500) break;
-                try { URL.revokeObjectURL(v); } catch {}
+                try { URL.revokeObjectURL(v); } catch { }
                 _thumbObjUrls.delete(k);
             }
         }
@@ -3360,8 +3362,8 @@ function buildGalleryView(root) {
                 ${GAL_PRESETS.map(([k]) => `<button class="cs-chip" data-gpreset="${k}">${esc(t("galPreset" + k.replace(/(^|-)([a-z])/g, (_, _s, c) => c.toUpperCase())))}</button>`).join("")}
             </div>
             <div class="cs-filters cs-filters-gal">
-                <div id="cs-gal-base-picker" class="cs-span-full"></div>
                 <input id="cs-gal-imgid" class="cs-span-full" type="text" placeholder="${esc(S.lang === "zh" ? "图片 ID 精确搜索(回车)" : "Image ID exact search (Enter)")}" value="${esc(st.imageId || "")}" autocomplete="off"/>
+                <div id="cs-gal-base-picker" class="cs-span-full"></div>
                 <div id="cs-gal-tag-picker" class="cs-span-full"></div>
                 <select id="cs-gal-period">${PERIODS.map((p) => `<option value="${p}" ${st.period === p ? "selected" : ""}>${esc(periodLabel(p))}</option>`).join("")}</select>
                 <select id="cs-gal-sort">
@@ -3387,12 +3389,12 @@ function buildGalleryView(root) {
     root.appendChild(view);
     // 画廊筛选折叠:与浏览 tab 同构,独立记住偏好
     const galFwrap = $(".cs-fwrap", view);
-    try { if (localStorage.getItem("cs_gal_fold") === "1") galFwrap.classList.add("folded"); } catch (_) {}
+    try { if (localStorage.getItem("cs_gal_fold") === "1") galFwrap.classList.add("folded"); } catch (_) { }
     syncFoldBtn($("#cs-gal-ffold", view), galFwrap.classList.contains("folded"));
     $("#cs-gal-ffold", view).onclick = () => {
         galFwrap.classList.toggle("folded");
         syncFoldBtn($("#cs-gal-ffold", view), galFwrap.classList.contains("folded"));
-        try { localStorage.setItem("cs_gal_fold", galFwrap.classList.contains("folded") ? "1" : "0"); } catch (_) {}
+        try { localStorage.setItem("cs_gal_fold", galFwrap.classList.contains("folded") ? "1" : "0"); } catch (_) { }
     };
     $("#cs-gal-sort", view).value = st.sort;
     { // 视图重建时回显预设选中态(复审R2-1)
@@ -3457,7 +3459,7 @@ function buildGalleryView(root) {
     apiGet("/civitai_studio/favorites").then((d) => {
         S.favs = new Set((d.ids || []).map(String));
         if (st.favOnly) renderGallery(true);
-    }).catch(() => {});
+    }).catch(() => { });
     const debouncedFetch = () => {
         clearTimeout(buildGalleryView._deb);
         buildGalleryView._deb = setTimeout(() => fetchGallery(true), 600);
@@ -3478,9 +3480,9 @@ function buildGalleryView(root) {
         galTagMode.title = t("modeOR") + " / " + t("modeAND");
         galTagMode.style.cssText = "flex:0 0 112px;font-size:11px;padding:2px;";
         galTagMode.innerHTML = `<option value="OR">${esc(t("modeOR"))}</option><option value="AND">${esc(t("modeAND"))}</option>`;
-        try { st.tagMode = localStorage.getItem("cs_gal_tag_mode") || "OR"; } catch (_) {}
+        try { st.tagMode = localStorage.getItem("cs_gal_tag_mode") || "OR"; } catch (_) { }
         galTagMode.value = st.tagMode;
-        galTagMode.onchange = () => { st.tagMode = galTagMode.value; try { localStorage.setItem("cs_gal_tag_mode", st.tagMode); } catch (_) {} fetchGallery(true); };
+        galTagMode.onchange = () => { st.tagMode = galTagMode.value; try { localStorage.setItem("cs_gal_tag_mode", st.tagMode); } catch (_) { } fetchGallery(true); };
         const tp = createTagPicker($("#cs-gal-tag-picker", view), {
             names: tagNames(),
             allowInput: false,
@@ -3514,12 +3516,12 @@ function buildGalleryView(root) {
     apiGet("/civitai_studio/tag_mapping").then((d) => {
         S.tagMap = S.tagMap || {};
         (d.tags || []).forEach((t2) => { S.tagMap[t2.name] = t2.id; });
-    }).catch(() => {});
+    }).catch(() => { });
     // 底模候选:内置种子 + 站方枚举补全(与浏览页一致)
     apiGet("/civitai_studio/enums").then((d) => {
         const list = (d.ActiveBaseModel || d.BaseModel || []);
         if (list.length) galBaseCands.list = sortEnumNames(list);
-    }).catch(() => {});
+    }).catch(() => { });
     const galScrollCheck = (el) => {
         if (!view.classList.contains("active")) return;
         if (el.scrollTop + el.clientHeight >= el.scrollHeight - 400 && !st.loading && st.next.length) fetchGallery(false);
@@ -3576,7 +3578,7 @@ function renderDownloads(force) {
             </div>
             ${active ? `<button class="cs-btn cs-btn-mini cs-btn-danger" data-cancel="${esc(j.id)}">${esc(t("cancelBtn"))}</button>`
                 : (j.status === "error" || j.status === "cancelled") ? `<button class="cs-btn cs-btn-mini" data-retry="${esc(j.id)}" title="${esc(t("retryTip"))}">${esc(t("retryResume"))}</button>`
-                : j.status === "done" && j.dest ? `<button class="cs-btn cs-btn-mini" data-reveal-dl="${esc(j.id)}">${esc(t("revealFile"))}</button>
+                    : j.status === "done" && j.dest ? `<button class="cs-btn cs-btn-mini" data-reveal-dl="${esc(j.id)}">${esc(t("revealFile"))}</button>
                 <button class="cs-btn cs-btn-mini" data-tolocal="${esc(j.id)}">${esc(t("toLocal"))}</button>` : ""}
         </div>`;
     }).join("");
@@ -3660,7 +3662,7 @@ async function openSettings() {
     catch (e) { toast("error", t("readCfgFailed"), e.message); return; }
     const oldProxyImages = !!cfg.proxy_images;
     let fold = {};
-    try { fold = JSON.parse(localStorage.getItem("cs_set_fold") || "{}") || {}; } catch (_) {}
+    try { fold = JSON.parse(localStorage.getItem("cs_set_fold") || "{}") || {}; } catch (_) { }
     const m = showModal(`
         <h3 class="cs-modal-title">${esc(t("settingsTitle"))}</h3>
         <div class="cs-set-body cs-form">
@@ -3766,7 +3768,7 @@ async function openSettings() {
             const g = h.parentElement;
             g.classList.toggle("closed");
             foldState[g.dataset.fold] = g.classList.contains("closed");
-            try { localStorage.setItem("cs_set_fold", JSON.stringify(foldState)); } catch (_) {}
+            try { localStorage.setItem("cs_set_fold", JSON.stringify(foldState)); } catch (_) { }
         };
     });
     // API 站点四选一:预设回显;自定义时展开输入框
@@ -3887,7 +3889,7 @@ async function openSettings() {
                     S.tagMap = {};
                     (d.tags || []).forEach((t2) => { S.tagMap[t2.name] = t2.id; });
                     refreshTagCombos();
-                }).catch(() => {});
+                }).catch(() => { });
             }
             m.close();
             toast("success", t("settingsSaved"), "");
@@ -3994,23 +3996,23 @@ function buildBrowseView(root) {
         $("#cs-search", view).value = "";
         $("#cs-f-type", view).value = "";
         $("#cs-f-hidepaid", view).value = "0";
-        try { ["cs_browse_base_mode", "cs_browse_tag_mode", "cs_browse_hidepaid"].forEach((k) => localStorage.removeItem(k)); } catch (_) {}
+        try { ["cs_browse_base_mode", "cs_browse_tag_mode", "cs_browse_hidepaid"].forEach((k) => localStorage.removeItem(k)); } catch (_) { }
         browseBasePicker.set([]);
         browseTagPicker.set([]);
         triggerBrowseRefresh();
     };
-    try { st.hidePaid = localStorage.getItem("cs_browse_hidepaid") || "0"; } catch (_) {}
+    try { st.hidePaid = localStorage.getItem("cs_browse_hidepaid") || "0"; } catch (_) { }
     $("#cs-f-hidepaid", view).value = String(st.hidePaid);
     $("#cs-f-hidepaid", view).addEventListener("change", (e) => {
         st.hidePaid = e.target.value;
-        try { localStorage.setItem("cs_browse_hidepaid", st.hidePaid); } catch (_) {}
+        try { localStorage.setItem("cs_browse_hidepaid", st.hidePaid); } catch (_) { }
         triggerBrowseRefresh();
     });
     for (const [sel, key] of [["#cs-f-type", "type"], ["#cs-f-sort", "sort"], ["#cs-f-period", "period"], ["#cs-f-nsfw", "nsfw"]]) {
         $(sel, view).addEventListener("change", (e) => {
             st[key] = key === "nsfw" ? parseInt(e.target.value, 10) : e.target.value;
             triggerBrowseRefresh();
-            if (key === "nsfw") apiPost("/civitai_studio/config", { nsfw: st[key] }).catch(() => {}); // 偏好持久化
+            if (key === "nsfw") apiPost("/civitai_studio/config", { nsfw: st[key] }).catch(() => { }); // 偏好持久化
         });
     }
     // 榜单预设:一键设置 排序+时间范围
@@ -4028,26 +4030,26 @@ function buildBrowseView(root) {
     });
     // 筛选区折叠:右下角 chevron,小尺寸 UI 下把 presets+filters 收起,搜索框常驻;记住偏好
     const fwrap = $(".cs-fwrap", view);
-    try { if (localStorage.getItem("cs_browse_fold") === "1") fwrap.classList.add("folded"); } catch (_) {}
+    try { if (localStorage.getItem("cs_browse_fold") === "1") fwrap.classList.add("folded"); } catch (_) { }
     syncFoldBtn($("#cs-browse-ffold", view), fwrap.classList.contains("folded"));
     $("#cs-browse-ffold", view).onclick = () => {
         fwrap.classList.toggle("folded");
         syncFoldBtn($("#cs-browse-ffold", view), fwrap.classList.contains("folded"));
-        try { localStorage.setItem("cs_browse_fold", fwrap.classList.contains("folded") ? "1" : "0"); } catch (_) {}
+        try { localStorage.setItem("cs_browse_fold", fwrap.classList.contains("folded") ? "1" : "0"); } catch (_) { }
     };
     // 底模:多选 chips(参考 tag 筛选形式,E2E g);逗号串存 st.base,后端拆重复键
     // 批4 E2E 8b:AND/OR 选择框移入 picker 添加行(替代删除的手输框)
     try {
         st.baseMode = localStorage.getItem("cs_browse_base_mode") || "OR";
         st.tagMode = localStorage.getItem("cs_browse_tag_mode") || "OR";
-    } catch (_) {}
+    } catch (_) { }
     const mkModeSel = (lsKey, key) => {
         const sel = document.createElement("select");
         sel.title = t("modeOR") + " / " + t("modeAND");
         sel.style.cssText = "flex:0 0 112px;font-size:11px;padding:2px;";
         sel.innerHTML = `<option value="OR">${esc(t("modeOR"))}</option><option value="AND">${esc(t("modeAND"))}</option>`;
         sel.value = st[key];
-        sel.onchange = () => { st[key] = sel.value; try { localStorage.setItem(lsKey, sel.value); } catch (_) {} triggerBrowseRefresh(); };
+        sel.onchange = () => { st[key] = sel.value; try { localStorage.setItem(lsKey, sel.value); } catch (_) { } triggerBrowseRefresh(); };
         return sel;
     };
     const baseCands = { list: BASE_MODELS };
@@ -4091,7 +4093,7 @@ function buildBrowseView(root) {
                     .map((tp) => `<option value="${esc(String(tp))}" ${String(tp) === cur ? "selected" : ""}>${esc(String(tp))}</option>`))
                 .join("");
         }
-    }).catch(() => {});
+    }).catch(() => { });
     // 无限滚动(页码推进在 fetchBrowse 成功后提交,失败自动重试同一页)
     $("#cs-browse-content", view).addEventListener("scroll", (e) => {
         const el = e.target;
@@ -4299,7 +4301,7 @@ async function openGroupManager() {
                 toast("success", t("gmDone", { name: g.name, note: remoteNote }), "");
                 md.close();
                 S.favData = null; // 强制重拉
-                loadFavDataOnly().catch(() => {});
+                loadFavDataOnly().catch(() => { });
             } catch (e) { toast("error", t("favFailed"), e.message); }
         };
         const info = document.createElement("span");
@@ -4331,7 +4333,7 @@ function openFavReset() {
     apiPost("/civitai_studio/favorites/reset", {}).then(() => {
         toast("success", t("resetDone"), "");
         S.favData = null;
-        loadFavDataOnly().catch(() => {});
+        loadFavDataOnly().catch(() => { });
     }).catch((e) => toast("error", t("favFailed"), e.message));
 }
 
@@ -4483,8 +4485,8 @@ async function loadFavView() {
     // 批8:缺分级条目后台补拉(逐张限速),完成后刷新收藏行遮罩;remaining>0 时下次开页继续
     if ((S.favData?.items || []).some((x) => !((x.extra || {}).nsfwLevel))) {
         apiPost("/civitai_studio/favorites/backfill_levels", {}).then((r2) => {
-            if (r2.updated > 0) loadFavDataOnly().catch(() => {});
-        }).catch(() => {});
+            if (r2.updated > 0) loadFavDataOnly().catch(() => { });
+        }).catch(() => { });
     }
     // 自动同步:开夹时静默触发,30 分钟节流
     if (S.cfg?.fav_autosync && Date.now() - (S.favLastSync || 0) > 30 * 60 * 1000) favDoSync(true);
@@ -4501,10 +4503,12 @@ function setFavSyncLine(text, cls) {
 }
 
 function favSyncLineText(r) {
-    const rec = { ts: Date.now(),
-                  up: (r.items_up || 0) + (r.items_rm || 0) + (r.upsynced || 0),
-                  down: (r.models_down || 0) + (r.images_down || 0) };
-    try { localStorage.setItem("cs_fav_lastsync", JSON.stringify(rec)); } catch (_) {}
+    const rec = {
+        ts: Date.now(),
+        up: (r.items_up || 0) + (r.items_rm || 0) + (r.upsynced || 0),
+        down: (r.models_down || 0) + (r.images_down || 0)
+    };
+    try { localStorage.setItem("cs_fav_lastsync", JSON.stringify(rec)); } catch (_) { }
     let txt = t("favSyncLine", { time: new Date(rec.ts).toLocaleString(), up: rec.up, down: rec.down });
     if (r.scope_hint) txt += " · " + r.scope_hint;
     if (r.errors && r.errors.length) txt += " · " + t("syncFailShort") + ": " + humanizeErr(String(r.errors[0]));
@@ -4579,7 +4583,7 @@ function buildFavoritesView(root) {
     try {
         const rec = JSON.parse(localStorage.getItem("cs_fav_lastsync") || "null");
         if (rec && rec.ts) setFavSyncLine(t("favSyncLine", { time: new Date(rec.ts).toLocaleString(), up: rec.up || 0, down: rec.down || 0 }), "");
-    } catch (_) {}
+    } catch (_) { }
     const favRescroll = () => { const sc = $(".cs-scroll", view); if (sc) sc.scrollTop = 0; };
     // E2E 12:名称档标签随类别 — 资产=按 ID,模型=按模型名(构建时即渲染)
     const syncNameOpt = () => {
@@ -4700,7 +4704,7 @@ function buildRoot(el) {
 function maybeOnboard(root) {
     // U1 首次引导:未配置 key 且用户没关过引导 → 浏览 tab 顶部三步卡;保存 key 自动消失
     let dismissed = false;
-    try { dismissed = !!localStorage.getItem("cs_onboard_done"); } catch (_) {}
+    try { dismissed = !!localStorage.getItem("cs_onboard_done"); } catch (_) { }
     if (S.cfg?.api_key_set || dismissed) return;
     const view = root.querySelector(".cs-view[data-view=browse]");
     if (!view || root.querySelector("#cs-onboard")) return;
@@ -4720,7 +4724,7 @@ function maybeOnboard(root) {
     card.querySelector("[data-go]").onclick = () => { card.remove(); openSettings(); };
     card.querySelector("[data-x]").onclick = () => {
         card.remove();
-        try { localStorage.setItem("cs_onboard_done", "1"); } catch (_) {}
+        try { localStorage.setItem("cs_onboard_done", "1"); } catch (_) { }
     };
 }
 
@@ -5236,9 +5240,9 @@ function renderSelInfo(node) {
             copyTextSafe(t, (ok) => {
                 d.innerHTML = ok
                     ? `<span style="color:#4caf50;flex:0 0 auto;">✓</span>`
-                      + `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(copiedTxt)}</span>`
+                    + `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(copiedTxt)}</span>`
                     : `<span style="color:#e2836b;flex:0 0 auto;">✕</span>`
-                      + `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(copyFailTxt)}</span>`;
+                    + `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(copyFailTxt)}</span>`;
                 d.title = ok ? copiedTxt : copyFailTxt;
                 setTimeout(() => { d.innerHTML = html; d.title = tip; }, 1200);
             });
@@ -5336,7 +5340,7 @@ function refreshTagCombos() {
             if (cur && !tw.options.values.includes(cur)) tw.options.values.unshift(cur);
         });
         rerenderTagPickers(); // 候选更新,所有 picker 重渲染(实时出新标签)
-    }).catch(() => {});
+    }).catch(() => { });
 }
 
 // 悬浮层大图/播放器(图片与视频通用)
@@ -6001,7 +6005,7 @@ app.registerExtension({
                                 imgEl.src = imgSrc(cdnThumb(first.url));
                             }
                         })
-                        .catch(() => {});
+                        .catch(() => { });
                 };
                 setTimeout(drawCover, 300);
                 (node.widgets || []).forEach((wd) => {
