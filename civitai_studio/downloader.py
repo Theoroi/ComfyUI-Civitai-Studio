@@ -432,8 +432,9 @@ async def _run_job(job):
         if job["id"] in _cancel_flags:
             raise asyncio.CancelledError()
         job["status"] = "verifying"
-        loop = asyncio.get_running_loop()
-        actual = await loop.run_in_executor(local_index._EXECUTOR, _sha256_file, tmp)
+        # 阶段2 把线程池升为包级 bg 后,local_index 只再导出 run_bg(批11.6:此处曾引用
+        # 已迁走的旧执行器属性 → 每个带 SHA256 的下载在校验步必炸 AttributeError)
+        actual = await local_index.run_bg(_sha256_file, tmp)
         if job["id"] in _cancel_flags:
             try:
                 os.remove(tmp)

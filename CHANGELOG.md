@@ -27,6 +27,10 @@
 
 ### 发布前验收修复（10-03）
 
+- **下载 SHA256 校验必炸修复**（用户实测报错 `local_index has no attribute _EXECUTOR`）：
+  阶段2 把线程池从 local_index 升级为包级 bg 时，downloader 校验步的引用漏改——凡 `file.hashes`
+  带 SHA256 的下载（默认开校验）走到校验步必抛 AttributeError。改走共享执行器 `local_index.run_bg`；
+  test_dljobs 补第 5 节回归（源级断言 + 执行器实跑）
 - **模型页 / 画廊筛选面板同构化**（用户拍板布局）：两页统一 **12 格制**——
   第 0 行不折叠工具条（模型页 `搜索框 + 类型 + ⟳刷新 + ⟲重置`；画廊 `精确ID + ⟳ + ⟲`
   ← 精确ID 从折叠区移出）；底模 / tags 各整行；第 3 行 `时间 | 排序 | NSFW | 分级` 四等分；

@@ -52,4 +52,18 @@ assert [j["id"] for j in cache_store.dl_jobs_all()] == ["old1"]  # 已导入 DB
 cache_store.clear_cache()
 assert [j["id"] for j in cache_store.dl_jobs_all()] == ["old1"], "dl_jobs 被 clear_cache 误清"
 
+# 5) SHA256 校验走共享执行器(批11.6 回归:阶段2 把线程池迁到 bg 后,downloader 仍摸
+#    已迁走的 local_index._EXECUTOR → 每个带 SHA256 的下载在校验步必炸 AttributeError)
+import asyncio, hashlib
+
+src = open(downloader.__file__, encoding="utf-8").read()
+assert "local_index._EXECUTOR" not in src, "downloader 又在摸已迁走的执行器"
+blob = b"civitai-studio-sha256-regression"
+fhash = os.path.join(tmp, "sha.bin")
+open(fhash, "wb").write(blob)
+want = hashlib.sha256(blob).hexdigest()
+assert downloader._sha256_file(fhash) == want
+got = asyncio.run(downloader.local_index.run_bg(downloader._sha256_file, fhash))
+assert got == want, "共享执行器路径不通"
+
 print("PASS test_dljobs")
