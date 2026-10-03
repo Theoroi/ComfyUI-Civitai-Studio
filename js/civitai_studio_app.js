@@ -61,7 +61,7 @@ function fmtSelHtml(cur) {
     return ["all", "jpg", "png", "webp", "gif", "video"].map((f) =>
         `<option value="${f}" ${(cur || "all") === f ? "selected" : ""}>${f === "all" ? esc(t("fmtAll")) : f === "video" ? esc(t("fmtVideo")) : f.toUpperCase()}</option>`).join("");
 }
-const JS_VERSION = "0.9.6";
+const JS_VERSION = "0.9.7";
 
 // ---------- i18n ----------
 const STR = {
@@ -4245,7 +4245,9 @@ function renderFavGrid(view) {
         const cover = it.cover;
         if (cover && isVideoItem({ url: cover })) {
             const v = document.createElement("video");
-            v.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;";
+            v.classList.add("cs-nsfw-blurable"); // 批8:视频分支此前漏接遮罩(实测 144144231/143543456 恰好都是视频)
+            v.dataset.nsfwLevel = nsfwBitsOf(it.extra || {});
+            v.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;" + nsfwBlurStyle(it.extra || {});
             v.muted = true; v.loop = true; v.playsInline = true; v.preload = "metadata";
             v.src = imgSrc(cover) + "#t=0.001";
             cell.appendChild(v);
