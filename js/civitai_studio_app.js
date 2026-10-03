@@ -61,7 +61,7 @@ function fmtSelHtml(cur) {
     return ["all", "jpg", "png", "webp", "gif", "video"].map((f) =>
         `<option value="${f}" ${(cur || "all") === f ? "selected" : ""}>${f === "all" ? esc(t("fmtAll")) : f === "video" ? esc(t("fmtVideo")) : f.toUpperCase()}</option>`).join("");
 }
-const JS_VERSION = "0.9.10";
+const JS_VERSION = "0.9.11";
 
 // ---------- i18n ----------
 const STR = {
@@ -1059,7 +1059,7 @@ function makeCard(model) {
         // 批9:卡片封面接模糊层(模型级 nsfwLevel=数字位掩码,实测列表接口直接给)
         el.classList.add("cs-nsfw-blurable");
         el.dataset.nsfwLevel = nsfwBitsOf(cover.media.nsfwLevel != null ? cover.media : model);
-        el.style.filter = nsfwBlurStyle(cover.media.nsfwLevel != null ? cover.media : model);
+        el.style.filter = nsfwBlurCss(cover.media.nsfwLevel != null ? cover.media : model);
         const show = () => {
             const ph = $(".cs-card-placeholder", card);
             if (ph) ph.style.display = "none";
@@ -1080,8 +1080,8 @@ function makeCard(model) {
             el.addEventListener("load", show);
         }
         attachCoverErrorHandler(el, url);
-        // 卡片封面只需要小图:走 CDN 缩略变体,视频封面保持原链
-        el.src = imgSrc(isVideo ? url : cdnThumb(url, S.cfg.px_cover || 256)) + (isVideo ? "#t=0.001" : ""); // 批10:封面分辨率可设置(默认 256)
+        // 卡片封面只需要小图:图片走 px_cover 缩略变体(批10),视频走 cdnVideo 降码率(批11)
+        el.src = imgSrc(isVideo ? cdnVideo(url) : cdnThumb(url, S.cfg.px_cover || 256)) + (isVideo ? "#t=0.001" : "");
         $(".cs-card-cover", card).prepend(el);
         // 批9:悬停轮播 — 仅悬停中的卡片按 3s 轮换版本图(≤8 张;视频悬停即播),
         // 非悬停零定时器零解码。定时全卡轮播被否:24-100 卡×定时器+预载+视频解码,
@@ -1093,7 +1093,18 @@ function makeCard(model) {
             cnt.className = "cs-card-cyc";
             cnt.textContent = "1/" + media.length;
             $(".cs-card-cover", card).appendChild(cnt);
-            let idx = 0, timer = null;
+            let idx = 0, timer = null, preloaded = false;
+            // 批11 E2E 1:开轮播时一次性预载本轮 ≤8 张(切图已就绪,不再边切边等网络);
+            // 视频不预载整文件(体积大),仍按时切片 #t 首帧按需取
+            const preload = () => {
+                if (preloaded) return;
+                preloaded = true;
+                for (const m of media) {
+                    if (m.type === "video") continue;
+                    const im = new Image();
+                    im.src = imgSrc(cdnThumb(m.url, S.cfg.px_media || 128)); // 与 swap 同 URL,命中缓存
+                }
+            };
             const swap = () => {
                 if (!card.isConnected) { clearInterval(timer); return; } // 卡片被重渲染:自清
                 idx = (idx + 1) % media.length;
@@ -1103,10 +1114,10 @@ function makeCard(model) {
                 nv.dataset.direct = m.url;
                 nv.classList.add("cs-nsfw-blurable");
                 nv.dataset.nsfwLevel = nsfwBitsOf(m.nsfwLevel != null ? { nsfwLevel: m.nsfwLevel } : model);
-                nv.style.filter = nsfwBlurStyle(m.nsfwLevel != null ? { nsfwLevel: m.nsfwLevel } : model);
+                nv.style.filter = nsfwBlurCss(m.nsfwLevel != null ? { nsfwLevel: m.nsfwLevel } : model);
                 if (m.type === "video") {
                     nv.muted = true; nv.loop = true; nv.playsInline = true; nv.preload = "metadata";
-                    nv.src = imgSrc(m.url) + "#t=0.001";
+                    nv.src = imgSrc(cdnVideo(m.url)) + "#t=0.001"; // 批11 E2E 4:视频不再 original=true
                     nv.play().catch(() => {});
                 } else {
                     nv.loading = "eager";
@@ -1119,7 +1130,8 @@ function makeCard(model) {
             };
             card.addEventListener("mouseenter", () => {
                 if (timer) return;
-                timer = setInterval(swap, 1000); // 批10 E2E 5:1s/张(用户拍板,原 3s 停留偏长)
+                preload(); // 批11 E2E 1:开播即预载全部 8 张
+                timer = setInterval(swap, 3000); // 批11 E2E 1:3s/张(用户拍板;批10 的 1s 停留偏短)
             });
             card.addEventListener("mouseleave", () => {
                 clearInterval(timer); timer = null;
@@ -1132,10 +1144,10 @@ function makeCard(model) {
                     fv.dataset.direct = first.url;
                     fv.classList.add("cs-nsfw-blurable");
                     fv.dataset.nsfwLevel = nsfwBitsOf(first.nsfwLevel != null ? { nsfwLevel: first.nsfwLevel } : model);
-                    fv.style.filter = nsfwBlurStyle(first.nsfwLevel != null ? { nsfwLevel: first.nsfwLevel } : model);
+                    fv.style.filter = nsfwBlurCss(first.nsfwLevel != null ? { nsfwLevel: first.nsfwLevel } : model);
                     if (first.type === "video") {
                         fv.muted = true; fv.loop = true; fv.playsInline = true; fv.preload = "metadata";
-                        fv.src = imgSrc(first.url) + "#t=0.001";
+                        fv.src = imgSrc(cdnVideo(first.url)) + "#t=0.001";
                     } else fv.src = imgSrc(cdnThumb(first.url, S.cfg.px_media || 128));
                     el.replaceWith(fv);
                     el = fv;
@@ -1403,8 +1415,14 @@ function nsfwBlurOn(item) {
     if (!lv) return false;
     return (S.cfg.nsfwBlurBits || []).some((b) => lv & b);
 }
+function nsfwBlurCss(item) {
+    // 赋 el.style.filter 只吃值("blur(18px)"):塞完整声明"filter:blur(18px);"会被静默丢弃
+    // (批11 E2E 2 卡片封面从不模糊的根因);HTML style 属性拼接用 nsfwBlurStyle
+    return nsfwBlurOn(item) ? "blur(18px)" : "";
+}
 function nsfwBlurStyle(item) {
-    return nsfwBlurOn(item) ? "filter:blur(18px);" : "";
+    const v = nsfwBlurCss(item);
+    return v ? "filter:" + v + ";" : "";
 }
 function openNsfwBlurPicker(ev) {
     document.querySelectorAll(".cs-mini-menu").forEach((n) => n.remove());
@@ -1435,7 +1453,7 @@ function openNsfwBlurPicker(ev) {
             S.cfg.nsfwBlurBits = [...bits].sort((a, b2) => a - b2);
             apiPost("/civitai_studio/config", { nsfw_blur: S.cfg.nsfwBlurBits }).catch(() => {});
             document.querySelectorAll("[data-nsfw-level]").forEach((el) => {
-                el.style.filter = nsfwBlurOn({ nsfwLevel: el.dataset.nsfwLevel }) ? "blur(18px)" : ""; // 批6:全量重算(归一化字符串枚举)
+                el.style.filter = nsfwBlurCss({ nsfwLevel: el.dataset.nsfwLevel }); // 批6:全量重算(归一化字符串枚举)
             });
         };
         lb2.appendChild(cb);
@@ -1611,8 +1629,8 @@ function rewriteDescImages(root) {
 
 function galleryItemHtml(img, px) {
     // 预览条目可能是视频(mp4 封面):静音循环,进视口才加载;右上角可存图到 output
-    // px:缩略宽度(批10:详情页展示图传 px_media=128;缺省 256=画廊网格口径)
-    const src = esc(imgSrc(img.url));
+    // px:图片缩略宽度(批10:详情页展示图传 px_media=128;缺省 256=画廊网格口径);
+    // 视频不受 px 控制,固定走 cdnVideo(width=450,批11)
     const direct = esc(img.url);
     const save = `<button class="cs-save-btn" title="${esc(t("saveBtnTitle"))}" data-save-url="${direct}">⬇</button>`;
     const blur = nsfwBlurStyle(img); // 批F:NSFW 模糊遮罩(hover 临时清晰)
@@ -1620,7 +1638,7 @@ function galleryItemHtml(img, px) {
     const battr = ` data-nsfw-level="${nsfwBitsOf(img)}"`;
     if (isVideoItem(img)) { // 与全局口径一致:webm/mov 也走 video 分支(复审R2-4)
         return `<div class="cs-gallery-item">${save}<video muted loop playsinline preload="metadata"${battr} class="cs-nsfw-blurable" style="${blur}"
-                    src="${src}#t=0.001" data-direct="${direct}"
+                    src="${esc(imgSrc(cdnVideo(img.url)))}#t=0.001" data-direct="${direct}"
                     onerror="this.style.display='none'"></video></div>`;
     }
     return `<div class="cs-gallery-item">${save}<img loading="lazy" class="cs-nsfw-blurable"${battr} style="${blur}" src="${esc(imgSrc(cdnThumb(img.url, px || 256)))}" data-direct="${esc(img.url)}"
@@ -1690,7 +1708,7 @@ async function renderVersion(version, model, box, opts = {}) {
         ${images.length ? `
         <div class="cs-section">
             <div class="cs-section-title">${esc(t("previews", { n: images.length }))}</div>
-            <div class="cs-gallery">${images.map((g) => galleryItemHtml(g, S.cfg.px_media || 128)).join("")} // 批10:详情展示图 128px(可设置)
+            <div class="cs-gallery">${images.map((g) => galleryItemHtml(g, S.cfg.px_media || 128)).join("")}
             </div>
         </div>` : ""}
     `;
@@ -3252,7 +3270,7 @@ function renderGallery(reset) {
             // 批6:无条件带类+data(nsfwBits 归一),勾选变更可即时重算;filter 按命中内联
             item.innerHTML = `${save}${fmtBadgeHtml(img)}<video muted loop playsinline preload="metadata"`
                 + ` class="cs-nsfw-blurable" data-nsfw-level="${nsfwBitsOf(img)}" style="${nsfwBlurStyle(img)}"`
-                + ` src="${esc(imgSrc(img.url))}#t=0.001" data-direct="${esc(img.url)}"
+                + ` src="${esc(imgSrc(cdnVideo(img.url)))}#t=0.001" data-direct="${esc(img.url)}"
                     onerror="this.style.display='none'"></video>`;
         } else {
             item.innerHTML = `${save}${fmtBadgeHtml(img)}<img loading="lazy"`
@@ -4363,7 +4381,7 @@ function renderFavGrid(view) {
             v.dataset.nsfwLevel = nsfwBitsOf(it.extra || {});
             v.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;" + nsfwBlurStyle(it.extra || {});
             v.muted = true; v.loop = true; v.playsInline = true; v.preload = "metadata";
-            v.src = imgSrc(cover) + "#t=0.001";
+            v.src = imgSrc(cdnVideo(cover)) + "#t=0.001"; // 批11:视频缩略走 width=450
             cell.appendChild(v);
         } else if (cover) {
             const im = document.createElement("img");
@@ -4992,6 +5010,14 @@ function cdnThumb(url, w = 256) {
     return url.replace("/original=true/", `/width=${w}/`);
 }
 
+// 视频缩略变体:同一 imgix 变换段(实测 width=450 直出可播放 mp4,4.2MB→2.4MB,-37%);
+// 站方 feed 卡片口径即 width=450。注意 width 超过源尺寸会重编码放大(720 实测更大),
+// 故只用固定小值,不随 px_cover/px_media 设置放大(批11 E2E 4)
+function cdnVideo(url, w = 450) {
+    if (!url) return "";
+    return url.replace("original=true", `width=${w}`); // 不加斜杠:兼容 anim=true,original=true 类多段
+}
+
 // 站方部分文件名尾部是"_文件ID"(量化信息只在 metadata.fp,如 Qwen 2.1 官方包)。
 // 显示/默认保存名用 fp 还原该段:qwenImage21_v21_txt_3239854.safetensors → …_bf16.safetensors
 function fileDisplayName(f) {
@@ -5419,7 +5445,7 @@ function renderNodeThumbs(node) {
             v.loop = true;
             v.playsInline = true;
             v.preload = "metadata";
-            v.src = imgSrc(c.it.url || "") + "#t=0.001";
+            v.src = imgSrc(cdnVideo(c.it.url || "")) + "#t=0.001"; // 批11:视频缩略走 width=450
             cell.appendChild(v);
             appendPlayBadge(cell);
         } else {

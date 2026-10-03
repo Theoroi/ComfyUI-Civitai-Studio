@@ -2,6 +2,22 @@
 
 格式参照 Keep a Changelog;项目版本号见 `pyproject.toml` 与 `civitai_studio/version.py`。
 
+## [0.9.11] - 2026-10-03(批11:E2E 二次修复;patch 线)
+
+- **卡片封面从不模糊真根因(批9 引入)**：`el.style.filter = nsfwBlurStyle(item)` 把完整 CSS
+  声明("filter:blur(18px);")塞进只吃值的 `style.filter`，非法值被浏览器静默丢弃——
+  封面/轮播/复位三处同源；新增 `nsfwBlurCss`(返回值,专供 style 属性赋值)与
+  `nsfwBlurStyle`(返回声明,供 HTML style 拼接)分工，👁 勾选重算路径同步收敛
+- **视频不再走 original=true(E2E 4)**：新增 `cdnVideo(url, w=450)`——Civitai CDN 同一
+  imgix 变换段，实测 4.2MB→2.4MB(-37%)，站方 feed 卡片口径即 width=450；`width=720`
+  会重编码放大(实测比原文件更大)，故固定小值、不随 px_cover/px_media 放大。接入 6 处
+  缩略图(模型卡封面/轮播/轮播复位/详情展示图/画廊网格/收藏网格/节点条)；大图浮层保留
+  原链(点开即看全分辨率，与图片口径一致)
+- **轮播间隔 1s → 3s**(用户拍板：1s 停留过短)；新增**开播预载**：悬停进入轮播时一次性
+  预载本轮 ≤8 张(与 swap 同 URL 命中缓存)，切图不再边切边等网络；视频不预载整文件
+- **模型详情页预览区泄漏源码注释**修复("// 批10:详情展示图 128px(可设置)" — 批10 该注释
+  写在 template literal 内部，被当正文渲染出来)
+
 ## [0.9.10] - 2026-10-03(批10:轮播修复与分辨率设置;patch 线——0.10.0 留给下个大功能批)
 
 - **轮播卡死真根因(批9 引入)**：swap 里对 `const el` 重赋值——ESM 严格模式抛
