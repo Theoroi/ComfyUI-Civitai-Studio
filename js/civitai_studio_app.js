@@ -61,7 +61,7 @@ function fmtSelHtml(cur) {
     return ["all", "jpg", "png", "webp", "gif", "video"].map((f) =>
         `<option value="${f}" ${(cur || "all") === f ? "selected" : ""}>${f === "all" ? esc(t("fmtAll")) : f === "video" ? esc(t("fmtVideo")) : f.toUpperCase()}</option>`).join("");
 }
-const JS_VERSION = "0.9.9";
+const JS_VERSION = "0.10.0";
 
 // ---------- i18n ----------
 const STR = {
@@ -208,6 +208,11 @@ const STR = {
         favImportFailed: "导入失败", favEmpty: "还没有收藏 — 在画廊、节点缩略图或大图浮层里点 ★",
         favAutoSync: "收藏自动同步",
         favAutoSyncTip: "打开收藏夹时自动与 Civitai 同步,冲突按最新修改时间覆盖;模型上推需 key 勾选 Social Write",
+        setGrpThumbs: "缩略图分辨率",
+        pxCoverLabel: "模型卡片封面",
+        pxCoverTip: "模型页卡片封面缩略宽度。默认 256px(与画廊一致)。",
+        pxMediaLabel: "轮播与详情展示图",
+        pxMediaTip: "卡片悬停轮播与模型详情页展示图的缩略宽度。默认 128px,更低更省流量。",
         setGrpLogs: "日志",
         logTsLabel: "时间戳前缀",
         logTsTip: "日志行首附加 [年-月-日 时:分:秒]。默认关;保存即时生效。",
@@ -388,6 +393,11 @@ const STR = {
         favImport: "Import", favExport: "Export", favImported: "Imported {items} items / {groups} groups",
         favImportFailed: "Import failed", favEmpty: "No favorites yet — tap ★ in the gallery, node thumbnails or the image overlay",
         favAutoSync: "Auto-sync favorites",
+        setGrpThumbs: "Thumbnail resolution",
+        pxCoverLabel: "Model card cover",
+        pxCoverTip: "Cover thumbnail width on the Models grid. Default 256px (matches Gallery).",
+        pxMediaLabel: "Carousel & detail previews",
+        pxMediaTip: "Thumbnail width for card hover-carousel and model detail previews. Default 128px; lower saves bandwidth.",
         setGrpLogs: "Logging",
         logTsLabel: "Timestamp prefix",
         logTsTip: "Prefix log lines with [YYYY-MM-DD HH:MM:SS]. Off by default; applies on save.",
@@ -1043,7 +1053,7 @@ function makeCard(model) {
     if (cover?.media?.url) {
         const url = cover.media.url;
         const isVideo = cover.kind === "video";
-        const el = document.createElement(isVideo ? "video" : "img");
+        let el = document.createElement(isVideo ? "video" : "img"); // 批10:轮播要重指,必须 let(批9 const 是卡死根因)
         el.className = "cs-card-img";
         el.dataset.direct = url;
         // 批9:卡片封面接模糊层(模型级 nsfwLevel=数字位掩码,实测列表接口直接给)
@@ -1071,7 +1081,7 @@ function makeCard(model) {
         }
         attachCoverErrorHandler(el, url);
         // 卡片封面只需要小图:走 CDN 缩略变体,视频封面保持原链
-        el.src = imgSrc(isVideo ? url : cdnThumb(url)) + (isVideo ? "#t=0.001" : "");
+        el.src = imgSrc(isVideo ? url : cdnThumb(url, S.cfg.px_cover || 256)) + (isVideo ? "#t=0.001" : ""); // 批10:封面分辨率可设置(默认 256)
         $(".cs-card-cover", card).prepend(el);
         // 批9:悬停轮播 — 仅悬停中的卡片按 3s 轮换版本图(≤8 张;视频悬停即播),
         // 非悬停零定时器零解码。定时全卡轮播被否:24-100 卡×定时器+预载+视频解码,
@@ -1101,7 +1111,7 @@ function makeCard(model) {
                 } else {
                     nv.loading = "eager";
                     nv.alt = model.name;
-                    nv.src = imgSrc(cdnThumb(m.url));
+                    nv.src = imgSrc(cdnThumb(m.url, S.cfg.px_media || 128)); // 批10:轮播低分辨率减负载
                 }
                 el.replaceWith(nv);
                 el = nv;
@@ -1109,7 +1119,7 @@ function makeCard(model) {
             };
             card.addEventListener("mouseenter", () => {
                 if (timer) return;
-                timer = setInterval(swap, 3000);
+                timer = setInterval(swap, 1000); // 批10 E2E 5:1s/张(用户拍板,原 3s 停留偏长)
             });
             card.addEventListener("mouseleave", () => {
                 clearInterval(timer); timer = null;
@@ -1126,7 +1136,7 @@ function makeCard(model) {
                     if (first.type === "video") {
                         fv.muted = true; fv.loop = true; fv.playsInline = true; fv.preload = "metadata";
                         fv.src = imgSrc(first.url) + "#t=0.001";
-                    } else fv.src = imgSrc(cdnThumb(first.url));
+                    } else fv.src = imgSrc(cdnThumb(first.url, S.cfg.px_media || 128));
                     el.replaceWith(fv);
                     el = fv;
                 } else if (el.tagName === "VIDEO") el.pause();
@@ -1599,8 +1609,9 @@ function rewriteDescImages(root) {
     });
 }
 
-function galleryItemHtml(img) {
+function galleryItemHtml(img, px) {
     // 预览条目可能是视频(mp4 封面):静音循环,进视口才加载;右上角可存图到 output
+    // px:缩略宽度(批10:详情页展示图传 px_media=128;缺省 256=画廊网格口径)
     const src = esc(imgSrc(img.url));
     const direct = esc(img.url);
     const save = `<button class="cs-save-btn" title="${esc(t("saveBtnTitle"))}" data-save-url="${direct}">⬇</button>`;
@@ -1612,7 +1623,7 @@ function galleryItemHtml(img) {
                     src="${src}#t=0.001" data-direct="${direct}"
                     onerror="this.style.display='none'"></video></div>`;
     }
-    return `<div class="cs-gallery-item">${save}<img loading="lazy" class="cs-nsfw-blurable"${battr} style="${blur}" src="${esc(imgSrc(cdnThumb(img.url)))}" data-direct="${esc(img.url)}"
+    return `<div class="cs-gallery-item">${save}<img loading="lazy" class="cs-nsfw-blurable"${battr} style="${blur}" src="${esc(imgSrc(cdnThumb(img.url, px || 256)))}" data-direct="${esc(img.url)}"
                 onerror="this.style.display='none'"/></div>`;
 }
 
@@ -1679,7 +1690,7 @@ async function renderVersion(version, model, box, opts = {}) {
         ${images.length ? `
         <div class="cs-section">
             <div class="cs-section-title">${esc(t("previews", { n: images.length }))}</div>
-            <div class="cs-gallery">${images.map(galleryItemHtml).join("")}
+            <div class="cs-gallery">${images.map((g) => galleryItemHtml(g, S.cfg.px_media || 128)).join("")} // 批10:详情展示图 128px(可设置)
             </div>
         </div>` : ""}
     `;
@@ -3702,6 +3713,17 @@ async function openSettings() {
                     <label class="cs-check"><input id="cs-set-autosync" type="checkbox" ${cfg.fav_autosync ? "checked" : ""}/> ${esc(t("favAutoSync"))} ${infoIco(t("favAutoSyncTip"))}</label>
                 </div>
             </div>
+            <div class="cs-set-group" data-fold="thumbs">
+                <div class="cs-set-group-head">${esc(t("setGrpThumbs"))}<span class="cs-set-caret">▾</span></div>
+                <div class="cs-set-group-body">
+                    <label class="cs-check">${esc(t("pxCoverLabel"))}
+                        <select id="cs-set-pxcover">${[128, 256, 512].map((px) => `<option value="${px}" ${(cfg.px_cover || 256) === px ? "selected" : ""}>${px}px</option>`).join("")}</select>
+                        ${infoIco(t("pxCoverTip"))}</label>
+                    <label class="cs-check">${esc(t("pxMediaLabel"))}
+                        <select id="cs-set-pxmedia">${[96, 128, 256].map((px) => `<option value="${px}" ${(cfg.px_media || 128) === px ? "selected" : ""}>${px}px</option>`).join("")}</select>
+                        ${infoIco(t("pxMediaTip"))}</label>
+                </div>
+            </div>
             <div class="cs-set-group" data-fold="logs">
                 <div class="cs-set-group-head">${esc(t("setGrpLogs"))}<span class="cs-set-caret">▾</span></div>
                 <div class="cs-set-group-body">
@@ -3830,6 +3852,8 @@ async function openSettings() {
             fav_autosync: $("#cs-set-autosync", m.box).checked,
             log_debug: $("#cs-set-logdebug", m.box).checked,
             log_timestamp: $("#cs-set-logts", m.box).checked,
+            px_cover: parseInt($("#cs-set-pxcover", m.box).value, 10) || 256,
+            px_media: parseInt($("#cs-set-pxmedia", m.box).value, 10) || 128,
         };
         const key = $("#cs-set-key", m.box).value.trim();
         if (key) body.api_key = key;

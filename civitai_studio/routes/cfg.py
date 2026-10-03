@@ -184,6 +184,8 @@ async def get_config(request):
         "fav_autosync": cfg.get("fav_autosync", False),
         "log_debug": cfg.get("log_debug", False),
         "log_timestamp": cfg.get("log_timestamp", False),
+        "px_cover": cfg.get("px_cover", 256),
+        "px_media": cfg.get("px_media", 128),
         "nsfw_blur": cfg.get("nsfw_blur") or [],
     })
 
@@ -234,6 +236,12 @@ async def set_config(request):
                 "fav_autosync", "log_debug", "log_timestamp"):
         if key in body:
             partial[key] = bool(body.get(key))
+    for key, lo, hi in (("px_cover", 64, 512), ("px_media", 64, 512)):
+        if key in body:
+            try:
+                partial[key] = max(lo, min(hi, int(body.get(key))))
+            except (TypeError, ValueError):
+                return _json_error(f"{key} 必须是整数", 400)
     if "nsfw_blur" in body:
         # 分级位掩码数组:只接受 1/2/4/8/16 的组合(批F)
         try:
