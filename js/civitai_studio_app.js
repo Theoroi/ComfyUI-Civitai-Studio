@@ -61,7 +61,7 @@ function fmtSelHtml(cur) {
     return ["all", "jpg", "png", "webp", "gif", "video"].map((f) =>
         `<option value="${f}" ${(cur || "all") === f ? "selected" : ""}>${f === "all" ? esc(t("fmtAll")) : f === "video" ? esc(t("fmtVideo")) : f.toUpperCase()}</option>`).join("");
 }
-const JS_VERSION = "0.9.11";
+const JS_VERSION = "0.9.12";
 
 // ---------- i18n ----------
 const STR = {
@@ -5010,10 +5010,12 @@ function cdnThumb(url, w = 256) {
     return url.replace("/original=true/", `/width=${w}/`);
 }
 
-// 视频缩略变体:同一 imgix 变换段(实测 width=450 直出可播放 mp4,4.2MB→2.4MB,-37%);
-// 站方 feed 卡片口径即 width=450。注意 width 超过源尺寸会重编码放大(720 实测更大),
-// 故只用固定小值,不随 px_cover/px_media 设置放大(批11 E2E 4)
-function cdnVideo(url, w = 450) {
+// 视频缩略变体:与图片同一 imgix 变换段。站方档位是离散的(实测 704x960 源):
+//   请求 64-96 → 96x130 档 | 128-320 → 320x436 档 | 321-450 → 450x614 档 | 512 → 512 档 | 更大 → 原图
+// 取 320:这是"不糊"的最小档(96 档在 150-280px 卡面上肉眼可见糊),且与图片缩略同档
+// (图片请求 128/256 也落在 320 档),卡内视频/图片观感一致。体积 450 档 2.43MB → 320 档
+// 1.43MB(-41%,三样本实测 -41%/-42%/-47%)。大图浮层仍走原链,细节不受影响(批11.2)
+function cdnVideo(url, w = 320) {
     if (!url) return "";
     return url.replace("original=true", `width=${w}`); // 不加斜杠:兼容 anim=true,original=true 类多段
 }
