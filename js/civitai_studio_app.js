@@ -1630,7 +1630,7 @@ function rewriteDescImages(root) {
 function galleryItemHtml(img, px) {
     // 预览条目可能是视频(mp4 封面):静音循环,进视口才加载;右上角可存图到 output
     // px:图片缩略宽度(批10:详情页展示图传 px_media=128;缺省 256=画廊网格口径);
-    // 视频不受 px 控制,固定走 cdnVideo(width=450,批11)
+    // 视频不受 px 控制,固定走 cdnVideo(320 档;档位表见该函数注释,批11.2)
     const direct = esc(img.url);
     const save = `<button class="cs-save-btn" title="${esc(t("saveBtnTitle"))}" data-save-url="${direct}">⬇</button>`;
     const blur = nsfwBlurStyle(img); // 批F:NSFW 模糊遮罩(hover 临时清晰)
@@ -4381,7 +4381,7 @@ function renderFavGrid(view) {
             v.dataset.nsfwLevel = nsfwBitsOf(it.extra || {});
             v.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;" + nsfwBlurStyle(it.extra || {});
             v.muted = true; v.loop = true; v.playsInline = true; v.preload = "metadata";
-            v.src = imgSrc(cdnVideo(cover)) + "#t=0.001"; // 批11:视频缩略走 width=450
+            v.src = imgSrc(cdnVideo(cover)) + "#t=0.001"; // 批11:视频缩略走 cdnVideo(320 档)
             cell.appendChild(v);
         } else if (cover) {
             const im = document.createElement("img");
@@ -5447,7 +5447,7 @@ function renderNodeThumbs(node) {
             v.loop = true;
             v.playsInline = true;
             v.preload = "metadata";
-            v.src = imgSrc(cdnVideo(c.it.url || "")) + "#t=0.001"; // 批11:视频缩略走 width=450
+            v.src = imgSrc(cdnVideo(c.it.url || "")) + "#t=0.001"; // 批11:视频缩略走 cdnVideo(320 档)
             cell.appendChild(v);
             appendPlayBadge(cell);
         } else {
