@@ -25,12 +25,29 @@ DEFAULTS = {
     "tag_and_mode": False,  # 实验选项:多标签筛选改漏斗式 AND(默认 OR,API 原生语义)
     "cache_max_mb": 500,    # 磁盘缓存上限 MB(50~2000),见 docs/plans/completed/cache-design.md
     "fav_autosync": False,  # 收藏与 Civitai 账号自动同步(开面板时触发,冲突按最新时间覆盖)
-    "px_cover": 256,        # 模型卡片封面缩略宽度(批10,64~512)
-    "px_media": 128,        # 轮播与详情展示图缩略宽度(批10,64~512)
+    "px_cover": 320,        # 模型卡片封面缩略档位(批10;批11.3 改真实 CDN 档位,见 PX_TIERS)
+    "px_media": 320,        # 轮播与详情展示图缩略档位(批10;批11.3 改真实 CDN 档位)
     "log_timestamp": False,  # 日志带时间戳前缀(批6 a,默认关)
     "log_debug": False,     # 调试日志:出站请求/响应/同步逐条决策落控制台(等效 --verbose,免启动参数)
     "nsfw_blur": [4, 8, 16],  # NSFW 模糊遮罩:命中的分级位(PG=1,PG13=2,R=4,X=8,XXX=16)图片加模糊,默认 X/XXX
 }
+
+
+# 站方 CDN 缩略档位(实测):请求值向上取到最近档位;图片 96/320/450/512/800/1200…,
+# 视频同族 96/320/450/512。设置项只暴露 <=512 的四档(再大对侧边栏缩略图无意义)
+PX_TIERS = (96, 320, 450, 512)
+
+
+def _snap_px(value, fallback=320):
+    """缩略宽度吸附到真实档位(向上取,与 CDN 行为一致;旧配置 128/256 一并归到 320)."""
+    try:
+        v = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    for t in PX_TIERS:
+        if v <= t:
+            return t
+    return PX_TIERS[-1]
 
 
 def _normalize_locked(cfg):
@@ -48,10 +65,7 @@ def _normalize_locked(cfg):
     except (TypeError, ValueError):
         cfg["cache_max_mb"] = 500
     for k in ("px_cover", "px_media"):
-        try:
-            cfg[k] = max(64, min(512, int(cfg.get(k, 256 if k == "px_cover" else 128))))
-        except (TypeError, ValueError):
-            cfg[k] = 256 if k == "px_cover" else 128
+        cfg[k] = _snap_px(cfg.get(k))
     return cfg
 
 

@@ -70,6 +70,13 @@ print("索引增量化 OK(含外部 sidecar 感知):", s3["stats"])
 # 3) config 钳制 + usage/clear(响应含 max_mb 由 routes 测,这里测底层)
 config.update({"cache_max_mb": 9999})
 assert config.load()["cache_max_mb"] == 2000
+# 缩略档位吸附(批11.3):任意宽度→真实 CDN 档位(向上取;旧配置 128/256 归 320,越界归 512)
+config.update({"px_cover": 200, "px_media": 700})
+cfg2 = config.load()
+assert cfg2["px_cover"] == 320 and cfg2["px_media"] == 512, cfg2
+config.update({"px_cover": 96, "px_media": 450})
+cfg3 = config.load()
+assert cfg3["px_cover"] == 96 and cfg3["px_media"] == 450, cfg3
 cache_store.kv_put("big", {"x": 1})
 assert cache_store.usage() > 0
 cache_store.clear_cache()

@@ -184,8 +184,8 @@ async def get_config(request):
         "fav_autosync": cfg.get("fav_autosync", False),
         "log_debug": cfg.get("log_debug", False),
         "log_timestamp": cfg.get("log_timestamp", False),
-        "px_cover": cfg.get("px_cover", 256),
-        "px_media": cfg.get("px_media", 128),
+        "px_cover": cfg.get("px_cover", 320),
+        "px_media": cfg.get("px_media", 320),
         "nsfw_blur": cfg.get("nsfw_blur") or [],
     })
 
@@ -236,6 +236,7 @@ async def set_config(request):
                 "fav_autosync", "log_debug", "log_timestamp"):
         if key in body:
             partial[key] = bool(body.get(key))
+    # 缩略档位(批11.3):入参接受 64~512 任意整数,统一由 config._snap_px 吸附到真实档位
     for key, lo, hi in (("px_cover", 64, 512), ("px_media", 64, 512)):
         if key in body:
             try:

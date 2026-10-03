@@ -61,7 +61,7 @@ function fmtSelHtml(cur) {
     return ["all", "jpg", "png", "webp", "gif", "video"].map((f) =>
         `<option value="${f}" ${(cur || "all") === f ? "selected" : ""}>${f === "all" ? esc(t("fmtAll")) : f === "video" ? esc(t("fmtVideo")) : f.toUpperCase()}</option>`).join("");
 }
-const JS_VERSION = "0.9.12";
+const JS_VERSION = "0.9.13";
 
 // ---------- i18n ----------
 const STR = {
@@ -210,9 +210,9 @@ const STR = {
         favAutoSyncTip: "打开收藏夹时自动与 Civitai 同步,冲突按最新修改时间覆盖;模型上推需 key 勾选 Social Write",
         setGrpThumbs: "缩略图分辨率",
         pxCoverLabel: "模型卡片封面",
-        pxCoverTip: "模型页卡片封面缩略宽度。默认 256px(与画廊一致)。",
+        pxCoverTip: "模型页卡片封面缩略档位。站方 CDN 按档取图(96/320/450/512,请求值向上取档)。默认 320px=清晰与流量的平衡点;96px 最省但卡面(约150-280px)会发糊。",
         pxMediaLabel: "轮播与详情展示图",
-        pxMediaTip: "卡片悬停轮播与模型详情页展示图的缩略宽度。默认 128px,更低更省流量。",
+        pxMediaTip: "卡片悬停轮播与模型详情页展示图的缩略档位(同 96/320/450)。轮播占卡面(约150-280px),详情展示图约105-140px,默认 320px 两者兼顾;96px 仅适合纯省流量。",
         setGrpLogs: "日志",
         logTsLabel: "时间戳前缀",
         logTsTip: "日志行首附加 [年-月-日 时:分:秒]。默认关;保存即时生效。",
@@ -395,9 +395,9 @@ const STR = {
         favAutoSync: "Auto-sync favorites",
         setGrpThumbs: "Thumbnail resolution",
         pxCoverLabel: "Model card cover",
-        pxCoverTip: "Cover thumbnail width on the Models grid. Default 256px (matches Gallery).",
+        pxCoverTip: "Cover thumbnail tier on the Models grid. The CDN serves fixed tiers (96/320/450/512, requests round up). Default 320px balances clarity and bandwidth; 96px is smallest but looks soft at 150-280px card size.",
         pxMediaLabel: "Carousel & detail previews",
-        pxMediaTip: "Thumbnail width for card hover-carousel and model detail previews. Default 128px; lower saves bandwidth.",
+        pxMediaTip: "Thumbnail tier for card hover-carousel and model detail previews (same 96/320/450). Carousel fills the card (150-280px), detail previews are 105-140px; 320px covers both. 96px only for pure bandwidth saving.",
         setGrpLogs: "Logging",
         logTsLabel: "Timestamp prefix",
         logTsTip: "Prefix log lines with [YYYY-MM-DD HH:MM:SS]. Off by default; applies on save.",
@@ -1081,7 +1081,7 @@ function makeCard(model) {
         }
         attachCoverErrorHandler(el, url);
         // 卡片封面只需要小图:图片走 px_cover 缩略变体(批10),视频走 cdnVideo 降码率(批11)
-        el.src = imgSrc(isVideo ? cdnVideo(url) : cdnThumb(url, S.cfg.px_cover || 256)) + (isVideo ? "#t=0.001" : "");
+        el.src = imgSrc(isVideo ? cdnVideo(url) : cdnThumb(url, S.cfg.px_cover || 320)) + (isVideo ? "#t=0.001" : "");
         $(".cs-card-cover", card).prepend(el);
         // 批9:悬停轮播 — 仅悬停中的卡片按 3s 轮换版本图(≤8 张;视频悬停即播),
         // 非悬停零定时器零解码。定时全卡轮播被否:24-100 卡×定时器+预载+视频解码,
@@ -1102,7 +1102,7 @@ function makeCard(model) {
                 for (const m of media) {
                     if (isVideoItem(m)) continue; // 含 type 字段缺失但 URL 为 mp4/webm/mov 的情况
                     const im = new Image();
-                    im.src = imgSrc(cdnThumb(m.url, S.cfg.px_media || 128)); // 与 swap 同 URL,命中缓存
+                    im.src = imgSrc(cdnThumb(m.url, S.cfg.px_media || 320)); // 与 swap 同 URL,命中缓存
                 }
             };
             const swap = () => {
@@ -1122,7 +1122,7 @@ function makeCard(model) {
                 } else {
                     nv.loading = "eager";
                     nv.alt = model.name;
-                    nv.src = imgSrc(cdnThumb(m.url, S.cfg.px_media || 128)); // 批10:轮播低分辨率减负载
+                    nv.src = imgSrc(cdnThumb(m.url, S.cfg.px_media || 320)); // 批10:轮播低分辨率减负载
                 }
                 el.replaceWith(nv);
                 el = nv;
@@ -1148,7 +1148,7 @@ function makeCard(model) {
                     if (first.type === "video") {
                         fv.muted = true; fv.loop = true; fv.playsInline = true; fv.preload = "metadata";
                         fv.src = imgSrc(cdnVideo(first.url)) + "#t=0.001";
-                    } else fv.src = imgSrc(cdnThumb(first.url, S.cfg.px_media || 128));
+                    } else fv.src = imgSrc(cdnThumb(first.url, S.cfg.px_media || 320));
                     el.replaceWith(fv);
                     el = fv;
                 } else if (el.tagName === "VIDEO") el.pause();
@@ -1629,7 +1629,7 @@ function rewriteDescImages(root) {
 
 function galleryItemHtml(img, px) {
     // 预览条目可能是视频(mp4 封面):静音循环,进视口才加载;右上角可存图到 output
-    // px:图片缩略宽度(批10:详情页展示图传 px_media=128;缺省 256=画廊网格口径);
+    // px:图片缩略档位(批10;批11.3 起为真实 CDN 档位,详情页传 px_media,缺省 320=画廊网格口径);
     // 视频不受 px 控制,固定走 cdnVideo(320 档;档位表见该函数注释,批11.2)
     const direct = esc(img.url);
     const save = `<button class="cs-save-btn" title="${esc(t("saveBtnTitle"))}" data-save-url="${direct}">⬇</button>`;
@@ -1641,7 +1641,7 @@ function galleryItemHtml(img, px) {
                     src="${esc(imgSrc(cdnVideo(img.url)))}#t=0.001" data-direct="${direct}"
                     onerror="this.style.display='none'"></video></div>`;
     }
-    return `<div class="cs-gallery-item">${save}<img loading="lazy" class="cs-nsfw-blurable"${battr} style="${blur}" src="${esc(imgSrc(cdnThumb(img.url, px || 256)))}" data-direct="${esc(img.url)}"
+    return `<div class="cs-gallery-item">${save}<img loading="lazy" class="cs-nsfw-blurable"${battr} style="${blur}" src="${esc(imgSrc(cdnThumb(img.url, px || 320)))}" data-direct="${esc(img.url)}"
                 onerror="this.style.display='none'"/></div>`;
 }
 
@@ -1708,7 +1708,7 @@ async function renderVersion(version, model, box, opts = {}) {
         ${images.length ? `
         <div class="cs-section">
             <div class="cs-section-title">${esc(t("previews", { n: images.length }))}</div>
-            <div class="cs-gallery">${images.map((g) => galleryItemHtml(g, S.cfg.px_media || 128)).join("")}
+            <div class="cs-gallery">${images.map((g) => galleryItemHtml(g, S.cfg.px_media || 320)).join("")}
             </div>
         </div>` : ""}
     `;
@@ -3735,10 +3735,10 @@ async function openSettings() {
                 <div class="cs-set-group-head">${esc(t("setGrpThumbs"))}<span class="cs-set-caret">▾</span></div>
                 <div class="cs-set-group-body">
                     <label class="cs-check">${esc(t("pxCoverLabel"))}
-                        <select id="cs-set-pxcover">${[128, 256, 512].map((px) => `<option value="${px}" ${(cfg.px_cover || 256) === px ? "selected" : ""}>${px}px</option>`).join("")}</select>
+                        <select id="cs-set-pxcover">${[96, 320, 450].map((px) => `<option value="${px}" ${(cfg.px_cover || 320) === px ? "selected" : ""}>${px}px</option>`).join("")}</select>
                         ${infoIco(t("pxCoverTip"))}</label>
                     <label class="cs-check">${esc(t("pxMediaLabel"))}
-                        <select id="cs-set-pxmedia">${[96, 128, 256].map((px) => `<option value="${px}" ${(cfg.px_media || 128) === px ? "selected" : ""}>${px}px</option>`).join("")}</select>
+                        <select id="cs-set-pxmedia">${[96, 320, 450].map((px) => `<option value="${px}" ${(cfg.px_media || 320) === px ? "selected" : ""}>${px}px</option>`).join("")}</select>
                         ${infoIco(t("pxMediaTip"))}</label>
                 </div>
             </div>
@@ -3870,8 +3870,8 @@ async function openSettings() {
             fav_autosync: $("#cs-set-autosync", m.box).checked,
             log_debug: $("#cs-set-logdebug", m.box).checked,
             log_timestamp: $("#cs-set-logts", m.box).checked,
-            px_cover: parseInt($("#cs-set-pxcover", m.box).value, 10) || 256,
-            px_media: parseInt($("#cs-set-pxmedia", m.box).value, 10) || 128,
+            px_cover: parseInt($("#cs-set-pxcover", m.box).value, 10) || 320,
+            px_media: parseInt($("#cs-set-pxmedia", m.box).value, 10) || 320,
         };
         const key = $("#cs-set-key", m.box).value.trim();
         if (key) body.api_key = key;
@@ -5005,7 +5005,7 @@ function unwrapMeta(rawMeta) {
 }
 
 // Civitai CDN 缩放变体:把 original=true 段换成 width=N,体积可降两个数量级
-function cdnThumb(url, w = 256) {
+function cdnThumb(url, w = 320) {
     if (!url) return "";
     return url.replace("/original=true/", `/width=${w}/`);
 }
