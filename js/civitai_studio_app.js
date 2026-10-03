@@ -249,6 +249,7 @@ const STR = {
         tagScrapeLabel: "读取图片分类标签", tagScrapeTip: "读取非公开 API 获取图片分类标签，需要 Civitai API Key", tagsLoading: "标签加载中…",
         tagAndLabel: "多标签 AND 语义", tagAndTip: "实验:逐标签查询求交集,请求量更大", clearTags: "清空",
         noTagsSel: "未选标签(下拉多选)",
+        addTagOpt: "+ 添加标签…", addBaseOpt: "+ 添加底模…",
         tagsOff: "标签抓取已在设置中关闭",
         galleryEmpty: "没有图片。", galleryAuthor: "作者",
     },
@@ -435,6 +436,7 @@ const STR = {
         tagScrapeLabel: "Fetch image category tags", tagScrapeTip: "Uses the unofficial API; requires a Civitai API key", tagsLoading: "Loading tags…", tagsOff: "Tag scraping disabled in settings",
         tagAndLabel: "Multi-tag AND", tagAndTip: "Experimental: per-tag queries + intersection, more requests", clearTags: "Clear",
         noTagsSel: "No tags (pick from dropdown)",
+        addTagOpt: "+ Add tag…", addBaseOpt: "+ Add base model…",
         galleryEmpty: "No images.", galleryAuthor: "Author",
     },
 };
@@ -3498,6 +3500,7 @@ function buildGalleryView(root) {
     const galBasePicker = createTagPicker($("#cs-gal-base-picker", view), {
         names: galBaseNames(),
         prefix: "",
+        addLabel: t("addBaseOpt"),
         emptyHint: t("baseFilterHint"),
         allowInput: false,
         candidates: () => galBaseCands.list,
@@ -4052,6 +4055,7 @@ function buildBrowseView(root) {
     const browseBasePicker = createTagPicker($("#cs-f-base-picker", view), {
         names: baseNames(),
         prefix: "",
+        addLabel: t("addBaseOpt"),
         emptyHint: t("baseFilterHint"),
         candidates: () => baseCands.list,
         allowInput: false,
@@ -5133,7 +5137,8 @@ function createTagPicker(el, opts) {
         sel.style.cssText = "flex:1;min-width:0;font-size:11px;padding:2px;";
         const cands = (opts.candidates ? opts.candidates() : Object.keys(S.tagMap || {}))
             .filter((c) => !state.names.includes(c));
-        sel.innerHTML = `<option value="">${esc(S.lang === "zh" ? "+ 添加标签…" : "+ Add tag…")}</option>`
+        // 占位文案按用途给(批11.4:底模复用本组件时曾显示"添加标签…")
+        sel.innerHTML = `<option value="">${esc(opts.addLabel || t("addTagOpt"))}</option>`
             + cands.map((c) => `<option>${esc(c)}</option>`).join("");
         sel.onchange = () => { if (sel.value) { const v = sel.value; sel.value = ""; addName(v); } };
         row.appendChild(sel);

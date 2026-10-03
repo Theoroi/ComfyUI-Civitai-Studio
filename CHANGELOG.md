@@ -25,6 +25,13 @@
 - **安全与卫生**：API key 不回传前端、出站域名白名单与可选图片中转、mXSS sanitize、
   sqlite 单连接 + 全局 RLock 事务纪律
 
+### 发布前验收修复（10-03）
+
+- **模型页/画廊「底模」下拉文案错位**：`createTagPicker` 把占位项写死为"+ 添加标签…"，两个底模
+  选择器（模型页/画廊）复用时文案错位；改为可覆盖的 `opts.addLabel`（默认保持标签口径），
+  两处底模选择器传"添加底模…"；zh/en 新增 `addTagOpt`/`addBaseOpt` 键
+  （锚点 js/civitai_studio_app.js:3503 / 4058 / 5141）
+
 ---
 
 ### 开发期批次明细（倒序；原编号保留以便回溯 commit）
