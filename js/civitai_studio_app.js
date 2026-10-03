@@ -61,7 +61,7 @@ function fmtSelHtml(cur) {
     return ["all", "jpg", "png", "webp", "gif", "video"].map((f) =>
         `<option value="${f}" ${(cur || "all") === f ? "selected" : ""}>${f === "all" ? esc(t("fmtAll")) : f === "video" ? esc(t("fmtVideo")) : f.toUpperCase()}</option>`).join("");
 }
-const JS_VERSION = "0.9.7";
+const JS_VERSION = "0.9.8";
 
 // ---------- i18n ----------
 const STR = {
@@ -1880,9 +1880,18 @@ function openImageDetail(item, opts = {}) {
         const oid = String(item.id);
         const syncFav = (on) => { favBig.style.color = on ? "#ffd75e" : ""; };
         syncFav(S.favs?.has(oid));
-        favBig.onclick = async () => {
+        favBig.onclick = async (ev) => {
             try {
-                syncFav(await toggleFav("asset", oid, { name: item.username || "", cover: item.url, extra: { nsfwLevel: nsfwBitsOf(item) } }));
+                const on = await toggleFav("asset", oid, { name: item.username || "", cover: item.url, extra: { nsfwLevel: nsfwBitsOf(item) } });
+                syncFav(on);
+                // 批8.2:新增收藏弹收藏夹选择器(与其余★入口同款)
+                if (on) {
+                    const cur = ((S.favData?.items || []).find((x) => x.kind === "asset" && String(x.oid) === oid) || {}).group_ids || [];
+                    openGroupPicker(ev, "asset", cur, async (gids) => {
+                        try { await apiPost("/civitai_studio/favorites/assign", { kind: "asset", oid, group_ids: gids }); }
+                        catch (e2) { toast("error", t("favFailed"), e2.message); }
+                    });
+                }
             } catch (e) { toast("error", t("favFailed"), e.message); }
         };
     }
@@ -5332,6 +5341,14 @@ function renderNodeThumbs(node) {
             try {
                 const on = await toggleFav("asset", oid, { name: c.it.username || "", cover: c.it.url, extra: { nsfwLevel: nsfwBitsOf(c.it) } });
                 favBtn.style.color = on ? "#ffd75e" : "";
+                // 批8.2:新增收藏弹收藏夹选择器(与其余★入口同款;此前"与画廊同款交互"名不副实)
+                if (on) {
+                    const cur = ((S.favData?.items || []).find((x) => x.kind === "asset" && String(x.oid) === oid) || {}).group_ids || [];
+                    openGroupPicker(ev, "asset", cur, async (gids) => {
+                        try { await apiPost("/civitai_studio/favorites/assign", { kind: "asset", oid, group_ids: gids }); }
+                        catch (e2) { toast("error", t("favFailed"), e2.message); }
+                    });
+                }
             } catch (e) { toast("error", t("favFailed"), e.message); }
         };
         cell.appendChild(favBtn);
