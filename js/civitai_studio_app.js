@@ -61,7 +61,7 @@ function fmtSelHtml(cur) {
     return ["all", "jpg", "png", "webp", "gif", "video"].map((f) =>
         `<option value="${f}" ${(cur || "all") === f ? "selected" : ""}>${f === "all" ? esc(t("fmtAll")) : f === "video" ? esc(t("fmtVideo")) : f.toUpperCase()}</option>`).join("");
 }
-const JS_VERSION = "0.9.8";
+const JS_VERSION = "0.9.9";
 
 // ---------- i18n ----------
 const STR = {
@@ -433,7 +433,7 @@ let S = {
     lang: "zh",
     cfg: { proxy_images: false, nsfw: 1, verify_hash: true },
     browse: {
-        query: "", type: "", base: "", tag: "", baseMode: "OR", tagMode: "OR", hidePaid: "0",
+        query: "", type: "", base: "", tag: "", baseMode: "OR", tagMode: "OR", hidePaid: "0", nsfwLv: new Set(),
         sort: "Most Downloaded", period: "AllTime",
         nsfw: 1, items: [], nextCursor: "", loading: false, dirty: true, pendingReset: false,
     },
@@ -964,6 +964,11 @@ function renderResults(reset) {
     const baseAndB = S.browse.baseMode === "AND" && baseSelB.length > 1;
     for (const model of S.browse.items) {
         if (!model.__rendered) {
+            // 批9:本地分级多选(模型级 nsfwLevel=数字位掩码;无标记的条目被滤掉)
+            if (S.browse.nsfwLv.size) {
+                const nl = nsfwBitsOf(model);
+                if (!nl || ![...S.browse.nsfwLv].some((b) => nl & b)) continue;
+            }
             if (baseAndB) {
                 // AND(实验):模型全部版本的 baseModel 并集 ⊇ 所选;不满足不标记 rendered(解除筛选即回来)
                 const bmSet = new Set((model.modelVersions || [])
@@ -1041,6 +1046,10 @@ function makeCard(model) {
         const el = document.createElement(isVideo ? "video" : "img");
         el.className = "cs-card-img";
         el.dataset.direct = url;
+        // 批9:卡片封面接模糊层(模型级 nsfwLevel=数字位掩码,实测列表接口直接给)
+        el.classList.add("cs-nsfw-blurable");
+        el.dataset.nsfwLevel = nsfwBitsOf(cover.media.nsfwLevel != null ? cover.media : model);
+        el.style.filter = nsfwBlurStyle(cover.media.nsfwLevel != null ? cover.media : model);
         const show = () => {
             const ph = $(".cs-card-placeholder", card);
             if (ph) ph.style.display = "none";
@@ -1064,6 +1073,65 @@ function makeCard(model) {
         // 卡片封面只需要小图:走 CDN 缩略变体,视频封面保持原链
         el.src = imgSrc(isVideo ? url : cdnThumb(url)) + (isVideo ? "#t=0.001" : "");
         $(".cs-card-cover", card).prepend(el);
+        // 批9:悬停轮播 — 仅悬停中的卡片按 3s 轮换版本图(≤8 张;视频悬停即播),
+        // 非悬停零定时器零解码。定时全卡轮播被否:24-100 卡×定时器+预载+视频解码,
+        // 单模型图实测可达 23 张,ComfyUI webview 承受不了(用户点名要反对意见)
+        const media = (model.modelVersions || []).flatMap((v) => v.images || [])
+            .filter((i) => i && i.url).slice(0, 8);
+        if (media.length > 1) {
+            const cnt = document.createElement("span");
+            cnt.className = "cs-card-cyc";
+            cnt.textContent = "1/" + media.length;
+            $(".cs-card-cover", card).appendChild(cnt);
+            let idx = 0, timer = null;
+            const swap = () => {
+                if (!card.isConnected) { clearInterval(timer); return; } // 卡片被重渲染:自清
+                idx = (idx + 1) % media.length;
+                const m = media[idx];
+                const nv = document.createElement(m.type === "video" ? "video" : "img");
+                nv.className = "cs-card-img is-loaded";
+                nv.dataset.direct = m.url;
+                nv.classList.add("cs-nsfw-blurable");
+                nv.dataset.nsfwLevel = nsfwBitsOf(m.nsfwLevel != null ? { nsfwLevel: m.nsfwLevel } : model);
+                nv.style.filter = nsfwBlurStyle(m.nsfwLevel != null ? { nsfwLevel: m.nsfwLevel } : model);
+                if (m.type === "video") {
+                    nv.muted = true; nv.loop = true; nv.playsInline = true; nv.preload = "metadata";
+                    nv.src = imgSrc(m.url) + "#t=0.001";
+                    nv.play().catch(() => {});
+                } else {
+                    nv.loading = "eager";
+                    nv.alt = model.name;
+                    nv.src = imgSrc(cdnThumb(m.url));
+                }
+                el.replaceWith(nv);
+                el = nv;
+                cnt.textContent = (idx + 1) + "/" + media.length;
+            };
+            card.addEventListener("mouseenter", () => {
+                if (timer) return;
+                timer = setInterval(swap, 3000);
+            });
+            card.addEventListener("mouseleave", () => {
+                clearInterval(timer); timer = null;
+                idx = 0; cnt.textContent = "1/" + media.length;
+                // 复位到首图(与 pickCover 口径一致:第一张静态图)
+                const first = media.find((m) => m.type !== "video") || media[0];
+                if (el.dataset.direct !== first.url) {
+                    const fv = document.createElement(first.type === "video" ? "video" : "img");
+                    fv.className = "cs-card-img is-loaded";
+                    fv.dataset.direct = first.url;
+                    fv.classList.add("cs-nsfw-blurable");
+                    fv.dataset.nsfwLevel = nsfwBitsOf(first.nsfwLevel != null ? { nsfwLevel: first.nsfwLevel } : model);
+                    fv.style.filter = nsfwBlurStyle(first.nsfwLevel != null ? { nsfwLevel: first.nsfwLevel } : model);
+                    if (first.type === "video") {
+                        fv.muted = true; fv.loop = true; fv.playsInline = true; fv.preload = "metadata";
+                        fv.src = imgSrc(first.url) + "#t=0.001";
+                    } else fv.src = imgSrc(cdnThumb(first.url));
+                    el.replaceWith(fv);
+                    el = fv;
+                } else if (el.tagName === "VIDEO") el.pause();
+            });
+        }
     }
     // E2E a-2:缩略图左下角收藏星标;新增时弹收藏夹选择器(默认未分组)
     const mid2 = String(model.id ?? "");
@@ -3839,6 +3907,7 @@ function buildBrowseView(root) {
                 <select id="cs-f-period">${PERIODS.map((p) => `<option value="${p}" ${st.period === p ? "selected" : ""}>${esc(periodLabel(p))}</option>`).join("")}</select>
                 <select id="cs-f-sort">${SORTS.map((s) => `<option value="${s}" ${st.sort === s ? "selected" : ""}>${esc(sortLabel(s))}</option>`).join("")}</select>
                 <select id="cs-f-nsfw"><option value="0" ${!st.nsfw ? "selected" : ""}>${esc(t("sfwLabel"))}</option><option value="1" ${st.nsfw ? "selected" : ""}>${esc(t("nsfwLabel"))}</option></select>
+                <div id="cs-f-nsfwlv" class="cs-nsfwlv cs-span-full" title="${esc(S.lang === "zh" ? "本地分级筛选(可多选,作用于已加载条目)" : "Local nsfw-level filter (multi-select, loaded items)")}">${Object.entries(NSFW_LEVEL_LABELS).filter(([b]) => Number(b) < 32).map(([b, lb]) => `<button class="cs-chip" data-nsfwlv="${b}">${esc(lb)}</button>`).join("")}</div>
                 <select id="cs-f-hidepaid" title="${esc(t("hidePaidLabel"))}">
                     <option value="0">${esc(t("showAllLabel"))}</option>
                     <option value="1" ${String(st.hidePaid) === "1" ? "selected" : ""}>${esc(t("hidePaidLabel"))}</option>
@@ -3861,10 +3930,22 @@ function buildBrowseView(root) {
             triggerBrowseRefresh();
         }, 500);
     });
-    // 批4 E2E B2:一键清空全部筛选(关键词/类型/底模/tag/AND-OR/付费),排序与 NSFW 偏好保留
+    // 批9:本地分级多选 chips(与画廊同款;纯客户端过滤已加载条目)
+    $$("#cs-f-nsfwlv .cs-chip", view).forEach((chip) => {
+        chip.onclick = () => {
+            const bit = Number(chip.dataset.nsfwlv);
+            if (st.nsfwLv.has(bit)) st.nsfwLv.delete(bit); else st.nsfwLv.add(bit);
+            chip.classList.toggle("active", st.nsfwLv.has(bit));
+            st.items.forEach((m) => { delete m.__rendered; });
+            renderResults(true);
+        };
+    });
+    // 批4 E2E B2:一键清空全部筛选(关键词/类型/底模/tag/AND-OR/付费/分级),排序与 NSFW 偏好保留
     $("#cs-browse-reset", view).onclick = () => {
         st.query = ""; st.type = ""; st.base = ""; st.tag = "";
         st.baseMode = "OR"; st.tagMode = "OR"; st.hidePaid = "0";
+        st.nsfwLv.clear();
+        $$("#cs-f-nsfwlv .cs-chip", view).forEach((c) => c.classList.remove("active"));
         $("#cs-search", view).value = "";
         $("#cs-f-type", view).value = "";
         $("#cs-f-hidepaid", view).value = "0";
@@ -4727,6 +4808,7 @@ function injectStyles() {
 .cs-gallery-item img, .cs-gallery-item video { width:100%; aspect-ratio:3/4; object-fit:cover; border-radius:4px; cursor:pointer; border:2px solid transparent; display:block; }
 .cs-gallery-item img:hover { border-color:var(--accent-color,#4a90e2); }
 .cs-save-btn { position:absolute; right:4px; bottom:4px; z-index:2; background:rgba(0,0,0,.65); color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:11px; padding:1px 5px; }
+.cs-card-cyc { position:absolute; right:4px; top:4px; z-index:2; background:rgba(0,0,0,.65); color:#fff; border-radius:4px; font-size:9px; line-height:1; padding:2px 4px; pointer-events:none; }
 .cs-save-btn:hover { background:var(--accent-color,#4a90e2); }
 .cs-gallery-item img:hover { border-color:var(--accent-color,#4a90e2); }
 .cs-desc { margin:8px 0; }
