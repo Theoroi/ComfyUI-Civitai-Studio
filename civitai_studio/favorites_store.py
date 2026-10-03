@@ -521,6 +521,25 @@ def upsert_remote(kind, oid, *, name=None, cover=None, group_id=None, extra=None
             return "blocked"
 
 
+def update_extra(kind, oid, patch):
+    """批8:合并写 extra(分级补全等元数据回填)——不动 dirty/deleted,不触发收藏上推."""
+    conn = _conn()
+    if conn is None or not patch:
+        return
+    with _LOCK:
+        try:
+            it = get_item(kind, oid)
+            if not it:
+                return
+            extra = dict(it.get("extra") or {})
+            extra.update(patch)
+            conn.execute("UPDATE fav_items SET extra=? WHERE kind=? AND oid=?",
+                         (json.dumps(extra, ensure_ascii=False), kind, str(oid)))
+            conn.commit()
+        except Exception as e:
+            error("[Civitai-Studio] extra 更新失败:", e)
+
+
 def set_group(kind, oid, group_id):
     """分组是本地组织行为,不动 dirty(分组不应触发模型收藏上推/冻结远端更新).
     事实源是 fav_item_groups(跨集合多挂);单 group_id 参数=对齐到唯一组。"""

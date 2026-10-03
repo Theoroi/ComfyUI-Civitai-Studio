@@ -116,6 +116,40 @@ async def favorites_groups(request):
     return _ok(group=g)
 
 
+@_post("/civitai_studio/favorites/backfill_levels")
+async def favorites_backfill_levels(request):
+    """批8:为缺分级(extra.nsfwLevel)的收藏条目补拉——资产走 /images?imageId=(browsingLevel
+    位掩码优先),模型走 /models/{id}(nsfwLevel);逐张 ≥900ms,每次至多 40 张。
+    前端收藏页打开时对缺失数>0 静默触发,remaining>0 时下轮继续,直到清零。"""
+    items = await local_index.run_bg(fs.list_items)
+    assets = [it for it in items if it["kind"] == fs.KIND_ASSET
+              and not ((it.get("extra") or {}).get("nsfwLevel"))]
+    models = [it for it in items if it["kind"] == fs.KIND_MODEL
+              and not ((it.get("extra") or {}).get("nsfwLevel"))]
+    todo = assets[:40] or models[:40]
+    done = failed = 0
+    for it in todo:
+        try:
+            if it["kind"] == fs.KIND_ASSET:
+                d = await civitai_client.get_json("/images", {"imageId": str(it["oid"]), "limit": 1})
+                arr = d.get("items") or []
+                lv = (arr[0].get("browsingLevel") if arr else None) or (arr[0].get("nsfwLevel") if arr else None)
+            else:
+                m = await civitai_client.get_json(f"/models/{it['oid']}")
+                lv = m.get("nsfwLevel")
+            if lv is not None:
+                await local_index.run_bg(fs.update_extra, it["kind"], it["oid"], {"nsfwLevel": lv})
+                done += 1
+        except Exception as e:
+            failed += 1
+            warn(f"分级补拉失败 {it['kind']} {it['oid']}: {e}")
+        await asyncio.sleep(0.9)
+    info(f"[Civitai-Studio] 分级补拉: 本轮处理 {len(todo)} 补 {done} 失败 {failed} "
+         f"剩余 {max(0, len(assets) + len(models) - len(todo))}")
+    return _ok(checked=len(todo), updated=done, failed=failed,
+               remaining=max(0, len(assets) + len(models) - len(todo)))
+
+
 @_get("/civitai_studio/favorites/export")
 async def favorites_export(request):
     payload = await local_index.run_bg(fs.export_json)

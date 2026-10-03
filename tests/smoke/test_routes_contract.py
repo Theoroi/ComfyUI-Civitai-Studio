@@ -1,4 +1,4 @@
-"""路由契约测试:48 端点注册快照(防意外删路由)+请求形状抽样(400/404/缺 key 降级)."""
+"""路由契约测试:49 端点注册快照(防意外删路由)+请求形状抽样(400/404/缺 key 降级)."""
 import os, sys, tempfile, types
 
 tmp = tempfile.mkdtemp(prefix="cs_contract_")
@@ -24,6 +24,7 @@ EXPECTED = sorted([
     ("GET", "/civitai_studio/workflow_extracts"), ("POST", "/civitai_studio/cache_clear"),
     ("POST", "/civitai_studio/config"), ("POST", "/civitai_studio/download"),
     ("POST", "/civitai_studio/ui_log"), ("POST", "/civitai_studio/favorites/reset"),
+    ("POST", "/civitai_studio/favorites/backfill_levels"),
     ("POST", "/civitai_studio/downloads/cancel"), ("POST", "/civitai_studio/downloads/clear"),
     ("POST", "/civitai_studio/downloads/retry"), ("POST", "/civitai_studio/embedded_meta"),
     ("POST", "/civitai_studio/extract_workflow"), ("POST", "/civitai_studio/favorites/assign"),
@@ -44,7 +45,7 @@ if routes.ROUTES is None:
     print("PASS test_routes_contract (production branch, snapshot N/A)")
     raise SystemExit(0)
 got = sorted(routes.ROUTES)
-assert len(got) == 48, f"路由数变化: {len(got)} (期望 48) — 若有意增删请同步更新本快照"
+assert len(got) == 49, f"路由数变化: {len(got)} (期望 49) — 若有意增删请同步更新本快照"
 assert got == EXPECTED, set(got) ^ set(EXPECTED)
 
 # 请求形状抽样:错误体形状一致({"error": str})

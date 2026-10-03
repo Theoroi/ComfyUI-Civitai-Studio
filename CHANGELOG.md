@@ -2,6 +2,16 @@
 
 格式参照 Keep a Changelog;项目版本号见 `pyproject.toml` 与 `civitai_studio/version.py`。
 
+## [0.9.6] - 2026-10-03(收藏缩略图分级自愈)
+
+- **缺分级收藏条目自动补拉**：★收藏路径不写分级、不在集合里的图永远没有
+  extra.nsfwLevel(上轮"只有最早两张模糊"的存量根因)。新增
+  POST /favorites/backfill_levels——资产单查 /images?imageId=(browsingLevel 位掩码优先)、
+  模型拉 /models/{id}(nsfwLevel),逐张 ≥900ms、每次至多 40 张;收藏页打开时缺失数>0
+  静默触发,完成后刷新行内遮罩,remaining>0 下次开页继续直到清零
+- 新增 fs.update_extra(合并写 extra,不动 dirty/deleted,不触发收藏上推)
+- 大图浮层模糊(批4 起既有)保留,用户确认
+
 ## [0.9.5] - 2026-10-03(批7:E2E 第四轮收尾)
 
 ### 遮罩三处收尾(E2E 3)

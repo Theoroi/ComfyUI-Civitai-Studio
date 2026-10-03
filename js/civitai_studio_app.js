@@ -61,7 +61,7 @@ function fmtSelHtml(cur) {
     return ["all", "jpg", "png", "webp", "gif", "video"].map((f) =>
         `<option value="${f}" ${(cur || "all") === f ? "selected" : ""}>${f === "all" ? esc(t("fmtAll")) : f === "video" ? esc(t("fmtVideo")) : f.toUpperCase()}</option>`).join("");
 }
-const JS_VERSION = "0.9.5";
+const JS_VERSION = "0.9.6";
 
 // ---------- i18n ----------
 const STR = {
@@ -4342,6 +4342,12 @@ async function loadFavView() {
         refreshFavGroupSel(S.ui.root);
         renderFavGrid(S.ui.root);
     } catch (e) { toast("error", t("loadFailed"), e.message); return; }
+    // 批8:缺分级条目后台补拉(逐张限速),完成后刷新收藏行遮罩;remaining>0 时下次开页继续
+    if ((S.favData?.items || []).some((x) => !((x.extra || {}).nsfwLevel))) {
+        apiPost("/civitai_studio/favorites/backfill_levels", {}).then((r2) => {
+            if (r2.updated > 0) loadFavDataOnly().catch(() => {});
+        }).catch(() => {});
+    }
     // 自动同步:开夹时静默触发,30 分钟节流
     if (S.cfg?.fav_autosync && Date.now() - (S.favLastSync || 0) > 30 * 60 * 1000) favDoSync(true);
 }
