@@ -1,7 +1,7 @@
 # 09_branches — 功能候选池(剩余可做清单)
 
 > origin: inline@project-design(2026-10-03)。来源:repo-audit legacy.md / docs/design/absence-reconciliation.md /
-> docs/plans/multi-user-multi-key.md / 七轮 E2E 已知边界 / 会话沉淀。每条含 来源/价值/成本估/前置。
+> docs/plans/multi-user-multi-key.md / 八轮 E2E 已知边界 / 会话沉淀。每条含 来源/价值/成本估/前置。
 > 成本:S=半天内 M=1-2 天 L=3 天+。开工顺序建议见末节路线图。
 
 ## P0 基建前置(下个功能批次的第 0 步)
@@ -10,7 +10,7 @@
 |---|---|---|---|---|---|
 | B0-1 | 前端重复抽取×3:popupAt 弹层工厂 / 对话框目录选择构件 / mergePage 翻页合并 | audit 中危 F-S1-7/8/10 | 消除三处行为分叉温床;新功能不再复制粘贴 | M | 无 |
 | B0-2 | ESM 级交互探针(弹层开关/菜单激活/翻页) | audit 结论"前端无回归网" | 前端改动可自动验收,解冻大重构 | M | B0-1 同批 |
-| B0-3 | CI 工作流(.github/workflows):smoke 13 文件 + node --check + ESM 探针 | E2E checklist 23 项提到 Actions 但仓库无工作流(未查证远端) | 回归门禁自动化 | S | 无 |
+| ~~B0-3~~ **已完成(实查校正)** | CI 工作流实际已存在:`ci.yml`(smoke 14 文件 + py_compile + node --check,py3.10/3.13 矩阵)、`release.yml`(tag 触发打包 zip 发 Release,校验 tag==version.py) | 原条目"仓库无工作流"是未查证的失真记录 | 余项:ESM 探针并入 CI(随 B0-2 一起) | S | 无 |
 
 ## P1 已设计待实现(方案已定稿,直接开工)
 
@@ -51,7 +51,7 @@
 
 ## 建议路线图
 
-1. **下批开工 = B0 三件**(抽取+探针+CI,约 2-3 天)——此后每个功能批都有回归网;
+1. **下批开工 = B0-1/B0-2 两件**(前端抽取 + ESM 探针,约 2 天;CI 已存在,余项=探针入 CI)——此后每个功能批都有回归网;
 2. **随后 B1-1**(缺席对账,M)——先做站方 NSFW 过滤实测,方案文档已就绪;
 3. **多用户需求提上日程时** B1-2→B1-3 连做(同文档同域);
 4. P2 按使用痛点插队,B3 永远"遇到顺手修"。

@@ -8,7 +8,7 @@ import os
 import subprocess
 from functools import lru_cache
 
-VERSION = "0.9.13"
+VERSION = "0.8.0"
 
 
 @lru_cache(maxsize=1)
