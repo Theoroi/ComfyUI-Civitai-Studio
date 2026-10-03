@@ -140,6 +140,9 @@ async def version_images(request):
         params["username"] = q["username"]
     if q.get("postId"):
         params["postId"] = q["postId"]
+    if q.get("type") in ("image", "video", "audio"):
+        # 批11.5:媒体类型筛选(画廊"图像/视频")——服务端过滤,分页口径正确
+        params["type"] = q["type"]
     for key in ("baseModels", "tags"):
         if q.get(key):
             # 多值(E2E g):逗号串 → 重复键(站方多值查询格式)

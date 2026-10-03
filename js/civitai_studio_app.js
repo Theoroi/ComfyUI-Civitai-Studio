@@ -57,10 +57,15 @@ function fmtBadgeHtml(it) {
     return `<span class="cs-fmt">${label}</span>`;
 }
 
+// 媒体类型筛选(批11.5):不再按具体文件格式(jpg/png/mp4…),只分 图像/视频——
+// 服务端 /images?type= 过滤(分页口径正确);客户端仍按 isVideoItem 兜底过滤混装条目
 function fmtSelHtml(cur) {
-    return ["all", "jpg", "png", "webp", "gif", "video"].map((f) =>
-        `<option value="${f}" ${(cur || "all") === f ? "selected" : ""}>${f === "all" ? esc(t("fmtAll")) : f === "video" ? esc(t("fmtVideo")) : f.toUpperCase()}</option>`).join("");
+    return [["all", t("mtAll")], ["image", t("fmtImage")], ["video", t("fmtVideo")]].map(([f, lb]) =>
+        `<option value="${f}" ${(cur || "all") === f ? "selected" : ""}>${esc(lb)}</option>`).join("");
 }
+
+// 模型页卡片尺寸档(批11.5):[卡宽, 封面最长边(=宽130%)];含更小档供密集浏览
+const BROWSE_CARD_SIZES = [[110, 143], [150, 195], [200, 260], [260, 338]];
 const JS_VERSION = "0.8.0";
 
 // ---------- i18n ----------
@@ -242,7 +247,12 @@ const STR = {
         gallerySortCollected: "最多收藏", gallerySortOldest: "最早发布", gallerySortRandom: "随机",
         galPresetNewDay: "🌅 今日最新", galPresetHotDay: "🔥 今日热门", galPresetHotWeek: "🔥 本周热门",
         galPresetBestWeek: "⭐ 本周高分", galPresetHotMonth: "📈 本月热门", galPresetBestMonth: "⭐ 本月高分",
-        fmtAll: "全部格式", fmtVideo: "视频", fmtTip: "客户端筛选,只作用于已加载条目",
+        fmtAll: "全部格式", fmtVideo: "视频", fmtImage: "图像", fmtTip: "客户端筛选,只作用于已加载条目",
+        mtAll: "全部", mtTip: "按媒体类型筛选(图像/视频,服务端过滤)",
+        lvLabel: "分级", msAll: "全部", msCount: "{n} 项",
+        typeLabel: "类型", refreshTitle: "按当前筛选重拉第 1 页",
+        thumbSizeTitle: "卡片封面最长边", thumbSizeGalTitle: "缩略图最长边",
+        imgidPh: "图片 ID 精确搜索(回车)", favOnlyEmpty: "已加载条目里没有收藏,可滚动或点刷新继续拉取",
         loadMore: "加载更多", useAsOutput: "选为输出", selectedAsOutput: "已选为输出",
         sfwLabel: "全年龄", nsfwLabel: "包含 NSFW",
         noTags: "无标签", tagsPaused: "标签抓取已暂停({sec} 秒后恢复)", noSelectionHint: "未选择(点击缩略图选择)",
@@ -429,7 +439,12 @@ const STR = {
         gallerySortCollected: "Most collected", gallerySortOldest: "Oldest", gallerySortRandom: "Random",
         galPresetNewDay: "🌅 New today", galPresetHotDay: "🔥 Hot today", galPresetHotWeek: "🔥 Hot this week",
         galPresetBestWeek: "⭐ Top this week", galPresetHotMonth: "📈 Hot this month", galPresetBestMonth: "⭐ Top this month",
-        fmtAll: "All formats", fmtVideo: "Video", fmtTip: "Client-side filter, applies to loaded items only",
+        fmtAll: "All formats", fmtVideo: "Video", fmtImage: "Image", fmtTip: "Client-side filter, applies to loaded items only",
+        mtAll: "All", mtTip: "Media type filter (image/video, server-side)",
+        lvLabel: "Level", msAll: "All", msCount: "{n} items",
+        typeLabel: "Type", refreshTitle: "Refetch page 1 with current filters",
+        thumbSizeTitle: "Card cover longest edge", thumbSizeGalTitle: "Thumbnail longest edge",
+        imgidPh: "Image ID exact search (Enter)", favOnlyEmpty: "No favorites among loaded items — scroll or refresh to fetch more",
         loadMore: "Load more", useAsOutput: "Use as output", selectedAsOutput: "Selected as output",
         sfwLabel: "SFW only", nsfwLabel: "Include NSFW",
         noTags: "No tags", tagsPaused: "Tag fetch paused ({sec}s), retrying later", noSelectionHint: "Nothing selected (click a thumbnail)",
@@ -446,6 +461,7 @@ let S = {
     cfg: { proxy_images: false, nsfw: 1, verify_hash: true },
     browse: {
         query: "", type: "", base: "", tag: "", baseMode: "OR", tagMode: "OR", hidePaid: "0", nsfwLv: new Set(),
+        cardW: 150, favOnly: false, favMore: 0,
         sort: "Most Downloaded", period: "AllTime",
         nsfw: 1, items: [], nextCursor: "", loading: false, dirty: true, pendingReset: false,
     },
@@ -963,9 +979,17 @@ function _sortMergedBrowse(items) {
 }
 
 // ---------- 在线浏览:渲染 ----------
+function applyBrowseCardSize() {
+    const grid = $("#cs-grid");
+    if (!grid) return;
+    const w = parseInt(S.browse.cardW, 10) || 150;
+    grid.style.gridTemplateColumns = `repeat(auto-fill, minmax(${w}px, 1fr))`; // 批11.5:卡宽可调(含更小档)
+}
+
 function renderResults(reset) {
     const grid = $("#cs-grid");
     if (!grid) return;
+    applyBrowseCardSize();
     $$(".cs-error, .cs-empty", grid).forEach((n) => n.remove());
     if (reset) {
         grid.innerHTML = "";
@@ -981,6 +1005,7 @@ function renderResults(reset) {
                 const nl = nsfwBitsOf(model);
                 if (!nl || ![...S.browse.nsfwLv].some((b) => nl & b)) continue;
             }
+            if (S.browse.favOnly && !(S.favModelIds && S.favModelIds.has(String(model.id)))) continue; // ★只看收藏(本地,批11.5)
             if (baseAndB) {
                 // AND(实验):模型全部版本的 baseModel 并集 ⊇ 所选;不满足不标记 rendered(解除筛选即回来)
                 const bmSet = new Set((model.modelVersions || [])
@@ -1012,6 +1037,21 @@ function renderResults(reset) {
         empty.className = "cs-empty";
         empty.textContent = t("noModels");
         grid.appendChild(empty);
+    } else if (S.browse.favOnly && !grid.querySelector(".cs-card") && !S.browse.loading) {
+        const empty = document.createElement("div");
+        empty.className = "cs-empty";
+        empty.textContent = t("favOnlyEmpty");
+        grid.appendChild(empty);
+    }
+    // ★只看收藏:可见卡片太少就自动续拉(照抄画廊 autoMore,≤5 轮防失控)
+    if (S.browse.favOnly && !S.browse.loading && S.browse.nextCursor
+        && grid.querySelectorAll(".cs-card").length < 12) {
+        if ((S.browse.favMore || 0) < 5) {
+            S.browse.favMore = (S.browse.favMore || 0) + 1;
+            setTimeout(() => fetchBrowse(false), 300);
+        }
+    } else {
+        S.browse.favMore = 0;
     }
 }
 
@@ -3072,7 +3112,11 @@ async function idbTrimThumbs(cap) {
 
 const GAL_SNAPSHOT_KEY = "gal_snapshot";
 function galleryFilters(st) {
-    return { sort: st.sort, period: st.period, nsfwLevel: st.nsfwLevel, base: st.base, tag: st.tag, imageId: st.imageId || "", fmt: st.fmt || "all" };
+    return {
+        sort: st.sort, period: st.period, nsfwLevel: st.nsfwLevel, base: st.base, tag: st.tag,
+        imageId: st.imageId || "", fmt: st.fmt || "all",
+        nsfwLv: [...(st.nsfwLv || [])], thumbSize: st.thumbSize || 256, favOnly: !!st.favOnly, // 批11.5
+    };
 }
 async function saveGallerySnapshot() {
     const st = S.gal;
@@ -3111,6 +3155,16 @@ async function restoreGallerySnapshot(view) {
     if (view.__galBasePicker) view.__galBasePicker.set(String(st.base || "").split(",").map((x) => x.trim()).filter(Boolean));
     setVal("#cs-gal-imgid", st.imageId);
     setVal("#cs-gal-fmt", st.fmt);
+    // 批11.5:分级多选/尺寸/只看收藏一并回显
+    st.nsfwLv = new Set(Array.isArray(f.nsfwLv) ? f.nsfwLv : []);
+    if (view.__galLv) view.__galLv.set([...st.nsfwLv]);
+    if (typeof f.thumbSize === "number") st.thumbSize = f.thumbSize;
+    setVal("#cs-gal-size", String(st.thumbSize));
+    st.favOnly = !!f.favOnly;
+    {
+        const fb = $("#cs-gal-fav", view);
+        if (fb) { fb.style.background = st.favOnly ? "var(--accent-color,#4a90e2)" : ""; fb.style.color = st.favOnly ? "#fff" : ""; }
+    }
     if (view.__galTagPicker) view.__galTagPicker.set(String(st.tag || "").split(",").map((s) => s.trim()).filter(Boolean));
 }
 
@@ -3138,6 +3192,7 @@ async function _galleryAndPage(st, reset, ids) {
         p.set("nsfw", st.nsfwLevel > 0 ? "true" : "false");
         if (String(st.imageId || "").trim()) p.set("imageId", String(st.imageId).trim());
         if (st.base) p.set("baseModels", st.base);
+        if (st.fmt === "image" || st.fmt === "video") p.set("type", st.fmt); // 批11.5:媒体类型服务端过滤
         p.set("tags", c.id);
         if (!reset && c.next) for (const [k, v] of c.next) p.append(k, v);
         const gap = Date.now() - _galLastReq;
@@ -3190,6 +3245,7 @@ async function fetchGallery(reset, opts = {}) {
             if (String(st.imageId || "").trim()) p.set("imageId", String(st.imageId).trim());
             if (st.base) p.set("baseModels", st.base);
             if (andIds.length) p.set("tags", andIds.join(","));
+            if (st.fmt === "image" || st.fmt === "video") p.set("type", st.fmt); // 批11.5:媒体类型服务端过滤
             if (!reset && st.next) for (const [k, v] of st.next) p.append(k, v);
             const gap = Date.now() - _galLastReq;
             if (gap < 900) await new Promise((r2) => setTimeout(r2, 900 - gap)); // 批5 a:最小间隔防连发 503
@@ -3254,9 +3310,9 @@ function renderGallery(reset) {
         }
         st.jrow = []; st.jrowAr = 0;
     };
-    const fmtWant = st.fmt && st.fmt !== "all" ? st.fmt : null;
+    const mtWant = st.fmt && st.fmt !== "all" ? st.fmt : null; // image|video(服务端已过滤,这里兜底混装/旧快照)
     for (const img of st.items) {
-        if (fmtWant && fmtOf(img) !== fmtWant) continue; // 格式筛选(E2E e)
+        if (mtWant && (mtWant === "video") !== isVideoItem(img)) continue;
         if (st.favOnly && !(S.favs && S.favs.has(String(img.id)))) continue; // ★只看收藏(评审R2:此前无消费点,功能整体失效)
         if (st.nsfwLv.size) { // 本地分级多选(r3-f):命中任一选中位才显示;无标记位条目被滤掉
             const nl = Number(img.nsfwLevel || 0);
@@ -3328,9 +3384,9 @@ function renderGallery(reset) {
     if (!st.items.length && !st.loading) {
         grid.innerHTML = `<div class="cs-empty">${esc(t("galleryEmpty"))}</div>`;
     }
-    // E2E r3-d:格式/只看收藏是纯客户端过滤,筛选后可见数可能骤减。可见不足一页
+    // E2E r3-d:媒体类型/只看收藏是纯客户端过滤,筛选后可见数可能骤减。可见不足一页
     // 且还有下一页时自动续拉(最多 3 轮防失控);仍不足则给手动按钮兜底
-    const vis = st.items.filter((x) => (!fmtWant || fmtOf(x) === fmtWant)
+    const vis = st.items.filter((x) => (!mtWant || (mtWant === "video") === isVideoItem(x))
         && (!st.favOnly || (S.favs && S.favs.has(String(x.id))))).length;
     if (reset) st.autoMore = 0;
     // E2E 20:【尝试加载更多】按钮删除(每渲染一次增殖一个 + 与滚动加载重叠);
@@ -3357,12 +3413,16 @@ function buildGalleryView(root) {
     view.className = "cs-view";
     view.dataset.view = "gallery";
     view.innerHTML = `
+        <div class="cs-toolbar">
+            <input id="cs-gal-imgid" type="search" placeholder="${esc(t("imgidPh"))}" value="${esc(st.imageId || "")}" autocomplete="off"/>
+            <button class="cs-btn cs-btn-mini" id="cs-gal-refresh" title="${esc(t("refreshTitle"))}">⟳</button>
+            <button class="cs-btn cs-btn-mini" id="cs-gal-reset" title="${esc(t("resetFilters"))}">⟲</button>
+        </div>
         <div class="cs-fwrap">
             <div class="cs-presets">
                 ${GAL_PRESETS.map(([k]) => `<button class="cs-chip" data-gpreset="${k}">${esc(t("galPreset" + k.replace(/(^|-)([a-z])/g, (_, _s, c) => c.toUpperCase())))}</button>`).join("")}
             </div>
             <div class="cs-filters cs-filters-gal">
-                <input id="cs-gal-imgid" class="cs-span-full" type="text" placeholder="${esc(S.lang === "zh" ? "图片 ID 精确搜索(回车)" : "Image ID exact search (Enter)")}" value="${esc(st.imageId || "")}" autocomplete="off"/>
                 <div id="cs-gal-base-picker" class="cs-span-full"></div>
                 <div id="cs-gal-tag-picker" class="cs-span-full"></div>
                 <select id="cs-gal-period">${PERIODS.map((p) => `<option value="${p}" ${st.period === p ? "selected" : ""}>${esc(periodLabel(p))}</option>`).join("")}</select>
@@ -3375,11 +3435,10 @@ function buildGalleryView(root) {
                     <option value="Random">${esc(t("gallerySortRandom"))}</option>
                 </select>
                 <select id="cs-gal-nsfw"><option value="0" ${!st.nsfwLevel ? "selected" : ""}>${esc(t("sfwLabel"))}</option><option value="1" ${st.nsfwLevel ? "selected" : ""}>${esc(t("nsfwLabel"))}</option></select>
-                <div id="cs-gal-nsfwlv" class="cs-nsfwlv cs-span-full" title="${esc(S.lang === "zh" ? "本地分级过滤(可多选,作用于已加载条目)" : "Local nsfw-level filter (multi-select, applies to loaded items)")}">${Object.entries(NSFW_LEVEL_LABELS).filter(([b]) => Number(b) < 32).map(([b, lb]) => `<button class="cs-chip" data-nsfwlv="${b}">${esc(lb)}</button>`).join("")}</div>
-                <select id="cs-gal-fmt" title="${esc(t("fmtTip"))}">${fmtSelHtml(st.fmt)}</select>
-                <select id="cs-gal-size" title="${esc(S.lang === "zh" ? "缩略图大小" : "Thumbnail size")}">${[128, 256, 512].map((px) => `<option value="${px}" ${st.thumbSize === px ? "selected" : ""}>${px}px</option>`).join("")}</select>
-                <button class="cs-btn" id="cs-gal-fav" title="${esc(t("favOnlyTitle"))}" style="${st.favOnly ? "background:var(--accent-color,#4a90e2);color:#fff;border-color:transparent;" : ""}">★</button>
-                <button class="cs-btn" id="cs-gal-refresh" title="${esc(S.lang === "zh" ? "重新拉取画廊数据" : "Refetch gallery")}">⟳</button>
+                <div id="cs-gal-lv" title="${esc(S.lang === "zh" ? "本地分级过滤(多选,作用于已加载条目)" : "Local nsfw-level filter (multi-select, loaded items)")}"></div>
+                <select id="cs-gal-fmt" class="cs-span-4" title="${esc(t("mtTip"))}">${fmtSelHtml(st.fmt)}</select>
+                <select id="cs-gal-size" class="cs-span-4" title="${esc(t("thumbSizeGalTitle"))}">${[96, 128, 256, 512].map((px) => `<option value="${px}" ${st.thumbSize === px ? "selected" : ""}>${px}px</option>`).join("")}</select>
+                <button class="cs-btn cs-span-4" id="cs-gal-fav" title="${esc(t("favOnlyTitle"))}" style="${st.favOnly ? "background:var(--accent-color,#4a90e2);color:#fff;border-color:transparent;" : ""}">★ ${esc(t("favOnlyTitle"))}</button>
             </div>
             <button class="cs-ffold" id="cs-gal-ffold" title="${esc(t("ffoldTitle"))}">▾</button>
         </div>
@@ -3396,6 +3455,7 @@ function buildGalleryView(root) {
         syncFoldBtn($("#cs-gal-ffold", view), galFwrap.classList.contains("folded"));
         try { localStorage.setItem("cs_gal_fold", galFwrap.classList.contains("folded") ? "1" : "0"); } catch (_) { }
     };
+    const setValGal = (sel2, v2) => { const el2 = $(sel2, view); if (el2) el2.value = v2; };
     $("#cs-gal-sort", view).value = st.sort;
     { // 视图重建时回显预设选中态(复审R2-1)
         const hit = GAL_PRESETS.find(([, pd, so]) => pd === st.period && so === st.sort);
@@ -3412,22 +3472,25 @@ function buildGalleryView(root) {
         fetchGallery(true);
     });
     $("#cs-gal-nsfw", view).addEventListener("change", (e) => { st.nsfwLevel = parseInt(e.target.value, 10); fetchGallery(true); });
-    // 格式筛选:纯客户端,只过滤已加载条目,不触发重拉(E2E e:API 无类型/格式参数)
+    // 媒体类型筛选(批11.5):服务端 type=image|video,重拉第 1 页(分页口径正确);
+    // 渲染层仍按 isVideoItem 兜底过滤混装/旧快照条目
     $("#cs-gal-fmt", view).addEventListener("change", (e) => {
         st.fmt = e.target.value;
-        st.items.forEach((i) => { delete i.__rendered; }); // 清渲染标记,防筛选后整版被跳过
-        renderGallery(true);
+        st.items.forEach((i) => { delete i.__rendered; });
+        fetchGallery(true);
     });
-    // 本地 NSFW 分级多选 chips(E2E r3-f):纯客户端按 nsfwLevel 位掩码过滤已加载条目
-    $$("#cs-gal-nsfwlv .cs-chip", view).forEach((chip) => {
-        chip.onclick = () => {
-            const bit = Number(chip.dataset.nsfwlv);
-            if (st.nsfwLv.has(bit)) st.nsfwLv.delete(bit); else st.nsfwLv.add(bit);
-            chip.classList.toggle("active", st.nsfwLv.has(bit));
+    // 本地 NSFW 分级筛选(批11.5 由 chips 改多选下拉):纯客户端按 nsfwLevel 位掩码过滤已加载条目
+    const galLv = makeMultiSelect($("#cs-gal-lv", view), {
+        label: t("lvLabel"),
+        options: Object.entries(NSFW_LEVEL_LABELS).filter(([b]) => Number(b) < 32).map(([b, lb]) => [Number(b), lb]),
+        selected: [...st.nsfwLv],
+        onChange: (vals) => {
+            st.nsfwLv = new Set(vals);
             st.items.forEach((i) => { delete i.__rendered; });
             renderGallery(true);
-        };
+        },
     });
+    view.__galLv = galLv; // 快照恢复回显用
     // 快捷栏(E2E 6):映射 period+sort,回写 select 后重拉
     $$(".cs-presets [data-gpreset]", view).forEach((chip) => {
         chip.onclick = () => {
@@ -3456,6 +3519,23 @@ function buildGalleryView(root) {
         renderGallery(true);
     };
     $("#cs-gal-refresh", view).onclick = () => fetchGallery(true); // 显式刷新(E2E r3-c)
+    // 批11.5:重置筛选(与模型页同款)——清内容域筛选与★只看收藏,保留尺寸档与折叠态
+    $("#cs-gal-reset", view).onclick = () => {
+        st.period = "AllTime"; st.sort = "Newest"; st.base = ""; st.tag = ""; st.imageId = "";
+        st.nsfwLevel = 0; st.fmt = "all"; st.favOnly = false; st.nsfwLv = new Set();
+        setValGal("#cs-gal-period", st.period); setValGal("#cs-gal-sort", st.sort);
+        setValGal("#cs-gal-nsfw", "0"); setValGal("#cs-gal-fmt", "all");
+        setValGal("#cs-gal-imgid", "");
+        $$(".cs-presets .cs-chip", view).forEach((c) => c.classList.remove("active"));
+        if (view.__galBasePicker) view.__galBasePicker.set([]);
+        if (view.__galTagPicker) view.__galTagPicker.set([]);
+        if (view.__galLv) view.__galLv.set([]);
+        {
+            const fb = $("#cs-gal-fav", view);
+            if (fb) { fb.style.background = ""; fb.style.color = ""; }
+        }
+        fetchGallery(true);
+    };
     apiGet("/civitai_studio/favorites").then((d) => {
         S.favs = new Set((d.ids || []).map(String));
         if (st.favOnly) renderGallery(true);
@@ -3939,7 +4019,9 @@ function buildBrowseView(root) {
     view.innerHTML = `
         <div class="cs-toolbar">
             <input id="cs-search" type="search" placeholder="${esc(t("searchPlaceholder"))}"/>
-            <button class="cs-btn cs-btn-mini" id="cs-browse-reset" title="${esc(t("resetFilters"))}">⟲ ${esc(t("resetFilters"))}</button>
+            <select id="cs-f-type" title="${esc(t("typeLabel"))}"><option value="">${esc(t("allTypes"))}</option>${TYPE_OPTIONS.map((tp) => `<option value="${tp}" ${st.type === tp ? "selected" : ""}>${esc(tp)}</option>`).join("")}</select>
+            <button class="cs-btn cs-btn-mini" id="cs-browse-refresh" title="${esc(t("refreshTitle"))}">⟳</button>
+            <button class="cs-btn cs-btn-mini" id="cs-browse-reset" title="${esc(t("resetFilters"))}">⟲</button>
         </div>
         <div class="cs-fwrap">
             <div class="cs-presets">
@@ -3947,19 +4029,20 @@ function buildBrowseView(root) {
                 <button class="cs-chip" data-preset="hot-month">${esc(t("presetHotMonth"))}</button>
                 <button class="cs-chip" data-preset="best-month">${esc(t("presetBestMonth"))}</button>
             </div>
-            <div class="cs-filters">
+            <div class="cs-filters cs-filters-gal">
                 <div id="cs-f-base-picker" class="cs-span-full"></div>
                 <div id="cs-f-tag-picker" class="cs-span-full"></div>
-                <select id="cs-f-type" class="cs-span-full"><option value="">${esc(t("allTypes"))}</option>${TYPE_OPTIONS.map((tp) => `<option value="${tp}" ${st.type === tp ? "selected" : ""}>${esc(tp)}</option>`).join("")}</select>
                 <select id="cs-f-period">${PERIODS.map((p) => `<option value="${p}" ${st.period === p ? "selected" : ""}>${esc(periodLabel(p))}</option>`).join("")}</select>
                 <select id="cs-f-sort">${SORTS.map((s) => `<option value="${s}" ${st.sort === s ? "selected" : ""}>${esc(sortLabel(s))}</option>`).join("")}</select>
                 <select id="cs-f-nsfw"><option value="0" ${!st.nsfw ? "selected" : ""}>${esc(t("sfwLabel"))}</option><option value="1" ${st.nsfw ? "selected" : ""}>${esc(t("nsfwLabel"))}</option></select>
-                <div id="cs-f-nsfwlv" class="cs-nsfwlv cs-span-full" title="${esc(S.lang === "zh" ? "本地分级筛选(可多选,作用于已加载条目)" : "Local nsfw-level filter (multi-select, loaded items)")}">${Object.entries(NSFW_LEVEL_LABELS).filter(([b]) => Number(b) < 32).map(([b, lb]) => `<button class="cs-chip" data-nsfwlv="${b}">${esc(lb)}</button>`).join("")}</div>
-                <select id="cs-f-hidepaid" title="${esc(t("hidePaidLabel"))}">
+                <div id="cs-f-lv" title="${esc(S.lang === "zh" ? "本地分级筛选(多选,作用于已加载条目)" : "Local nsfw-level filter (multi-select, loaded items)")}"></div>
+                <select id="cs-f-hidepaid" class="cs-span-4" title="${esc(t("hidePaidLabel"))}">
                     <option value="0">${esc(t("showAllLabel"))}</option>
                     <option value="1" ${String(st.hidePaid) === "1" ? "selected" : ""}>${esc(t("hidePaidLabel"))}</option>
                     <option value="2" ${String(st.hidePaid) === "2" ? "selected" : ""}>${esc(t("hidePaidBought"))}</option>
                 </select>
+                <select id="cs-f-size" class="cs-span-4" title="${esc(t("thumbSizeTitle"))}">${BROWSE_CARD_SIZES.map(([w, h]) => `<option value="${w}" ${(st.cardW || 150) === w ? "selected" : ""} title="卡宽 ${w}px">${h}px</option>`).join("")}</select>
+                <button class="cs-btn cs-span-4" id="cs-f-fav" title="${esc(t("favOnlyTitle"))}" style="${st.favOnly ? "background:var(--accent-color,#4a90e2);color:#fff;border-color:transparent;" : ""}">★ ${esc(t("favOnlyTitle"))}</button>
             </div>
             <button class="cs-ffold" id="cs-browse-ffold" title="${esc(t("ffoldTitle"))}">▾</button>
         </div>
@@ -3977,22 +4060,53 @@ function buildBrowseView(root) {
             triggerBrowseRefresh();
         }, 500);
     });
-    // 批9:本地分级多选 chips(与画廊同款;纯客户端过滤已加载条目)
-    $$("#cs-f-nsfwlv .cs-chip", view).forEach((chip) => {
-        chip.onclick = () => {
-            const bit = Number(chip.dataset.nsfwlv);
-            if (st.nsfwLv.has(bit)) st.nsfwLv.delete(bit); else st.nsfwLv.add(bit);
-            chip.classList.toggle("active", st.nsfwLv.has(bit));
+    const setValB = (sel2, v2) => { const el2 = $(sel2, view); if (el2) el2.value = v2; };
+    // 本地分级筛选(批11.5 由 chips 改多选下拉;纯客户端过滤已加载条目)
+    const browseLv = makeMultiSelect($("#cs-f-lv", view), {
+        label: t("lvLabel"),
+        options: Object.entries(NSFW_LEVEL_LABELS).filter(([b]) => Number(b) < 32).map(([b, lb]) => [Number(b), lb]),
+        selected: [...st.nsfwLv],
+        onChange: (vals) => {
+            st.nsfwLv = new Set(vals);
             st.items.forEach((m) => { delete m.__rendered; });
             renderResults(true);
-        };
+        },
     });
-    // 批4 E2E B2:一键清空全部筛选(关键词/类型/底模/tag/AND-OR/付费/分级),排序与 NSFW 偏好保留
+    view.__browseLv = browseLv;
+    // 卡片尺寸(批11.5):纯布局,不重拉;改列宽后整版重排(偏好记 localStorage)
+    {
+        const saved = (() => { try { return parseInt(localStorage.getItem("cs_browse_cardw") || "", 10) || 0; } catch (_) { return 0; } })();
+        if (saved && BROWSE_CARD_SIZES.some(([w]) => w === saved)) st.cardW = saved;
+        setValB("#cs-f-size", String(st.cardW || 150));
+        $("#cs-f-size", view).addEventListener("change", (e) => {
+            st.cardW = parseInt(e.target.value, 10) || 150;
+            try { localStorage.setItem("cs_browse_cardw", String(st.cardW)); } catch (_) { }
+            st.items.forEach((m) => { delete m.__rendered; });
+            renderResults(true);
+        });
+    }
+    // ★只看收藏(批11.5):客户端过滤已加载模型;可见太少自动续拉(见 renderResults)
+    $("#cs-f-fav", view).onclick = () => {
+        st.favOnly = !st.favOnly;
+        st.favMore = 0;
+        const b = $("#cs-f-fav", view);
+        b.style.background = st.favOnly ? "var(--accent-color,#4a90e2)" : "";
+        b.style.color = st.favOnly ? "#fff" : "";
+        st.items.forEach((m) => { delete m.__rendered; });
+        renderResults(true);
+    };
+    // ⟳刷新:按当前筛选重拉第 1 页
+    $("#cs-browse-refresh", view).onclick = () => triggerBrowseRefresh();
+    // 批4 E2E B2:一键清空全部筛选(关键词/类型/底模/tag/AND-OR/付费/分级/★只看收藏),排序/NSFW/尺寸档保留
     $("#cs-browse-reset", view).onclick = () => {
         st.query = ""; st.type = ""; st.base = ""; st.tag = "";
         st.baseMode = "OR"; st.tagMode = "OR"; st.hidePaid = "0";
-        st.nsfwLv.clear();
-        $$("#cs-f-nsfwlv .cs-chip", view).forEach((c) => c.classList.remove("active"));
+        st.nsfwLv = new Set(); st.favOnly = false; st.favMore = 0; // 批11.5:分级/只看收藏一并清(尺寸档保留)
+        {
+            const fb = $("#cs-f-fav", view);
+            if (fb) { fb.style.background = ""; fb.style.color = ""; }
+        }
+        if (view.__browseLv) view.__browseLv.set([]);
         $("#cs-search", view).value = "";
         $("#cs-f-type", view).value = "";
         $("#cs-f-hidepaid", view).value = "0";
@@ -4795,6 +4909,9 @@ function injectStyles() {
 .cs-filters.cs-filters-gal { grid-template-columns:repeat(12,1fr); }
 .cs-filters.cs-filters-gal > * { grid-column:span 3; }
 .cs-filters > .cs-span-full { grid-column:1/-1; }
+.cs-filters > .cs-span-4 { grid-column:span 4; }   /* 批11.5:两页末行三等分 */
+.cs-toolbar select { max-width:132px; font-size:12px; padding:2px; }
+.cs-toolbar .cs-btn-mini { flex:0 0 auto; }
 .cs-presets { display:flex; gap:4px; padding:0 6px 6px; flex-shrink:0; flex-wrap:wrap; }
 .cs-filters select, .cs-filters input[type=text] { width:100%; padding:3px; font-size:12px; box-sizing:border-box; }
 .cs-scroll { flex:1; min-height:0; overflow-y:auto; padding:0 6px; }
@@ -5089,6 +5206,73 @@ function appendPlayBadge(cell) {
 // 共享 tag 选择器:chips(已选,✕移除) + 下拉添加器(候选=已入库标签,实时刷新)
 // + 自由输入框(名称/数字 ID,回车或逗号追加)。节点与画廊共用。
 // opts: { names: 初值数组, candidates: ()=>候选名数组, onChange: (names)=>void, compact: 紧凑模式 }
+// ---------- 多选下拉(分级筛选):收起态按钮显示"分级: 全部/R+X",点开为复选层 ----------
+// 弹层关闭沿用批5/批6 验证过的模式:window 捕获阶段隔离 + 外部按下即关
+// (宿主对 pointerdown preventDefault 会按规范抑制后续 click——弹层内必须 stopPropagation)
+function makeMultiSelect(el, opts) {
+    let sel = new Set(opts.selected || []);
+    let pop = null;
+    const closePop = () => { if (pop) { pop.remove(); pop = null; } };
+    const summary = () => {
+        const on = (opts.options || []).filter(([v]) => sel.has(v)).map(([, lb]) => lb);
+        if (!on.length) return t("msAll");
+        return on.length <= 2 ? on.join("+") : t("msCount", { n: on.length });
+    };
+    const render = () => {
+        el.innerHTML = "";
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.style.cssText = "width:100%;min-width:0;display:flex;align-items:center;gap:4px;"
+            + "background:var(--comfy-input-bg,#333);color:var(--fg-color,#eee);"
+            + "border:1px solid var(--border-color,#444);border-radius:4px;padding:3px;"
+            + "font-size:12px;cursor:pointer;box-sizing:border-box;overflow:hidden;text-align:left;";
+        btn.innerHTML = `<span style="flex:0 0 auto;opacity:.75;">${esc(opts.label)}:</span>`
+            + `<span style="flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;`
+            + `color:${sel.size ? "var(--accent-color,#4a90e2)" : "#999"};">${esc(summary())}</span>`
+            + `<span style="flex:0 0 auto;opacity:.7;">▾</span>`;
+        btn.title = `${opts.label}: ${summary()}`;
+        btn.onclick = (ev) => { ev.stopPropagation(); openPop(btn); };
+        el.appendChild(btn);
+    };
+    const openPop = (btn) => {
+        document.querySelectorAll(".cs-mselect-pop").forEach((n) => n.remove());
+        closePop();
+        pop = document.createElement("div");
+        pop.className = "cs-mselect-pop";
+        pop.style.cssText = "position:fixed;z-index:60002;min-width:150px;padding:6px;font-size:12px;"
+            + "background:var(--comfy-input-bg,var(--bg-color,#2b2b30));color:var(--fg-color,#ddd);"
+            + "border:1px solid var(--border-color,#3a3a40);border-radius:8px;"
+            + "box-shadow:0 8px 24px rgba(0,0,0,.5);cursor:default;";
+        for (const [v, lb] of opts.options || []) {
+            const row = document.createElement("label");
+            row.style.cssText = "display:flex;align-items:center;gap:6px;padding:4px 2px;cursor:pointer;white-space:nowrap;";
+            const cb = document.createElement("input");
+            cb.type = "checkbox";
+            cb.checked = sel.has(v);
+            cb.onchange = () => {
+                if (cb.checked) sel.add(v); else sel.delete(v);
+                render();
+                if (opts.onChange) opts.onChange([...sel]);
+            };
+            row.appendChild(cb);
+            row.appendChild(document.createTextNode(lb));
+            pop.appendChild(row);
+        }
+        document.body.appendChild(pop);
+        const r = pop.getBoundingClientRect(), br = btn.getBoundingClientRect();
+        pop.style.left = Math.max(4, Math.min(br.left, window.innerWidth - r.width - 8)) + "px";
+        pop.style.top = Math.min(br.bottom + 4, window.innerHeight - r.height - 8) + "px";
+        const h = (e2) => {
+            if (pop && pop.contains(e2.target)) { e2.stopPropagation(); return; }
+            closePop();
+            window.removeEventListener("pointerdown", h, true);
+        };
+        window.addEventListener("pointerdown", h, true);
+    };
+    render();
+    return { set(names) { sel = new Set(names || []); render(); }, get: () => [...sel] };
+}
+
 function createTagPicker(el, opts) {
     const state = { names: (opts.names || []).slice() };
     const addName = (raw) => {
