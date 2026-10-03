@@ -1100,7 +1100,7 @@ function makeCard(model) {
                 if (preloaded) return;
                 preloaded = true;
                 for (const m of media) {
-                    if (m.type === "video") continue;
+                    if (isVideoItem(m)) continue; // 含 type 字段缺失但 URL 为 mp4/webm/mov 的情况
                     const im = new Image();
                     im.src = imgSrc(cdnThumb(m.url, S.cfg.px_media || 128)); // 与 swap 同 URL,命中缓存
                 }
