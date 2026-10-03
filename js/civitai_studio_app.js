@@ -61,7 +61,7 @@ function fmtSelHtml(cur) {
     return ["all", "jpg", "png", "webp", "gif", "video"].map((f) =>
         `<option value="${f}" ${(cur || "all") === f ? "selected" : ""}>${f === "all" ? esc(t("fmtAll")) : f === "video" ? esc(t("fmtVideo")) : f.toUpperCase()}</option>`).join("");
 }
-const JS_VERSION = "0.9.4";
+const JS_VERSION = "0.9.5";
 
 // ---------- i18n ----------
 const STR = {
@@ -208,6 +208,9 @@ const STR = {
         favImportFailed: "导入失败", favEmpty: "还没有收藏 — 在画廊、节点缩略图或大图浮层里点 ★",
         favAutoSync: "收藏自动同步",
         favAutoSyncTip: "打开收藏夹时自动与 Civitai 同步,冲突按最新修改时间覆盖;模型上推需 key 勾选 Social Write",
+        setGrpLogs: "日志",
+        logTsLabel: "时间戳前缀",
+        logTsTip: "日志行首附加 [年-月-日 时:分:秒]。默认关;保存即时生效。",
         logDebugLabel: "调试日志(DEBUG)",
         logDebugTip: "控制台输出全部出站请求与响应、同步逐条决策(等效 ComfyUI --verbose 但只对本插件生效)。保存即时生效,排障后建议关闭。",
         favRemoveTitle: "取消收藏", favSearchPh: "在收藏里搜索…",
@@ -385,6 +388,9 @@ const STR = {
         favImport: "Import", favExport: "Export", favImported: "Imported {items} items / {groups} groups",
         favImportFailed: "Import failed", favEmpty: "No favorites yet — tap ★ in the gallery, node thumbnails or the image overlay",
         favAutoSync: "Auto-sync favorites",
+        setGrpLogs: "Logging",
+        logTsLabel: "Timestamp prefix",
+        logTsTip: "Prefix log lines with [YYYY-MM-DD HH:MM:SS]. Off by default; applies on save.",
         logDebugLabel: "Debug logging",
         logDebugTip: "Log all outbound requests/responses and per-item sync decisions to the console (equivalent to ComfyUI --verbose, scoped to this plugin). Takes effect on save; turn off after troubleshooting.",
         favAutoSyncTip: "Sync on Favorites tab open; conflicts resolved by newest timestamp; model push requires the SocialWrite key scope",
@@ -1310,7 +1316,9 @@ function nsfwBitsOf(item) {
     // nsfwLevel 作回退(数字位掩码或 None/Soft/Mature/X 字符串枚举)
     const v = item && (item.browsingLevel ?? item.nsfwLevel);
     if (typeof v === "number") return v;
-    return _NSFW_NAME_BITS[String(v || "").trim().toLowerCase()] || 0;
+    const sv = String(v || "").trim();
+    if (/^\d+$/.test(sv)) return parseInt(sv, 10); // 批7 3:dataset 值是数字字符串,👁 重算全灭根因
+    return _NSFW_NAME_BITS[sv.toLowerCase()] || 0;
 }
 function nsfwBlurOn(item) {
     const lv = nsfwBitsOf(item);
@@ -1874,7 +1882,7 @@ function openImageDetail(item, opts = {}) {
         syncFav(S.favs?.has(oid));
         favBig.onclick = async () => {
             try {
-                syncFav(await toggleFav("asset", oid, { name: item.username || "", cover: item.url }));
+                syncFav(await toggleFav("asset", oid, { name: item.username || "", cover: item.url, extra: { nsfwLevel: nsfwBitsOf(item) } }));
             } catch (e) { toast("error", t("favFailed"), e.message); }
         };
     }
@@ -3108,7 +3116,7 @@ function renderGallery(reset) {
     }
     S.gal.__needsRender = false;
     const st = S.gal;
-    $$(".cs-gal-more", grid).forEach((n) => n.remove()); // 手动续拉按钮每次重渲染先清,防增殖
+    $$(".cs-gal-more, .cs-gal-err", grid).forEach((n) => n.remove()); // 手动续拉按钮/错误横幅每次重渲染先清,防增殖
     if (st.error && !st.items.length) {
         grid.innerHTML = `<div class="cs-empty">${esc(st.error)}</div>`;
         return;
@@ -3178,7 +3186,7 @@ function renderGallery(reset) {
             S.favs = S.favs || new Set();
             try {
                 const adding = !S.favs.has(String(img.id)); // 调用前判定(与旧行为等价)
-                const on = await toggleFav("asset", String(img.id), { name: img.username || "", cover: img.url });
+                const on = await toggleFav("asset", String(img.id), { name: img.username || "", cover: img.url, extra: { nsfwLevel: nsfwBitsOf(img) } });
                 ev.target.style.color = on ? "#ffd75e" : "";
                 // E2E #8:新增收藏弹收藏夹选择器(默认未分组);取消收藏不弹
                 if (on && adding) {
@@ -3201,6 +3209,7 @@ function renderGallery(reset) {
     flushRow();
     if (st.error && st.items.length) {
         const err = document.createElement("div");
+        err.className = "cs-gal-err";
         err.style.cssText = "flex:0 0 100%;text-align:center;color:#e2a23f;font-size:12px;padding:6px;cursor:pointer;";
         err.textContent = st.error + (st.next.length ? " — " + t("retry") : "");
         err.onclick = () => { st.error = ""; fetchGallery(false); };
@@ -3614,7 +3623,13 @@ async function openSettings() {
                 <div class="cs-set-group-head">${esc(t("setGrpSync"))}<span class="cs-set-caret">▾</span></div>
                 <div class="cs-set-group-body">
                     <label class="cs-check"><input id="cs-set-autosync" type="checkbox" ${cfg.fav_autosync ? "checked" : ""}/> ${esc(t("favAutoSync"))} ${infoIco(t("favAutoSyncTip"))}</label>
+                </div>
+            </div>
+            <div class="cs-set-group" data-fold="logs">
+                <div class="cs-set-group-head">${esc(t("setGrpLogs"))}<span class="cs-set-caret">▾</span></div>
+                <div class="cs-set-group-body">
                     <label class="cs-check"><input id="cs-set-logdebug" type="checkbox" ${cfg.log_debug ? "checked" : ""}/> ${esc(t("logDebugLabel"))} ${infoIco(t("logDebugTip"))}</label>
+                    <label class="cs-check"><input id="cs-set-logts" type="checkbox" ${cfg.log_timestamp ? "checked" : ""}/> ${esc(t("logTsLabel"))} ${infoIco(t("logTsTip"))}</label>
                 </div>
             </div>
         </div>
@@ -3737,6 +3752,7 @@ async function openSettings() {
             tag_and_mode: $("#cs-set-andmode", m.box).checked,
             fav_autosync: $("#cs-set-autosync", m.box).checked,
             log_debug: $("#cs-set-logdebug", m.box).checked,
+            log_timestamp: $("#cs-set-logts", m.box).checked,
         };
         const key = $("#cs-set-key", m.box).value.trim();
         if (key) body.api_key = key;
@@ -5207,7 +5223,7 @@ function renderNodeThumbs(node) {
     // 批E E2E:本地分页 50/页;批4 E2E 19b:缓存不再设 100 上限,[下一页]越过缓存尾部时回源续拉
     const all = (node.csResults || []).filter((it) => !fmtWant || fmtOf(it) === fmtWant);
     const PAGE_N = 50;
-    const paged = all.length > PAGE_N;
+    const paged = all.length > PAGE_N || !!(st.next && st.next.length); // 批7 2.1:服务端还有下一页时首页就出翻页栏
     if (paged) {
         const pagesN = Math.ceil(all.length / PAGE_N);
         // 批6 E2E 9:pending 只在缓存确实增长后才消费——fetch 前的那次渲染(spinner)
@@ -5273,7 +5289,9 @@ function renderNodeThumbs(node) {
         if (isVideoItem(c.it)) {
             // 静音取首帧作缩略图
             const v = document.createElement("video");
-            v.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;";
+            v.classList.add("cs-nsfw-blurable"); // 批7 3:节点条此前完全没有遮罩
+            v.dataset.nsfwLevel = nsfwBitsOf(c.it);
+            v.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;" + nsfwBlurStyle(c.it);
             v.muted = true;
             v.loop = true;
             v.playsInline = true;
@@ -5283,7 +5301,9 @@ function renderNodeThumbs(node) {
             appendPlayBadge(cell);
         } else {
             const im = document.createElement("img");
-            im.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;";
+            im.classList.add("cs-nsfw-blurable"); // 批7 3:节点条此前完全没有遮罩
+            im.dataset.nsfwLevel = nsfwBitsOf(c.it);
+            im.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;" + nsfwBlurStyle(c.it);
             const thumb = cdnThumb(c.it.url || "");
             im.onerror = () => { if (!im.dataset.retried) { im.dataset.retried = "1"; im.src = altSrc(thumb); } };
             im.src = imgSrc(thumb);
@@ -5302,7 +5322,7 @@ function renderNodeThumbs(node) {
         favBtn.onclick = async (ev) => {
             ev.stopPropagation();
             try {
-                const on = await toggleFav("asset", oid, { name: c.it.username || "", cover: c.it.url });
+                const on = await toggleFav("asset", oid, { name: c.it.username || "", cover: c.it.url, extra: { nsfwLevel: nsfwBitsOf(c.it) } });
                 favBtn.style.color = on ? "#ffd75e" : "";
             } catch (e) { toast("error", t("favFailed"), e.message); }
         };
@@ -5311,12 +5331,13 @@ function renderNodeThumbs(node) {
         cell.onclick = () => showNodeImageFloat(node, c.it);
         strip.appendChild(cell);
     }
-    if (!st.loading && st.next && st.next.length) {
-        if (paged) {
-            // 批E E2E:达上限 → 本地缓存分页;首页的[上一页]=[刷新](重拉第一页)
+    if (!st.loading && st.next && st.next.length && paged) {
+        // 批E E2E:本地缓存分页;首页的[上一页]=[刷新](重拉第一页)
+        // 批7 2.1/2.2:翻页控件移入吸顶状态栏(常驻可见);翻页后滚回页首
+        {
             const pager = document.createElement("div");
             pager.className = "cs-thumb-pager"; // 批4 E2E 19a:翻页栏纳入重渲染清理,不再遗留叠加
-            pager.style.cssText = "width:100%;display:flex;gap:6px;margin-top:2px;align-items:center;";
+            pager.style.cssText = "margin-left:auto;display:flex;gap:6px;align-items:center;";
             const pages = Math.ceil(all.length / PAGE_N);
             const mkBtn = (label, cb, disabled) => {
                 const b = document.createElement("button");
@@ -5328,7 +5349,7 @@ function renderNodeThumbs(node) {
             };
             const refresh = () => { node.csPage = 0; node.csResults = []; if (node.csLastParams) fetchNodeThumbs(node, node.csLastParams, true); else node.csSchedule?.(); };
             pager.appendChild(mkBtn((node.csPage || 0) === 0 ? t("nodeRefresh") : t("nodePrev"),
-                () => { if ((node.csPage || 0) === 0) refresh(); else { node.csPage -= 1; renderNodeThumbs(node); } }));
+                () => { if ((node.csPage || 0) === 0) refresh(); else { node.csPage -= 1; renderNodeThumbs(node); strip.scrollTop = 0; } }));
             const idx = document.createElement("span");
             idx.style.cssText = "flex:0 0 auto;font-size:10px;color:#888;";
             idx.textContent = `${(node.csPage || 0) + 1}/${pages}`;
@@ -5339,15 +5360,9 @@ function renderNodeThumbs(node) {
                 // 批4 E2E 19b:越过缓存尾部 → 回源续拉下一批(完成后重渲染,越界页码由头部钳制收敛)
                 if ((node.csPage || 0) * PAGE_N >= all.length) node.csLoadMore?.();
                 else renderNodeThumbs(node);
+                strip.scrollTop = 0; // 批7 2.2:翻页回页首
             }, (node.csPage || 0) >= pages - 1 && !(st.next && st.next.length)));
-            strip.appendChild(pager);
-        } else {
-            const more = document.createElement("button");
-            more.className = "cs-thumb-more cs-btn cs-btn-mini";
-            more.style.cssText = "width:100%;margin-top:2px;";
-            more.textContent = t("loadMore");
-            more.onclick = () => node.csLoadMore?.();
-            strip.appendChild(more);
+            bar.appendChild(pager); // 批7:进吸顶栏(原在条目尾部,翻页回顶后不可见)
         }
     }
     strip.scrollTop = keepScroll;
