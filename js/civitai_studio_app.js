@@ -66,7 +66,7 @@ function fmtSelHtml(cur) {
 
 // 模型页卡片尺寸档(批11.5):[卡宽, 封面最长边(=宽130%)];含更小档供密集浏览
 const BROWSE_CARD_SIZES = [[110, 143], [150, 195], [200, 260], [260, 338]];
-const JS_VERSION = "0.8.0";
+const JS_VERSION = "0.8.1";
 
 // ---------- i18n ----------
 const STR = {
