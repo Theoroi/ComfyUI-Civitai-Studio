@@ -841,6 +841,7 @@ function showModal(innerHTML, cls, keepNav) {
     positionFloat(panel, 480);
     watchSidebarDock();
     dragFloat(panel, panel.querySelector(".cs-float-head"));
+    addFloatResize(panel, "modal"); // 批12.1:弹窗类浮层(下载/设置/大图)同样可调宽
     const close = () => {
         document.removeEventListener("keydown", escHandler);
         panel.remove();
@@ -1340,24 +1341,10 @@ function positionFloat(panel, w) {
     panel.style.top = Math.max(10, Math.min(a.top + 72, window.innerHeight - 320)) + "px";
 }
 
-function openFloatDetail(keepNav) {
-    if (!keepNav) closeAllFloats(); // 单实例:开新的浮层前关掉旧浮层(导航跳转由 navPush 接管)
-    const panel = document.createElement("div");
-    panel.className = "cs-float";
-    panel.innerHTML = `
-        <div class="cs-float-head">
-            <span class="cs-float-title"></span>
-            <button class="cs-float-close">✕</button>
-        </div>
-        <div class="cs-float-body"></div>`;
-    document.body.appendChild(panel);
-    positionFloat(panel, 440);
-    watchSidebarDock();
-    panel.querySelector(".cs-float-close").onclick = closeFloatDetail;
-    // 标题栏拖动
-    dragFloat(panel, panel.querySelector(".cs-float-head"));
-    // 批12-h:右缘拖拽调宽(localStorage 记忆,范围 320px ~ 视口-20)
-    const savedW = parseInt(localStorage.getItem("cs_float_w") || "", 10);
+// 批12-h/12.1:浮层右缘拖拽调宽——detail 与 modal 浮层通用,宽度按 key 记忆
+function addFloatResize(panel, memKey) {
+    const lsKey = "cs_float_w_" + memKey;
+    const savedW = parseInt(localStorage.getItem(lsKey) || "", 10);
     if (savedW >= 320) {
         const w0 = Math.min(savedW, window.innerWidth - 20);
         panel.style.width = w0 + "px";
@@ -1375,7 +1362,7 @@ function openFloatDetail(keepNav) {
             positionFloat(panel, w);
         };
         const up = () => {
-            try { localStorage.setItem("cs_float_w", String(panel.offsetWidth)); } catch (_) { }
+            try { localStorage.setItem(lsKey, String(panel.offsetWidth)); } catch (_) { }
             window.removeEventListener("pointermove", move);
             window.removeEventListener("pointerup", up);
         };
@@ -1383,6 +1370,25 @@ function openFloatDetail(keepNav) {
         window.addEventListener("pointerup", up);
     });
     panel.appendChild(grip);
+}
+
+function openFloatDetail(keepNav) {
+    if (!keepNav) closeAllFloats(); // 单实例:开新的浮层前关掉旧浮层(导航跳转由 navPush 接管)
+    const panel = document.createElement("div");
+    panel.className = "cs-float";
+    panel.innerHTML = `
+        <div class="cs-float-head">
+            <span class="cs-float-title"></span>
+            <button class="cs-float-close">✕</button>
+        </div>
+        <div class="cs-float-body"></div>`;
+    document.body.appendChild(panel);
+    positionFloat(panel, 440);
+    watchSidebarDock();
+    panel.querySelector(".cs-float-close").onclick = closeFloatDetail;
+    // 标题栏拖动
+    dragFloat(panel, panel.querySelector(".cs-float-head"));
+    addFloatResize(panel, "detail"); // 批12.1:抽公共助手,detail/modal 浮层通用
     S.ui.float = panel;
     return panel.querySelector(".cs-float-body");
 }
@@ -3496,10 +3502,10 @@ function buildGalleryView(root) {
             </div>
             <button class="cs-ffold" id="cs-gal-ffold" title="${esc(t("ffoldTitle"))}">▾</button>
         </div>
-        <div id="cs-gal-status" class="cs-status"></div>
         <div id="cs-gal-content" class="cs-scroll">
             <div id="cs-gal-grid" class="cs-gal-grid"></div>
-        </div>`;
+        </div>
+        <div id="cs-gal-status" class="cs-status"></div>`;
     root.appendChild(view);
     // 画廊筛选折叠:与浏览 tab 同构,独立记住偏好
     const galFwrap = $(".cs-fwrap", view);
@@ -3837,6 +3843,21 @@ async function openSettings() {
                     <label class="cs-check"><input id="cs-set-pimg" type="checkbox" ${cfg.proxy_images ? "checked" : ""}/> ${esc(t("pimgLabel"))} ${infoIco(t("pimgTip"))}</label>
                 </div>
             </div>
+            <div class="cs-set-group${fold.models ? " closed" : ""}" data-fold="models">
+                <div class="cs-set-group-head">${esc(t("setGrpModels"))}<span class="cs-set-caret">▾</span></div>
+                <div class="cs-set-group-body">
+                    <label class="cs-check">${esc(t("pxCoverLabel"))}
+                        <select id="cs-set-pxcover">${[96, 320, 450].map((px) => `<option value="${px}" ${(cfg.px_cover || 320) === px ? "selected" : ""}>${px}px</option>`).join("")}</select>
+                        ${infoIco(t("pxCoverTip"))}</label>
+                    <label class="cs-check">${esc(t("pxMediaLabel"))}
+                        <select id="cs-set-pxmedia">${[96, 320, 450].map((px) => `<option value="${px}" ${(cfg.px_media || 320) === px ? "selected" : ""}>${px}px</option>`).join("")}</select>
+                        ${infoIco(t("pxMediaTip"))}</label>
+                    <label><span class="cs-lab">${esc(t("carouselLabel"))} ${infoIco(t("carouselTip"))}</span>
+                        <input id="cs-set-carousel" type="number" min="1" max="10" value="${cfg.carousel_interval || 3}"/>
+                    </label>
+                    <label class="cs-check"><input id="cs-set-cvid" type="checkbox" ${cfg.carousel_video ? "checked" : ""}/> ${esc(t("carouselVideoLabel"))} ${infoIco(t("carouselVideoTip"))}</label>
+                </div>
+            </div>
             <div class="cs-set-group${fold.download ? " closed" : ""}" data-fold="download">
                 <div class="cs-set-group-head">${esc(t("setGrpDownload"))}<span class="cs-set-caret">▾</span></div>
                 <div class="cs-set-group-body">
@@ -3864,21 +3885,6 @@ async function openSettings() {
                     </div>
                 </div>
             </div>
-            <div class="cs-set-group${fold.models ? " closed" : ""}" data-fold="models">
-                <div class="cs-set-group-head">${esc(t("setGrpModels"))}<span class="cs-set-caret">▾</span></div>
-                <div class="cs-set-group-body">
-                    <label class="cs-check">${esc(t("pxCoverLabel"))}
-                        <select id="cs-set-pxcover">${[96, 320, 450].map((px) => `<option value="${px}" ${(cfg.px_cover || 320) === px ? "selected" : ""}>${px}px</option>`).join("")}</select>
-                        ${infoIco(t("pxCoverTip"))}</label>
-                    <label class="cs-check">${esc(t("pxMediaLabel"))}
-                        <select id="cs-set-pxmedia">${[96, 320, 450].map((px) => `<option value="${px}" ${(cfg.px_media || 320) === px ? "selected" : ""}>${px}px</option>`).join("")}</select>
-                        ${infoIco(t("pxMediaTip"))}</label>
-                    <label><span class="cs-lab">${esc(t("carouselLabel"))} ${infoIco(t("carouselTip"))}</span>
-                        <input id="cs-set-carousel" type="number" min="1" max="10" value="${cfg.carousel_interval || 3}"/>
-                    </label>
-                    <label class="cs-check"><input id="cs-set-cvid" type="checkbox" ${cfg.carousel_video ? "checked" : ""}/> ${esc(t("carouselVideoLabel"))} ${infoIco(t("carouselVideoTip"))}</label>
-                </div>
-            </div>
             <div class="cs-set-group" data-fold="exp">
                 <div class="cs-set-group-head">${esc(t("setGrpExp"))}<span class="cs-set-caret">▾</span></div>
                 <div class="cs-set-group-body">
@@ -3886,7 +3892,6 @@ async function openSettings() {
                     <label class="cs-check"><input id="cs-set-autosync" type="checkbox" ${cfg.fav_autosync ? "checked" : ""}/> ${esc(t("favAutoSync"))} ${infoIco(t("favAutoSyncTip"))}</label>
                     <label class="cs-check"><input id="cs-set-tscrape" type="checkbox" ${cfg.tag_scrape !== false ? "checked" : ""}/> ${esc(t("tagScrapeLabel"))} ${infoIco(t("tagScrapeTip"))}<span class="cs-set-exp">${esc(t("expBadge"))}</span></label>
                     <label class="cs-check"><input id="cs-set-gd" type="checkbox" ${cfg.gen_data !== false ? "checked" : ""}/> ${esc(t("genDataLabel"))} ${infoIco(t("genDataTip"))}<span class="cs-set-exp">${esc(t("expBadge"))}</span></label>
-                    <label class="cs-check"><input id="cs-set-andmode" type="checkbox" ${cfg.tag_and_mode ? "checked" : ""}/> ${esc(t("tagAndLabel"))} ${infoIco(t("tagAndTip"))}<span class="cs-set-exp">${esc(t("expBadge"))}</span></label>
                 </div>
             </div>
             <div class="cs-set-group" data-fold="logs">
@@ -4012,7 +4017,6 @@ async function openSettings() {
             proxy_images: $("#cs-set-pimg", m.box).checked,
             verify_hash: $("#cs-set-hash", m.box).checked,
             tag_scrape: $("#cs-set-tscrape", m.box).checked,
-            tag_and_mode: $("#cs-set-andmode", m.box).checked,
             fav_autosync: $("#cs-set-autosync", m.box).checked,
             fav_sync: $("#cs-set-favsync", m.box).checked,
             gen_data: $("#cs-set-gd", m.box).checked,
@@ -5581,7 +5585,7 @@ function attachIdAndTags(box, image) {
             const tagObj = tags.find((x) => String(x.id) === el.dataset.tagid);
             const tname = (tagObj && tagObj.name) || `#${el.dataset.tagid}`;
             el.onclick = (ev) => openMiniMenu(ev, [
-                { label: t("menuCopy"), cb: () => copyWithToast(tname) },
+                { label: t("menuCopy"), cb: () => copyWithToast(el.dataset.tagid) }, // 批12.1:复制数字 ID(/images 查询只认 ID;名称看 title)
                 { label: t("menuGallerySearch"), cb: () => searchGalleryByTag(tname) },
             ]);
         });
@@ -6034,8 +6038,8 @@ app.registerExtension({
                     node.widgets.splice(anchor >= 0 ? anchor : node.widgets.length, 0, tagsDomW);
                 }
 
-                const sig = () => ["base_model", "tags_selected", "sort", "period", "nsfw", "limit"]
-                    .map((n) => widget(n)?.value ?? "").join("|");
+                const sig = () => ["base_model", "tags_selected", "tag_mode", "sort", "period", "nsfw", "limit"]
+                    .map((n) => widget(n)?.value ?? "").join("|"); // 批12.1:+tag_mode(此前切 OR/AND 不触发重拉)
                 node.csSchedule = () => {
                     const s2 = sig();
                     if (s2 === node.csSig) return;

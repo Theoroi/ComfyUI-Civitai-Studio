@@ -178,7 +178,6 @@ async def get_config(request):
         "verify_hash": cfg.get("verify_hash", True),
         "max_concurrent": cfg.get("max_concurrent", 1),
         "tag_scrape": cfg.get("tag_scrape", True),
-        "tag_and_mode": cfg.get("tag_and_mode", False),
         "cache_max_mb": cfg.get("cache_max_mb", 500),
         "fav_autosync": cfg.get("fav_autosync", False),
         "fav_sync": cfg.get("fav_sync", True),
@@ -235,7 +234,7 @@ async def set_config(request):
             except (TypeError, ValueError):
                 return _json_error(f"{key} 必须是整数", 400)
             partial[key] = max(lo, min(hi, value))
-    for key in ("proxy_images", "verify_hash", "tag_scrape", "tag_and_mode",
+    for key in ("proxy_images", "verify_hash", "tag_scrape",
                 "fav_autosync", "fav_sync", "gen_data", "carousel_video",
                 "log_debug", "log_timestamp"):
         if key in body:

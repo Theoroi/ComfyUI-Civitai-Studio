@@ -21,7 +21,6 @@ DEFAULTS = {
     "verify_hash": True,    # 下载完成后校验 SHA256
     "max_concurrent": 1,    # 并发下载数 1-4
     "tag_scrape": True,     # 是否读取非公开 API 抓取图片分类标签
-    "tag_and_mode": False,  # 实验选项:多标签筛选改漏斗式 AND(默认 OR,API 原生语义)
     "cache_max_mb": 500,    # 磁盘缓存上限 MB(50~2000),见 docs/plans/completed/cache-design.md
     "fav_autosync": False,  # 收藏与 Civitai 账号自动同步(开面板时触发,冲突按最新时间覆盖)
     "px_cover": 320,        # 模型卡片封面缩略档位(批10;批11.3 改真实 CDN 档位,见 PX_TIERS)
