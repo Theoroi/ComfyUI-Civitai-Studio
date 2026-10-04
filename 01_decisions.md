@@ -1,12 +1,26 @@
 # 01_decisions — 决策账本
 
-> 时间序只追加;每条含 决策/理由/被否选项。历史部分(批1-批8)为逆向重建(证据=commit/文档锚点,A 级);
-> 自 2026-10-03 起实时追加。
+> 时间序只追加;每条含 决策/理由/被否选项/证据等级。历史部分为逆向重建(证据=A 代码锚点/B commit);
+> 自 2026-10-03 起实时追加;2026-10-04 full 档考古扩充早期区(下方"逆向考古"节,B 级为主)。
+
+## 逆向考古(2026-09-22 ~ 09-26,project-design full 档 2026-10-04 补,证据 B=commit)
+
+| 日期 | 决策 | 理由 | 被否选项 | 锚点(B) |
+|---|---|---|---|---|
+| 09-22 | 立项:单插件承载 浏览+下载+本地管理,不走独立服务 | ComfyUI 侧边栏 API 可挂 UI;用户在创作流内闭环 | 独立 web 应用 | fcaa900 首提交 |
+| 09-23 | 上线前先过两轮三方审计再继续加功能 | round1 63 项(阻塞/下载完整性/路径逃逸/白名单/分页竞态)+round2 并发与旅程 | 边加功能边修 | c50b69a,bb89eb1 |
+| 09-24 | v0.6.0 作为首个对外发布 | 功能主干(浏览/下载/本地库/画廊)可用 | 等收藏同步做完再发 | tag v0.6.0 |
+| 09-26 | 节点注册键全量迁 `CivitaiStudio_` 前缀(BREAKING) | 通用名易与其它插件撞注册键 | 保留旧键双注册(歧义) | 8d08ee9 |
+| 09-26 | v0.7.0 发布:节点四件+收藏 v1(REST) | 当时尚未知 REST favorites 已废弃 | — | tag v0.7.0 |
 
 ## 逆向重建(2026-09-27 ~ 2026-10-03)
 
 | 日期 | 决策 | 理由 | 被否选项 | 锚点 |
 |---|---|---|---|---|
+| 09-27 | 本地模型身份主存储=sqlite assocs 表(durable 域),sidecar 降级为导出口径 | 外部删 sidecar 不再丢关联;DB=真值,快照补源 | 维持 sidecar 为真值 | 91545f7→e1e6ac4(两阶段,full 档考古补) |
+| 09-27 | tag_map / dl_jobs 迁 sqlite durable 域(legacy JSON 只读迁移源) | 用户策展数据与任务不可被配额淘汰/清缓存触及 | 继续以 JSON 文件为准 | 816043e,acbc5e7,711f17b(full 档考古补) |
+| 09-27 | routes.py(1518 行)按域拆 routes/ 包,URL 与注册面零变化 | 49 端点契约快照兜底重构;按域可维护 | 单文件+分区注释 | 75a5fc1,f85f48f(full 档考古补) |
+| 09-27 | 前端维持**单文件**(多文件实验结项:负结论) | frontend 1.52.7 用 unimport 转译扩展模块,多文件触发 importModule 未定义、主模块静默失败(实测复现) | js-modular 拆分 | 54434c4,bcb6575(full 档考古补) |
 | 09-27 | REST favorites 双通道退役,收藏下行唯一通道=collections tRPC | 双域实测 `?favorites=true` 被忽略(返回全站热榜)+PR #4836 源码注释 | 混用 REST 兼容旧库 | docs/research/favorites-api-research.md;commit 批1 |
 | 09-28 | removeFromCollection 的 itemId=实体 id(非集合条目主键) | Civitai 源码 `CollectionItem."modelId"=$2` 实证;"Item not found" 幂等化 | 按条目主键重查 | fav_sync.py:_upsync_removals docstring |
 | 09-29 | 收藏重置=全清(用户拍板 A) | 陈旧缓存锚定事故后干净的恢复路径 | 保留收藏仅清缓存 | CHANGELOG 批3;routes/favorites.py reset |
