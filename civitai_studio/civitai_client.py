@@ -434,7 +434,7 @@ async def get_json(path, params=None, timeout=None):
                         ra = float(resp.headers.get("Retry-After") or 0)
                     except ValueError:
                         ra = 0
-                    delay = min(max(7 * (2 ** attempt), ra), 120)  # 批5 b:7/14/28/56/112s,Retry-After 更大则从其
+                    delay = min(max(0.5 * (2 ** attempt), ra), 120)  # 批12-i:0.5/1/2/4/8s(用户拍板,原 7s 起太钝),Retry-After 更大则从其
                     try:
                         snippet = (await resp.text())[:200].replace("\n", " ")  # 批5.1:错误体进日志(如 503 overloaded 原话)
                     except Exception:

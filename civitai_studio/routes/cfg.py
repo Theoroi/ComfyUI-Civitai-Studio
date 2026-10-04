@@ -177,11 +177,14 @@ async def get_config(request):
         "proxy_images": cfg.get("proxy_images", False),
         "verify_hash": cfg.get("verify_hash", True),
         "max_concurrent": cfg.get("max_concurrent", 1),
-        "persist_description": cfg.get("persist_description", False),
         "tag_scrape": cfg.get("tag_scrape", True),
         "tag_and_mode": cfg.get("tag_and_mode", False),
         "cache_max_mb": cfg.get("cache_max_mb", 500),
         "fav_autosync": cfg.get("fav_autosync", False),
+        "fav_sync": cfg.get("fav_sync", True),
+        "gen_data": cfg.get("gen_data", True),
+        "carousel_interval": cfg.get("carousel_interval", 3),
+        "carousel_video": cfg.get("carousel_video", False),
         "log_debug": cfg.get("log_debug", False),
         "log_timestamp": cfg.get("log_timestamp", False),
         "px_cover": cfg.get("px_cover", 320),
@@ -232,12 +235,13 @@ async def set_config(request):
             except (TypeError, ValueError):
                 return _json_error(f"{key} 必须是整数", 400)
             partial[key] = max(lo, min(hi, value))
-    for key in ("proxy_images", "verify_hash", "persist_description", "tag_scrape", "tag_and_mode",
-                "fav_autosync", "log_debug", "log_timestamp"):
+    for key in ("proxy_images", "verify_hash", "tag_scrape", "tag_and_mode",
+                "fav_autosync", "fav_sync", "gen_data", "carousel_video",
+                "log_debug", "log_timestamp"):
         if key in body:
             partial[key] = bool(body.get(key))
     # 缩略档位(批11.3):入参接受 64~512 任意整数,统一由 config._snap_px 吸附到真实档位
-    for key, lo, hi in (("px_cover", 64, 512), ("px_media", 64, 512)):
+    for key, lo, hi in (("px_cover", 64, 512), ("px_media", 64, 512), ("carousel_interval", 1, 10)):
         if key in body:
             try:
                 partial[key] = max(lo, min(hi, int(body.get(key))))

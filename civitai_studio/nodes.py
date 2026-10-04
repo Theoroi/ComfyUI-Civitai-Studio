@@ -47,7 +47,8 @@ _BASE_MODEL_OPTIONS = [
 
 
 class CivitaiImageSearch:
-    """搜索社区图片(关键字/底模/tag/排序/时间),输出选中图片的生成配方与图像."""
+    """搜索社区图片(底模/tag 数字 ID/排序/时间),输出选中图片的生成配方与图像.
+    tag 手动输入只认数字 ID(名称经大图悬浮层抓取入库后由选择器提供);多 tag 支持 OR/AND."""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -57,9 +58,11 @@ class CivitaiImageSearch:
             "image_id": ("STRING", {"default": "(index)"}),
             "base_model": (["(any)"] + sorted(_BASE_MODEL_OPTIONS, key=str.lower),),
             "nsfw": (["false", "true"],),
-            # 多选标签存储:前端选择器(chips+下拉+自由输入)维护的逗号分隔名称串(隐藏)。
-            # 旧版单个 tag COMBO 已删除,由本字段承担全部筛选语义(OR/实验 AND)
+            # 多选标签存储:前端选择器(chips+下拉+数字 ID 输入)维护的逗号分隔串(隐藏)。
+            # 旧版单个 tag COMBO 已删除,由本字段承担全部筛选语义(OR/AND 见 tag_mode)
             "tags_selected": ("STRING", {"default": ""}),
+            # 批12-f:多 tag 语义 OR/AND(节点级,随工作流序列化;前端选择器行内切换)
+            "tag_mode": (["OR", "AND"],),
             "period": (["AllTime", "Month", "Week", "Day"],),
             "sort": (["Newest", "Most Reactions", "Most Comments", "Most Collected", "Oldest", "Random"],),
             # 批E E2E:limit 不再是可调节项 — 前端隐藏 widget 并钉值 50(保留 INPUT_TYPES
@@ -88,13 +91,13 @@ class CivitaiImageSearch:
         # 跳过 ComfyUI 对 COMBO 的静态"值不在列表"校验
         return True
 
-    async def run(self, image_id, base_model, nsfw, tags_selected, period, sort,
+    async def run(self, image_id, base_model, nsfw, tags_selected, tag_mode, period, sort,
                   limit, index, thumbs_height, panel_h):
         # 网络与下载均为阻塞调用,丢进线程池避免冻结 ComfyUI 主事件循环
         return await asyncio.to_thread(
-            self._run_sync, image_id, base_model, nsfw, tags_selected, period, sort, limit, index)
+            self._run_sync, image_id, base_model, nsfw, tags_selected, tag_mode, period, sort, limit, index)
 
-    def _run_sync(self, image_id, base_model, nsfw, tags_selected, period, sort, limit, index):
+    def _run_sync(self, image_id, base_model, nsfw, tags_selected, tag_mode, period, sort, limit, index):
         params = {
             "limit": str(min(100, max(10, int(limit)))),
             "nsfw": str(nsfw), "sort": sort, "period": period, "withMeta": "true",
@@ -105,6 +108,7 @@ class CivitaiImageSearch:
         # 官方 /images 的 tags 只认逗号分隔的数字 Tag ID;名称经本地映射换 ID。
         # 多标签为任一命中(OR 语义,Civitai API 限制)
         tag_expr = (tags_selected or "").strip()
+        ids = []  # 批12-f:提升作用域(AND 求交与 tags 参数都依赖)
         if tag_expr and tag_expr != "(none)":
             tokens = [t.strip() for t in tag_expr.replace("，", ",").split(",") if t.strip()]
             ids = [t for t in tokens if t.isdigit()]
@@ -123,6 +127,8 @@ class CivitaiImageSearch:
             if not ids:
                 raise RuntimeError("tag 填了名称但本地映射里没有对应 ID(先在大图悬浮层点抓一次),未识别: "
                                    + ", ".join(names))
+        if ids:
+            params["tags"] = ",".join(ids)  # 批12-f:修复解析后从未传参的遗漏(执行端 tag 筛选此前无效)
         # ID 优先:填入 image_id 时按 ID 精确取图(带 meta),忽略 index 与筛选
         chosen = None
         wanted_id = str(image_id or "").strip()

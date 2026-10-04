@@ -20,13 +20,16 @@ DEFAULTS = {
     "proxy_images": False,  # 预览图是否经服务端中转
     "verify_hash": True,    # 下载完成后校验 SHA256
     "max_concurrent": 1,    # 并发下载数 1-4
-    "persist_description": False,  # 说明/标签/封面落盘到 .civitai.json(默认关)
     "tag_scrape": True,     # 是否读取非公开 API 抓取图片分类标签
     "tag_and_mode": False,  # 实验选项:多标签筛选改漏斗式 AND(默认 OR,API 原生语义)
     "cache_max_mb": 500,    # 磁盘缓存上限 MB(50~2000),见 docs/plans/completed/cache-design.md
     "fav_autosync": False,  # 收藏与 Civitai 账号自动同步(开面板时触发,冲突按最新时间覆盖)
     "px_cover": 320,        # 模型卡片封面缩略档位(批10;批11.3 改真实 CDN 档位,见 PX_TIERS)
     "px_media": 320,        # 轮播与详情展示图缩略档位(批10;批11.3 改真实 CDN 档位)
+    "carousel_interval": 3,  # 模型卡片悬停轮播换图间隔秒(1~10,批12-b)
+    "carousel_video": False,  # 轮播切到视频时自动播放(默认关,批12-a)
+    "fav_sync": True,   # 收藏与站方同步引擎(非公开 tRPC;实验总闸,批12-g)
+    "gen_data": True,   # 生成参数回退(非公开 tRPC;实验,批12-g)
     "log_timestamp": False,  # 日志带时间戳前缀(批6 a,默认关)
     "log_debug": False,     # 调试日志:出站请求/响应/同步逐条决策落控制台(等效 --verbose,免启动参数)
     "nsfw_blur": [4, 8, 16],  # NSFW 模糊遮罩:命中的分级位(PG=1,PG13=2,R=4,X=8,XXX=16)图片加模糊,默认 X/XXX
@@ -64,6 +67,10 @@ def _normalize_locked(cfg):
         cfg["cache_max_mb"] = max(50, min(2000, int(cfg.get("cache_max_mb", 500))))
     except (TypeError, ValueError):
         cfg["cache_max_mb"] = 500
+    try:
+        cfg["carousel_interval"] = max(1, min(10, int(cfg.get("carousel_interval", 3))))
+    except (TypeError, ValueError):
+        cfg["carousel_interval"] = 3
     for k in ("px_cover", "px_media"):
         cfg[k] = _snap_px(cfg.get(k))
     return cfg

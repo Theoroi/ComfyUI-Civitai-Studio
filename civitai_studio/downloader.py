@@ -490,8 +490,8 @@ async def _run_job(job):
         "trained_words": data.get("trainedWords") or [],
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
-    if config.load().get("persist_description") and job.get("model_id"):
-        # 说明落盘(默认关):拉模型级描述/标签/封面写进 sidecar;失败不影响下载结果
+    if job.get("model_id"):
+        # 拉模型级描述/标签/封面充实 DB 元数据(批12-g 起 sidecar 导出退役,仅入库;失败不影响下载结果)
         try:
             mdata = await civitai_client.get_model_cached(job["model_id"])
             meta["description_html"] = local_index.truncate_desc(mdata.get("description"))
@@ -501,19 +501,12 @@ async def _run_job(job):
                  for i in (v.get("images") or []) if i.get("url")), None)
         except Exception:
             pass
-    # 阶段2 完整导出语义:DB 恒为关联主存储(完整元数据入库);
-    # .civitai.json 仅在 persist_description 开时导出(外部工具互操作)
-    persist = config.load().get("persist_description")
-    sidecar_ok = True
-    if persist:
-        sidecar_ok = local_index.write_sidecar(final, meta)
+    # 批12-g:.civitai.json 导出功能移除——DB 恒为关联主存储(完整元数据入库),不再写 sidecar
     cache_store.sync_assocs(
         [(final, str(job.get("model_id") or ""), str(job.get("version_id") or ""),
           job.get("model_name"), meta.get("cover_url"),
           json.dumps(meta, ensure_ascii=False))],
-        pending=(persist and not sidecar_ok))
-    if persist and not sidecar_ok:
-        job["warning"] = "模型已下载,关联已保存;但 .civitai.json 导出失败(权限/磁盘?)——仅影响外部工具互操作"
+        pending=False)
     local_index.schedule_rescan()  # 去抖合并:2s 窗口内多个完成只触发一次重扫
 
 

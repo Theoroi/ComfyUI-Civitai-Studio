@@ -188,6 +188,8 @@ async def favorites_reset(request):
 @_post("/civitai_studio/favorites/sync")
 async def favorites_sync(request):
     """手动/自动同步入口:能力矩阵见 docs/research/favorites-api-research.md。"""
+    if not config.load().get("fav_sync", True):
+        return _json_error("收藏同步已在设置(实验)中关闭", 403)  # 批12-g:同步引擎总闸
     result = await fav_sync.sync_now()
     return web.json_response({"status": result.get("status", "ok"), **result})
 

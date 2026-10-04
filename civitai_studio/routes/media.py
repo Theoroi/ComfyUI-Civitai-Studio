@@ -194,6 +194,8 @@ async def image_gen_data(request):
     meta=null 的图(无生成参数)仍能给出 resources(底模/LoRA 链路)与 tools/techniques。
     MemLru 缓存 1h,不落盘、不受配额淘汰影响。"""
     image_id = request.match_info["image_id"]
+    if not config.load().get("gen_data", True):
+        return _json_error("生成参数回退已在设置(实验)中关闭", 403)  # 批12-g
     if not (image_id.isascii() and image_id.isdigit()):
         return _json_error("image id 必须是数字", 400)
     remain = _GEN_FAIL["paused_until"] - time.time()

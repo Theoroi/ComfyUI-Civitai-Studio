@@ -219,10 +219,7 @@ async def local_rename(request):
     except OSError as e:
         return _json_error(f"重命名失败(文件可能被占用): {e}", 500)
     old_sidecar = local_index.sidecar_path(path)
-    old_meta = local_index.read_sidecar(path)
-    if old_meta:
-        old_meta["file_name"] = new_name
-        local_index.write_sidecar(dest, old_meta)
+    # 批12-g:sidecar 导出退役——遗留 sidecar 就地删除,不再随改名迁移
     if os.path.exists(old_sidecar):
         try:
             os.remove(old_sidecar)
@@ -288,24 +285,15 @@ async def local_associate(request):
         meta.pop("download_url", None)
     if model_changed:
         # 换了模型:落盘说明/标签/封面也要换(persist 开则用新模型数据回填)
-        if config.load().get("persist_description"):
-            meta["description_html"] = local_index.truncate_desc(data.get("description"))
-            meta["tags"] = data.get("tags") or []
-            meta["cover_url"] = next(
-                (i.get("url") for v in versions for i in (v.get("images") or []) if i.get("url")), None)
-        else:
-            meta.pop("description_html", None)
-            meta.pop("tags", None)
-            meta.pop("cover_url", None)
+        # 批12-g:sidecar 导出退役,persist 口径不再存在——模型级字段恒回填 DB 元数据
+        meta["description_html"] = local_index.truncate_desc(data.get("description"))
+        meta["tags"] = data.get("tags") or []
+        meta["cover_url"] = next(
+            (i.get("url") for v in versions for i in (v.get("images") or []) if i.get("url")), None)
     # 网络等待期间文件可能已被重命名/删除,写盘前复验
     if not os.path.isfile(path):
         return _json_error("文件已移动或删除,请刷新本地库后重试", 409)
-    # 阶段2 完整导出语义:DB 恒为关联主存储(完整元数据入库,快照恢复不依赖 sidecar);
-    # .civitai.json 仅在 persist_description 开时导出,失败仅影响互操作(关联不丢)
-    persist = config.load().get("persist_description")
-    sidecar_ok = True
-    if persist:
-        sidecar_ok = local_index.write_sidecar(path, meta)
+    # 批12-g:.civitai.json 导出功能移除——DB 恒为关联主存储(完整元数据入库,快照恢复不依赖 sidecar)
     cover_url = next(
         (i.get("url") for v in versions for i in (v.get("images") or []) if i.get("url")), None)
     cache_store.sync_assocs(
@@ -355,28 +343,23 @@ async def local_refresh_meta(request):
         meta["version_name"] = cur.get("name") or meta.get("version_name")
         meta["base_model"] = cur.get("baseModel") or meta.get("base_model")
         meta["trained_words"] = cur.get("trainedWords") or meta.get("trained_words") or []
-    if config.load().get("persist_description"):
-        meta["description_html"] = local_index.truncate_desc(data.get("description"))
-        meta["tags"] = data.get("tags") or []
-        meta["cover_url"] = next(
-            (i.get("url") for v in versions for i in (v.get("images") or []) if i.get("url")),
-            meta.get("cover_url"))
+    # 批12-g:sidecar 导出退役——模型级字段恒回填 DB 元数据
+    meta["description_html"] = local_index.truncate_desc(data.get("description"))
+    meta["tags"] = data.get("tags") or []
+    meta["cover_url"] = next(
+        (i.get("url") for v in versions for i in (v.get("images") or []) if i.get("url")),
+        meta.get("cover_url"))
     # 网络等待期间文件可能已被重命名/删除,写盘前复验
     if not os.path.isfile(path):
         return _json_error("文件已移动或删除,请刷新本地库后重试", 409)
-    # DB 恒为真值:刷新结果直接落库(不依赖 sidecar 写盘成败);sidecar 按 persist 口径导出
+    # DB 恒为真值:刷新结果直接落库(批12-g:sidecar 导出退役,不再写盘)
     cache_store.sync_assocs(
         [(path, str(meta["model_id"]), str(meta.get("version_id") or ""),
           meta.get("model_name"), meta.get("cover_url"),
           json.dumps(meta, ensure_ascii=False))])
-    persist = config.load().get("persist_description")
-    sidecar_ok = True
-    if persist:
-        sidecar_ok = local_index.write_sidecar(path, meta)
     civitai_client.prime_model_cache(meta["model_id"], data)  # 让随后的 /model/{id} 读到新数据
     await _scan_async(True)
-    return _ok(warning=None if sidecar_ok
-               else "元数据已更新,但 .civitai.json 导出失败(权限/磁盘?)——仅影响外部工具互操作")
+    return _ok()
 
 
 @_post("/civitai_studio/local/check_updates")

@@ -96,7 +96,7 @@ const STR = {
         sortMostDownloaded: "最多下载", sortHighestRated: "最高评分", sortNewest: "最新发布",
         periodAllTime: "全部时间", periodMonth: "本月", periodWeek: "本周", periodDay: "今天",
         nsfw0: "隐藏 NSFW", nsfw1: "包含部分 NSFW", nsfw2: "包含全部 NSFW",
-        statusLoading: "加载中…", statusLoaded: "已加载 {n} 个", statusMore: " — 向下滚动加载更多",
+        statusLoading: "加载中…", statusLoaded: "已加载 {n} 个", statusMore: " — 向下滚动加载更多,或点击这里加载",
         retry: "重试", noModels: "没有找到模型,换个关键词试试。",
         loadFailed: "加载失败: ", detailLoadFailed: "详情加载失败: ",
         openOnCivitai: "在 Civitai 打开 ↗",
@@ -171,6 +171,13 @@ const STR = {
         probeNoKey: "未配置 API Key", probeInvalid: "Key 无效或已被吊销",
         probeTimeout: "连接超时（检查网络/代理）", probeFailUnknown: "测试失败",
         expBadge: "实验",
+        sizeXS: "迷你", sizeS: "小", sizeM: "中", sizeL: "大",
+        setGrpModels: "🧩 模型tab", setGrpExp: "🧪 实验",
+        carouselLabel: "轮播间隔(秒)", carouselTip: "模型卡片悬停轮播的换图间隔,1-10 秒",
+        carouselVideoLabel: "轮播视频自动播放", carouselVideoTip: "悬停轮播切到视频时自动播放;关闭则只显示首帧(默认关)",
+        favSyncLabel: "同步收藏夹", favSyncTip: "收藏与 Civitai 账号双向同步(走非公开 tRPC);关闭后收藏仅本地,手动/自动同步停用",
+        favSyncOff: "收藏同步已在设置(实验)中关闭",
+        genDataLabel: "生成参数回退", genDataTip: "图片无公开生成参数时自动探非公开 API 补齐(底模/LoRA 链路)",
         keyLabel: "Civitai API Key（可选）",
         keyFunc: "功能：下载受限模型/提高下载限额/提取tag/同步收藏夹（需 Collections Write 和 Social Write 权限）",
         keyFuncEx: "额外功能: 同步收藏夹（需 Collections Write 和 Social Write 权限）",
@@ -289,7 +296,7 @@ const STR = {
         sortMostDownloaded: "Most downloaded", sortHighestRated: "Highest rated", sortNewest: "Newest",
         periodAllTime: "All time", periodMonth: "This month", periodWeek: "This week", periodDay: "Today",
         nsfw0: "Hide NSFW", nsfw1: "Some NSFW", nsfw2: "All NSFW",
-        statusLoading: "Loading…", statusLoaded: "{n} loaded", statusMore: " — scroll down for more",
+        statusLoading: "Loading…", statusLoaded: "{n} loaded", statusMore: " — scroll down or click here to load more",
         retry: "Retry", noModels: "No models found — try different keywords.",
         loadFailed: "Load failed: ", detailLoadFailed: "Failed to load details: ",
         openOnCivitai: "Open on Civitai ↗",
@@ -364,6 +371,13 @@ const STR = {
         probeNoKey: "No API key configured", probeInvalid: "Key invalid or revoked",
         probeTimeout: "Connection timeout (check network/proxy)", probeFailUnknown: "Test failed",
         expBadge: "Experimental",
+        sizeXS: "Tiny", sizeS: "Small", sizeM: "Medium", sizeL: "Large",
+        setGrpModels: "🧩 Models tab", setGrpExp: "🧪 Experimental",
+        carouselLabel: "Carousel interval (s)", carouselTip: "Hover-carousel swap interval on model cards, 1-10 s",
+        carouselVideoLabel: "Autoplay carousel videos", carouselVideoTip: "Play videos when the carousel lands on them; off shows first frame only (default)",
+        favSyncLabel: "Favorites sync", favSyncTip: "Two-way favorites sync with Civitai (unofficial tRPC); off keeps favorites local-only and disables sync actions",
+        favSyncOff: "Favorites sync is disabled in Settings (Experimental)",
+        genDataLabel: "Gen-param fallback", genDataTip: "Probe the unofficial API when an image lacks public generation params",
         keyLabel: "Civitai API key (optional)",
         keyFunc: "Feature: Unlocks gated models / higher rate limits / tag scraping",
         keyFuncEx: "Extra feature: Sync Favorites with Civitai (needs Collections Write + Social Write scopes)",
@@ -1061,10 +1075,14 @@ function updateStatusLine() {
     const st = S.browse;
     if (st.loading) {
         el.textContent = t("statusLoading");
+        el.style.cursor = "";
     } else if (st.items.length) {
-        el.textContent = t("statusLoaded", { n: st.items.length }) + (st.nextCursor ? t("statusMore") : "");
+        const canMore = !!st.nextCursor;
+        el.textContent = t("statusLoaded", { n: st.items.length }) + (canMore ? t("statusMore") : "");
+        el.style.cursor = canMore ? "pointer" : ""; // 批12-c:整行可点=立即加载下一页(内容不足一屏时滚不动)
     } else {
         el.textContent = "";
+        el.style.cursor = "";
     }
 }
 
@@ -1160,7 +1178,7 @@ function makeCard(model) {
                 if (m.type === "video") {
                     nv.muted = true; nv.loop = true; nv.playsInline = true; nv.preload = "metadata";
                     nv.src = imgSrc(cdnVideo(m.url)) + "#t=0.001"; // 批11 E2E 4:视频不再 original=true
-                    nv.play().catch(() => { });
+                    if (S.cfg.carousel_video) nv.play().catch(() => { }); // 批12-a:轮播内视频自动播放(默认关)
                 } else {
                     nv.loading = "eager";
                     nv.alt = model.name;
@@ -1173,7 +1191,7 @@ function makeCard(model) {
             card.addEventListener("mouseenter", () => {
                 if (timer) return;
                 preload(); // 批11 E2E 1:开播即预载全部 8 张
-                timer = setInterval(swap, 3000); // 批11 E2E 1:3s/张(用户拍板;批10 的 1s 停留偏短)
+                timer = setInterval(swap, Math.max(1, parseInt(S.cfg.carousel_interval, 10) || 3) * 1000); // 批12-b:间隔可设置(默认 3s)
             });
             card.addEventListener("mouseleave", () => {
                 clearInterval(timer); timer = null;
@@ -1338,6 +1356,33 @@ function openFloatDetail(keepNav) {
     panel.querySelector(".cs-float-close").onclick = closeFloatDetail;
     // 标题栏拖动
     dragFloat(panel, panel.querySelector(".cs-float-head"));
+    // 批12-h:右缘拖拽调宽(localStorage 记忆,范围 320px ~ 视口-20)
+    const savedW = parseInt(localStorage.getItem("cs_float_w") || "", 10);
+    if (savedW >= 320) {
+        const w0 = Math.min(savedW, window.innerWidth - 20);
+        panel.style.width = w0 + "px";
+        positionFloat(panel, w0);
+    }
+    const grip = document.createElement("div");
+    grip.className = "cs-float-grip";
+    grip.addEventListener("pointerdown", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const sx = e.clientX, sw = panel.offsetWidth;
+        const move = (ev) => {
+            const w = Math.max(320, Math.min(window.innerWidth - 20, sw + (ev.clientX - sx)));
+            panel.style.width = w + "px";
+            positionFloat(panel, w);
+        };
+        const up = () => {
+            try { localStorage.setItem("cs_float_w", String(panel.offsetWidth)); } catch (_) { }
+            window.removeEventListener("pointermove", move);
+            window.removeEventListener("pointerup", up);
+        };
+        window.addEventListener("pointermove", move);
+        window.addEventListener("pointerup", up);
+    });
+    panel.appendChild(grip);
     S.ui.float = panel;
     return panel.querySelector(".cs-float-body");
 }
@@ -2069,7 +2114,7 @@ function openImageDetail(item, opts = {}) {
     // 时探 tRPC image.getGenerationData;命中 meta 且本地缺失 → 带参重开浮层;
     // 否则至少把 resources(底模/LoRA)+ tools/techniques 补进本浮层
     const noRes = !rawRes.length && !civRes.length && !vidSet.size;
-    if (item.id != null && !opts.__genRetry && (!hasMeta || noRes)) {
+    if (S.cfg?.gen_data !== false && item.id != null && !opts.__genRetry && (!hasMeta || noRes)) {
         apiGet(`/civitai_studio/image_gen_data/${encodeURIComponent(String(item.id))}`).then((gd) => {
             if (!m.box.isConnected) return; // 浮层已被关闭
             if (!hasMeta && gd && gd.meta && (gd.meta.prompt || gd.meta.seed != null)) {
@@ -3314,8 +3359,8 @@ function renderGallery(reset) {
     for (const img of st.items) {
         if (mtWant && (mtWant === "video") !== isVideoItem(img)) continue;
         if (st.favOnly && !(S.favs && S.favs.has(String(img.id)))) continue; // ★只看收藏(评审R2:此前无消费点,功能整体失效)
-        if (st.nsfwLv.size) { // 本地分级多选(r3-f):命中任一选中位才显示;无标记位条目被滤掉
-            const nl = Number(img.nsfwLevel || 0);
+        if (st.nsfwLv.size) { // 本地分级多选(批12-9:改 nsfwBitsOf 归一——此前 Number(nsfwLevel) 对字符串枚举得 NaN,勾选即全隐)
+            const nl = nsfwBitsOf(img);
             if (!nl || ![...st.nsfwLv].some((b) => nl & b)) continue;
         }
         if (img.__rendered) continue;
@@ -3405,6 +3450,15 @@ function renderGallery(reset) {
             grid.appendChild(more);
         }
     } else if (vis >= 24) st.autoMore = 0;
+    // 批12-d:状态行(与模型页同款)——计数+可点击加载下一页
+    const gs = $("#cs-gal-status");
+    if (gs) {
+        const canMore = !!(st.next && st.next.length) && !st.loading;
+        gs.textContent = st.items.length
+            ? t("statusLoaded", { n: st.items.length }) + (canMore ? t("statusMore") : "")
+            : (st.loading ? t("statusLoading") : "");
+        gs.style.cursor = canMore ? "pointer" : "";
+    }
 }
 
 function buildGalleryView(root) {
@@ -3437,11 +3491,12 @@ function buildGalleryView(root) {
                 <select id="cs-gal-nsfw"><option value="0" ${!st.nsfwLevel ? "selected" : ""}>${esc(t("sfwLabel"))}</option><option value="1" ${st.nsfwLevel ? "selected" : ""}>${esc(t("nsfwLabel"))}</option></select>
                 <div id="cs-gal-lv" title="${esc(S.lang === "zh" ? "本地分级过滤(多选,作用于已加载条目)" : "Local nsfw-level filter (multi-select, loaded items)")}"></div>
                 <select id="cs-gal-fmt" class="cs-span-4" title="${esc(t("mtTip"))}">${fmtSelHtml(st.fmt)}</select>
-                <select id="cs-gal-size" class="cs-span-4" title="${esc(t("thumbSizeGalTitle"))}">${[96, 128, 256, 512].map((px) => `<option value="${px}" ${st.thumbSize === px ? "selected" : ""}>${px}px</option>`).join("")}</select>
+                <select id="cs-gal-size" class="cs-span-4" title="${esc(t("thumbSizeGalTitle"))}">${[96, 128, 256, 512].map((px, i) => `<option value="${px}" ${st.thumbSize === px ? "selected" : ""}>${[t("sizeXS"), t("sizeS"), t("sizeM"), t("sizeL")][i]}</option>`).join("")}</select>
                 <button class="cs-btn cs-span-4" id="cs-gal-fav" title="${esc(t("favOnlyTitle"))}" style="${st.favOnly ? "background:var(--accent-color,#4a90e2);color:#fff;border-color:transparent;" : ""}">★ ${esc(t("favOnlyTitle"))}</button>
             </div>
             <button class="cs-ffold" id="cs-gal-ffold" title="${esc(t("ffoldTitle"))}">▾</button>
         </div>
+        <div id="cs-gal-status" class="cs-status"></div>
         <div id="cs-gal-content" class="cs-scroll">
             <div id="cs-gal-grid" class="cs-gal-grid"></div>
         </div>`;
@@ -3519,6 +3574,13 @@ function buildGalleryView(root) {
         renderGallery(true);
     };
     $("#cs-gal-refresh", view).onclick = () => fetchGallery(true); // 显式刷新(E2E r3-c)
+    // 批12-c/d/j:状态行点击加载 + 内容不足一屏时 wheel 兜底(scroll 事件不会触发)
+    $("#cs-gal-status", view).onclick = () => { if (st.next.length && !st.loading) fetchGallery(false); };
+    $("#cs-gal-content", view).addEventListener("wheel", (e) => {
+        const el = e.currentTarget;
+        if (e.deltaY <= 0 || !st.next.length || st.loading) return;
+        if (el.scrollHeight <= el.clientHeight + 2) { e.preventDefault(); fetchGallery(false); }
+    }, { passive: false });
     // 批11.5:重置筛选(与模型页同款)——清内容域筛选与★只看收藏,保留尺寸档与折叠态
     $("#cs-gal-reset", view).onclick = () => {
         st.period = "AllTime"; st.sort = "Newest"; st.base = ""; st.tag = ""; st.imageId = "";
@@ -3772,6 +3834,7 @@ async function openSettings() {
                     <label>${esc(t("proxyLabel"))}
                         <input id="cs-set-proxy" type="text" value="${esc(cfg.proxy || "")}" placeholder="${esc(t("proxyPh"))}"/>
                     </label>
+                    <label class="cs-check"><input id="cs-set-pimg" type="checkbox" ${cfg.proxy_images ? "checked" : ""}/> ${esc(t("pimgLabel"))} ${infoIco(t("pimgTip"))}</label>
                 </div>
             </div>
             <div class="cs-set-group${fold.download ? " closed" : ""}" data-fold="download">
@@ -3781,15 +3844,6 @@ async function openSettings() {
                         <input id="cs-set-conc" type="number" min="1" max="4" value="${cfg.max_concurrent || 1}"/>
                     </label>
                     <label class="cs-check"><input id="cs-set-hash" type="checkbox" ${cfg.verify_hash ? "checked" : ""}/> ${esc(t("hashLabel"))}</label>
-                    <label class="cs-check"><input id="cs-set-pdesc" type="checkbox" ${cfg.persist_description ? "checked" : ""}/> ${esc(t("pdescLabel"))} ${infoIco(t("pdescTip"))}</label>
-                </div>
-            </div>
-            <div class="cs-set-group${fold.search ? " closed" : ""}" data-fold="search">
-                <div class="cs-set-group-head">${esc(t("setGrpSearch"))}<span class="cs-set-caret">▾</span></div>
-                <div class="cs-set-group-body">
-                    <label class="cs-check"><input id="cs-set-pimg" type="checkbox" ${cfg.proxy_images ? "checked" : ""}/> ${esc(t("pimgLabel"))} ${infoIco(t("pimgTip"))}</label>
-                    <label class="cs-check"><input id="cs-set-tscrape" type="checkbox" ${cfg.tag_scrape !== false ? "checked" : ""}/> ${esc(t("tagScrapeLabel"))} ${infoIco(t("tagScrapeTip"))}</label>
-                    <label class="cs-check"><input id="cs-set-andmode" type="checkbox" ${cfg.tag_and_mode ? "checked" : ""}/> ${esc(t("tagAndLabel"))} ${infoIco(t("tagAndTip"))}<span class="cs-set-exp">${esc(t("expBadge"))}</span></label>
                 </div>
             </div>
             <div class="cs-set-group${fold.storage ? " closed" : ""}" data-fold="storage">
@@ -3810,14 +3864,8 @@ async function openSettings() {
                     </div>
                 </div>
             </div>
-            <div class="cs-set-group${fold.sync ? " closed" : ""}" data-fold="sync">
-                <div class="cs-set-group-head">${esc(t("setGrpSync"))}<span class="cs-set-caret">▾</span></div>
-                <div class="cs-set-group-body">
-                    <label class="cs-check"><input id="cs-set-autosync" type="checkbox" ${cfg.fav_autosync ? "checked" : ""}/> ${esc(t("favAutoSync"))} ${infoIco(t("favAutoSyncTip"))}</label>
-                </div>
-            </div>
-            <div class="cs-set-group" data-fold="thumbs">
-                <div class="cs-set-group-head">${esc(t("setGrpThumbs"))}<span class="cs-set-caret">▾</span></div>
+            <div class="cs-set-group${fold.models ? " closed" : ""}" data-fold="models">
+                <div class="cs-set-group-head">${esc(t("setGrpModels"))}<span class="cs-set-caret">▾</span></div>
                 <div class="cs-set-group-body">
                     <label class="cs-check">${esc(t("pxCoverLabel"))}
                         <select id="cs-set-pxcover">${[96, 320, 450].map((px) => `<option value="${px}" ${(cfg.px_cover || 320) === px ? "selected" : ""}>${px}px</option>`).join("")}</select>
@@ -3825,6 +3873,20 @@ async function openSettings() {
                     <label class="cs-check">${esc(t("pxMediaLabel"))}
                         <select id="cs-set-pxmedia">${[96, 320, 450].map((px) => `<option value="${px}" ${(cfg.px_media || 320) === px ? "selected" : ""}>${px}px</option>`).join("")}</select>
                         ${infoIco(t("pxMediaTip"))}</label>
+                    <label><span class="cs-lab">${esc(t("carouselLabel"))} ${infoIco(t("carouselTip"))}</span>
+                        <input id="cs-set-carousel" type="number" min="1" max="10" value="${cfg.carousel_interval || 3}"/>
+                    </label>
+                    <label class="cs-check"><input id="cs-set-cvid" type="checkbox" ${cfg.carousel_video ? "checked" : ""}/> ${esc(t("carouselVideoLabel"))} ${infoIco(t("carouselVideoTip"))}</label>
+                </div>
+            </div>
+            <div class="cs-set-group" data-fold="exp">
+                <div class="cs-set-group-head">${esc(t("setGrpExp"))}<span class="cs-set-caret">▾</span></div>
+                <div class="cs-set-group-body">
+                    <label class="cs-check"><input id="cs-set-favsync" type="checkbox" ${cfg.fav_sync !== false ? "checked" : ""}/> ${esc(t("favSyncLabel"))} ${infoIco(t("favSyncTip"))}<span class="cs-set-exp">${esc(t("expBadge"))}</span></label>
+                    <label class="cs-check"><input id="cs-set-autosync" type="checkbox" ${cfg.fav_autosync ? "checked" : ""}/> ${esc(t("favAutoSync"))} ${infoIco(t("favAutoSyncTip"))}</label>
+                    <label class="cs-check"><input id="cs-set-tscrape" type="checkbox" ${cfg.tag_scrape !== false ? "checked" : ""}/> ${esc(t("tagScrapeLabel"))} ${infoIco(t("tagScrapeTip"))}<span class="cs-set-exp">${esc(t("expBadge"))}</span></label>
+                    <label class="cs-check"><input id="cs-set-gd" type="checkbox" ${cfg.gen_data !== false ? "checked" : ""}/> ${esc(t("genDataLabel"))} ${infoIco(t("genDataTip"))}<span class="cs-set-exp">${esc(t("expBadge"))}</span></label>
+                    <label class="cs-check"><input id="cs-set-andmode" type="checkbox" ${cfg.tag_and_mode ? "checked" : ""}/> ${esc(t("tagAndLabel"))} ${infoIco(t("tagAndTip"))}<span class="cs-set-exp">${esc(t("expBadge"))}</span></label>
                 </div>
             </div>
             <div class="cs-set-group" data-fold="logs">
@@ -3949,10 +4011,13 @@ async function openSettings() {
             cache_max_mb: parseInt($("#cs-set-cachemb", m.box).value, 10) || 500,
             proxy_images: $("#cs-set-pimg", m.box).checked,
             verify_hash: $("#cs-set-hash", m.box).checked,
-            persist_description: $("#cs-set-pdesc", m.box).checked,
             tag_scrape: $("#cs-set-tscrape", m.box).checked,
             tag_and_mode: $("#cs-set-andmode", m.box).checked,
             fav_autosync: $("#cs-set-autosync", m.box).checked,
+            fav_sync: $("#cs-set-favsync", m.box).checked,
+            gen_data: $("#cs-set-gd", m.box).checked,
+            carousel_interval: Math.max(1, Math.min(10, parseInt($("#cs-set-carousel", m.box).value, 10) || 3)),
+            carousel_video: $("#cs-set-cvid", m.box).checked,
             log_debug: $("#cs-set-logdebug", m.box).checked,
             log_timestamp: $("#cs-set-logts", m.box).checked,
             px_cover: parseInt($("#cs-set-pxcover", m.box).value, 10) || 320,
@@ -4041,7 +4106,7 @@ function buildBrowseView(root) {
                     <option value="1" ${String(st.hidePaid) === "1" ? "selected" : ""}>${esc(t("hidePaidLabel"))}</option>
                     <option value="2" ${String(st.hidePaid) === "2" ? "selected" : ""}>${esc(t("hidePaidBought"))}</option>
                 </select>
-                <select id="cs-f-size" class="cs-span-4" title="${esc(t("thumbSizeTitle"))}">${BROWSE_CARD_SIZES.map(([w, h]) => `<option value="${w}" ${(st.cardW || 150) === w ? "selected" : ""} title="卡宽 ${w}px">${h}px</option>`).join("")}</select>
+                <select id="cs-f-size" class="cs-span-4" title="${esc(t("thumbSizeTitle"))}">${BROWSE_CARD_SIZES.map(([w, h], i) => `<option value="${w}" ${(st.cardW || 150) === w ? "selected" : ""} title="${esc(t("thumbSizeTitle"))} ${h}px">${[t("sizeXS"), t("sizeS"), t("sizeM"), t("sizeL")][i]}</option>`).join("")}</select>
                 <button class="cs-btn cs-span-4" id="cs-f-fav" title="${esc(t("favOnlyTitle"))}" style="${st.favOnly ? "background:var(--accent-color,#4a90e2);color:#fff;border-color:transparent;" : ""}">★ ${esc(t("favOnlyTitle"))}</button>
             </div>
             <button class="cs-ffold" id="cs-browse-ffold" title="${esc(t("ffoldTitle"))}">▾</button>
@@ -4209,6 +4274,15 @@ function buildBrowseView(root) {
         }
     }).catch(() => { });
     // 无限滚动(页码推进在 fetchBrowse 成功后提交,失败自动重试同一页)
+    $("#cs-status", view).onclick = () => { // 批12-c:点击状态行=立即加载下一页
+        if (!st.loading && st.nextCursor) fetchBrowse(false);
+    };
+    // 批12-j:卡片不足一屏时 scroll 事件永不触发——wheel 下滚且无可滚空间时兜底加载
+    $("#cs-browse-content", view).addEventListener("wheel", (e) => {
+        const el = e.currentTarget;
+        if (e.deltaY <= 0 || st.loading || !st.nextCursor) return;
+        if (el.scrollHeight <= el.clientHeight + 2) { e.preventDefault(); fetchBrowse(false); }
+    }, { passive: false });
     $("#cs-browse-content", view).addEventListener("scroll", (e) => {
         const el = e.target;
         if (el.scrollTop + el.clientHeight >= el.scrollHeight - 400) {
@@ -4603,7 +4677,7 @@ async function loadFavView() {
         }).catch(() => { });
     }
     // 自动同步:开夹时静默触发,30 分钟节流
-    if (S.cfg?.fav_autosync && Date.now() - (S.favLastSync || 0) > 30 * 60 * 1000) favDoSync(true);
+    if (S.cfg?.fav_sync !== false && S.cfg?.fav_autosync && Date.now() - (S.favLastSync || 0) > 30 * 60 * 1000) favDoSync(true);
 }
 
 function setFavSyncLine(text, cls) {
@@ -4630,6 +4704,10 @@ function favSyncLineText(r) {
 }
 
 async function favDoSync(silent) {
+    if (S.cfg?.fav_sync === false) { // 批12-g:同步引擎总闸(实验)
+        if (!silent) toast("warn", t("favSyncOff"), "");
+        return;
+    }
     const btn = $("#cs-fav-sync", S.ui.root);
     if (btn) { btn.disabled = true; btn.textContent = t("favSyncing"); }
     try {
@@ -5076,6 +5154,7 @@ function injectStyles() {
 .cs-dl-hint { background:rgba(0,0,0,.2); border-radius:6px; padding:6px 8px; }
 .cs-float { position:fixed; width:460px; max-width:calc(100vw - 20px); max-height:calc(100vh - 24px); background:var(--comfy-menu-bg,#2a2a2a); border:1px solid var(--border-color,#444); border-radius:10px; box-shadow:0 12px 40px rgba(0,0,0,.55); z-index:60000; display:flex; flex-direction:column; overflow:hidden; }
 .cs-float-head { display:flex; gap:8px; align-items:center; padding:8px 10px; border-bottom:1px solid var(--border-color,#444); cursor:move; user-select:none; }
+.cs-float-grip { position:absolute; top:0; right:0; width:8px; height:100%; cursor:ew-resize; z-index:5; }
 .cs-float-back { flex:0 0 auto; background:transparent; border:1px solid var(--border-color,#444); color:var(--fg-color,#ddd); border-radius:6px; padding:2px 9px; font-size:11px; cursor:pointer; }
 .cs-float-back:hover { background:var(--border-color,#3f3f46); }
 .cs-float-title { flex:1; min-width:0; font-weight:600; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -5334,7 +5413,13 @@ function createTagPicker(el, opts) {
         if (opts.allowInput !== false) {
             const inp = document.createElement("input");
             inp.type = "text";
-            inp.placeholder = S.lang === "zh" ? "输入名称/ID,回车添加" : "Name or ID, Enter to add";
+            inp.placeholder = opts.digitOnly
+                ? (S.lang === "zh" ? "输入 tag 数字 ID,回车添加" : "Numeric tag ID, Enter to add")
+                : (S.lang === "zh" ? "输入名称/ID,回车添加" : "Name or ID, Enter to add");
+            if (opts.digitOnly) {
+                // 批12-e:节点 tag 手动输入只认数字 ID(执行端本就拒绝名称,见 nodes.py _run_sync)
+                inp.addEventListener("input", () => { inp.value = inp.value.replace(/[^\d,，\s]/g, ""); });
+            }
             inp.style.cssText = "flex:1;min-width:0;font-size:11px;padding:2px;";
             inp.onkeydown = (e) => {
                 if (e.key === "Enter" && inp.value.trim()) { addName(inp.value); inp.value = ""; }
@@ -5918,8 +6003,16 @@ app.registerExtension({
                 if (tsW) {
                     const chipsEl = document.createElement("div");
                     chipsEl.style.cssText = "display:flex;flex-wrap:wrap;flex-direction:column;gap:4px;align-items:flex-start;width:100%;";
+                    // 批12-f:OR/AND 选择(与 tab 同款),值存 tag_mode widget(随工作流序列化)
+                    const modeSel = document.createElement("select");
+                    modeSel.style.cssText = "flex:0 0 auto;font-size:11px;padding:2px;cursor:pointer;";
+                    modeSel.innerHTML = `<option value="OR">OR</option><option value="AND">AND</option>`;
+                    modeSel.value = String(widget("tag_mode")?.value || "OR");
+                    modeSel.onchange = () => { const w2 = widget("tag_mode"); if (w2) w2.value = modeSel.value; debounced(); };
                     const picker = createTagPicker(chipsEl, {
                         names: String(tsW.value || "").split(",").map((s) => s.trim()).filter(Boolean),
+                        digitOnly: true, // 批12-e
+                        rowExtra: modeSel,
                         candidates: () => Object.keys(S.tagMap || {}),
                         onChange: (names) => {
                             const str = names.join(",");
@@ -5951,8 +6044,8 @@ app.registerExtension({
                     const p = new URLSearchParams({ limit: "50", nsfw: widget("nsfw")?.value || "false" });
                     const bm = widget("base_model")?.value;
                     if (bm && bm !== "(any)") p.set("baseModels", bm);
-                    // 多选标签(node.csTagSel,逗号串存于 tag widget):名称经本地映射换 ID。
-                    // 默认 OR(单请求任一命中);设置开 AND 实验后 ≥2 个标签走漏斗式逐标签求交
+                    // 多选标签(node.csTagSel,逗号串存于 tags_selected):ID 直用,名称经本地映射换 ID。
+                    // OR(默认)=单请求任一命中;AND(节点级 tag_mode widget)=漏斗式逐标签求交(批12-f)
                     const sel = String(widget("tags_selected")?.value || "").split(",").map((s) => s.trim()).filter(Boolean);
                     // 映射未就绪(页面刚加载,tagMap 异步填充):拉取映射并保留 csSig,下轮轮询重试
                     if (sel.length && !(S.tagMap && Object.keys(S.tagMap).length)) {
@@ -5960,7 +6053,7 @@ app.registerExtension({
                         return;
                     }
                     const ids = sel.map((s) => (/^\d+$/.test(s) ? s : (S.tagMap && S.tagMap[s]) || null)).filter(Boolean);
-                    const andOn = !!S.cfg.tag_and_mode && ids.length > 1;
+                    const andOn = String(widget("tag_mode")?.value || "OR") === "AND" && ids.length > 1; // 批12-f:节点级 OR/AND
                     if (ids.length && !andOn) p.set("tags", ids.join(","));
                     p.set("sort", widget("sort")?.value || "Newest");
                     p.set("period", widget("period")?.value || "AllTime");
@@ -6021,7 +6114,7 @@ app.registerExtension({
                             rowEl.dataset.csRowHide = "1";
                         }
                         // tags_selected 是隐藏存储 widget(值由 chips 条交互维护),不占版面
-                        if (rowEl.dataset.csTsHide === undefined && (rowEl.textContent || "").trim().startsWith("tags_selected")) {
+                        if (rowEl.dataset.csTsHide === undefined && ["tags_selected", "tag_mode"].some((n) => (rowEl.textContent || "").trim().startsWith(n))) {
                             rowEl.style.display = "none";
                             rowEl.dataset.csTsHide = "1";
                         }
