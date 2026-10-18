@@ -54,6 +54,7 @@ def _conn():
     if conn is not None:
         _ensure_gpushed(conn)
         _ensure_ctype(conn)
+        _ensure_pushed_at(conn)
         _clear_legacy_ctype(conn)
         _migrate_memberships(conn)
     return conn
@@ -88,6 +89,24 @@ def _ensure_ctype(conn):
             conn.execute("ALTER TABLE fav_groups ADD COLUMN ctype TEXT")
             conn.commit()
         _ctype_checked = True
+    except sqlite3.Error:
+        pass
+
+
+_pushed_at_checked = False
+
+
+def _ensure_pushed_at(conn):
+    """fav_item_groups.pushed_at 列(批13:saveItem 成功时刻,对账读滞后保护的判定窗)."""
+    global _pushed_at_checked
+    if _pushed_at_checked:
+        return
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(fav_item_groups)")}
+        if cols and "pushed_at" not in cols:
+            conn.execute("ALTER TABLE fav_item_groups ADD COLUMN pushed_at REAL")
+            conn.commit()
+        _pushed_at_checked = True
     except sqlite3.Error:
         pass
 
@@ -156,7 +175,8 @@ def memberships(kind=None, oid=None, gid=None, include_deleted=False):
     conn = _conn()
     if conn is None:
         return []
-    sql = "SELECT kind, oid, gid, item_id, source, pushed, deleted, added_at FROM fav_item_groups WHERE 1=1"
+    sql = ("SELECT kind, oid, gid, item_id, source, pushed, deleted, added_at, pushed_at"
+           " FROM fav_item_groups WHERE 1=1")
     args = []
     if kind:
         sql += " AND kind=?"
@@ -173,7 +193,7 @@ def memberships(kind=None, oid=None, gid=None, include_deleted=False):
         try:
             return [
                 {"kind": r[0], "oid": r[1], "gid": r[2], "item_id": r[3], "source": r[4],
-                 "pushed": r[5], "deleted": r[6], "added_at": r[7]}
+                 "pushed": r[5], "deleted": r[6], "added_at": r[7], "pushed_at": r[8]}
                 for r in conn.execute(sql, args).fetchall()
             ]
         except Exception as e:
@@ -297,16 +317,17 @@ def set_memberships(kind, oid, gids):
 
 
 def mark_membership_pushed(kind, oid, gid, item_id=None):
-    """saveItem 成功:记 pushed=1 + 集合条目主键(removeFromCollection 必需)."""
+    """saveItem 成功:记 pushed=1 + 集合条目主键(removeFromCollection 必需)
+    + pushed_at(批13:对账读滞后保护的判定窗起点)."""
     conn = _conn()
     if conn is None:
         return
     with _LOCK:
         try:
             conn.execute(
-                "UPDATE fav_item_groups SET pushed=1, item_id=COALESCE(?, item_id)"
+                "UPDATE fav_item_groups SET pushed=1, pushed_at=?, item_id=COALESCE(?, item_id)"
                 " WHERE kind=? AND oid=? AND gid=?",
-                (item_id, kind, str(oid), gid))
+                (time.time(), item_id, kind, str(oid), gid))
             conn.commit()
         except sqlite3.Error:
             pass

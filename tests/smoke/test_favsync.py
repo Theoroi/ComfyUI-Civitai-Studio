@@ -159,6 +159,10 @@ _set_trpc({
     "collection.getAllCollectionItems": _items_after_rm,
 })
 d4 = asyncio.run(fav_sync._down_groups())
+# 批13:读滞后宽限期会护住"测试刚建的挂载"(added_at=now 在 15min 窗内)——
+# 本用例语义是"站方早已移除",把 added_at 回拨出窗再对账
+_conn2.execute("UPDATE fav_item_groups SET added_at = added_at - 3600")
+_conn2.commit()
 rc = fav_sync._reconcile_down(d4["seen"])
 assert rc["removed"] == 1 and rc["tombstoned"] == 1, rc
 assert fs.get_item(fs.KIND_MODEL, "257749")["deleted"] == 1, "孤儿 remote 条目应落墓碑"
@@ -564,5 +568,37 @@ r14c = asyncio.run(fav_sync.sync_now())
 assert r14c["status"] == "ok", r14c  # 锁被换走只停续期,不中断本轮
 assert cache_store.kv_get(fav_sync._SYNC_LOCK_KEY) == "thief", "心跳/收尾不得覆写或删除他人 token"
 cache_store.kv_delete(fav_sync._SYNC_LOCK_KEY)  # 清理,不留脏锁
+
+# ---- 15) 批13:手动同步 force=True 绕过增量捷径强制全量枚举 ----
+_set_trpc({
+    "collection.getAllUser": lambda js: _cols_payload(),
+    "collection.getAllCollectionItems": _items_payload,
+})
+_STATE["items_calls"] = []
+d15a = asyncio.run(fav_sync._down_groups())
+assert _STATE["items_calls"] == [], "未变集合走增量捷径,零条目请求"
+_STATE["items_calls"] = []
+d15b = asyncio.run(fav_sync._down_groups(force=True))
+assert sorted(_STATE["items_calls"]) == [101, 102, 103, 104, 105, 106], \
+    f"force 必须全量枚举全部非 Article 集合: {_STATE['items_calls']}"
+assert d15b["mounts"] == 0 and d15b["models_down"] == 0, "重拉同条目不新增"
+_STATE["items_calls"] = []
+asyncio.run(fav_sync.sync_now(force=True))
+assert sorted(_STATE["items_calls"]) == [101, 102, 103, 104, 105, 106], "sync_now 须把 force 传到 _down_groups"
+
+# ---- 16) 批13:对账读滞后宽限期 —— 窗内缺席只记日志不硬摘,窗外才摘 ----
+# 15 节 force 全量把挂载重建为 added_at=now(窗内):base 里 2458426 "缺席"也不得摘
+seen16 = {101: {"m": {"257749": 1}, "i": {}}}  # 只有 257749 在场,2458426 缺席
+rc16a = fav_sync._reconcile_down(seen16)
+assert rc16a["removed"] == 0 and rc16a["tombstoned"] == 0, rc16a
+m16 = fs.memberships(fs.KIND_MODEL, "2458426")
+assert m16, "宽限窗内的挂载不得被摘除"
+assert not fs.get_item(fs.KIND_MODEL, "2458426")["deleted"], "宽限窗内不得落墓碑"
+# 回拨出窗(pushed_at 为 NULL 的远端镜像按 added_at 判窗)→ 缺席即摘
+_conn2.execute("UPDATE fav_item_groups SET added_at = added_at - 3600")
+_conn2.commit()
+rc16b = fav_sync._reconcile_down(seen16)
+assert rc16b["removed"] == 1 and rc16b["tombstoned"] == 1, rc16b
+assert not fs.memberships(fs.KIND_MODEL, "2458426"), "出窗后缺席应硬摘"
 
 print("test_favsync.py OK")

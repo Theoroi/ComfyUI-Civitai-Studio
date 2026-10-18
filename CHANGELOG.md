@@ -2,6 +2,37 @@
 
 格式参照 Keep a Changelog;项目版本号见 `pyproject.toml` 与 `civitai_studio/version.py`。
 
+## [未发布](批13:收藏同步"读滞后"加固;patch 线)
+
+### 根因实测(2026-10-05,探针 `_tmp/probe_save_lag{,2,3,4}.py`,临时集合实测后即删)
+
+- **站方集合读路径存在分钟级且可变的读滞后,两条路径不对称**:`collection.getAllUser`
+  (集合列表)对新集合 **210s+ 仍不返回**、其 `updatedAt` 对条目变更迟迟不 bump(五种调用
+  形状 GET/POST/batch/不同入参一致;响应头 `no-cache, private`+`cf-cache-status: BYPASS`、
+  缓存旁路 URL 对照同样不可见——排除 CDN/URL 缓存,滞后在站方数据层);而
+  `getAllCollectionItems`(条目枚举)通常 ~10s 即新鲜,但偶发 >138s。用户观察的"网页保存后
+  首访收藏不显示、刷新才出现"与之一致(站方网页同源:刷新强制重拉走条目枚举)。
+- 对插件的两个后果:①**增量漏检**——增量捷径以 getAllUser 的 updatedAt 为变化信号,滞后
+  未 bump → 跳过全量翻页 → 网页端刚保存的条目当轮漏检(用户实测"新添加的条目没有同步进来");
+  ②**对账误摘竞态**——★→同步→滞后窗内再同步,刚上推(pushed=1)的挂载会被旧条目表硬摘、
+  remote 条目落墓碑,站方追上后才自愈,期间 UI 消失。
+
+### 修复
+
+- **手动同步强制全量枚举**:`/favorites/sync` 接受 `{"force": true}`(前端手动「同步」按钮
+  发送,自动同步保持空 body 走增量省请求)→ `_down_groups(force=True)` 绕过增量捷径,
+  全部集合全量翻页——网页端保存后点一次「同步」必拉到(条目枚举路径本身是新鲜的)
+- **对账读滞后宽限期**:`fav_item_groups` 新增 `pushed_at` 列(saveItem 成功时刻,惰性
+  ALTER 迁移);`_reconcile_down` 对"刚推送/刚镜像"的挂载(pushed_at 优先、旧库退回
+  added_at)在 **15 分钟窗**内缺席只记 debug 日志不硬摘——窗口覆盖实测滞后上限加余量,
+  杜绝误摘落墓碑
+- 同步开始日志增列 `mode=强制全量/增量`,排障可直接确认当轮模式
+
+### 回归
+
+- tests/smoke/test_favsync.py 新增 15/16 节:force 绕过捷径(全量枚举全部非 Article 集合)
+  与宽限期窗内保护/窗外摘除;既有对账用例(3/4 节)补 added_at 回拨以对齐新语义
+
 ## [0.8.1] - 2026-10-04（批12/12.1:验收修复+设置重排+节点 tag 语义;patch 线）
 
 ### 修复

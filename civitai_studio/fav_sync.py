@@ -40,6 +40,15 @@ _IMG_BUCKET = "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA"
 
 _UPSYNC_DELAY = 0.5  # 逐条 POST 限速,防撞 429
 
+# 批13:站方集合读滞后保护(探针 _tmp/probe_save_lag{,2,3,4}.py 实测,2026-10-05):
+# - collection.getAllUser(集合列表)对新集合/updatedAt 分钟级滞后(210s+ 仍不见,五种
+#   调用形状一致,响应头 no-cache/BYPASS 排除 CDN)——不能当"刚发生的变化"信号;
+# - getAllCollectionItems(条目枚举)通常 ~10s 新鲜,但偶发 >138s。
+# 由此:①手动同步 force=True 绕过增量捷径强制全量枚举(修"网页保存后首轮漏检");
+# ②缺席对账对"刚推送/镜像"的挂载设宽限期,窗内缺席只记日志不硬摘(防★→同步→
+# 再同步两连轮把刚上推的挂载误摘落墓碑)。窗长覆盖实测滞后上限加余量。
+_RECONCILE_GRACE = 900  # 15 分钟
+
 
 def _cover_url(d, video=False):
     uuid = str((d or {}).get("url") or "")
@@ -92,12 +101,13 @@ def _extract_item_id(data):
     return None
 
 
-async def _down_groups(heartbeat=None):
+async def _down_groups(heartbeat=None, force=False):
     """集合 → 本地分组;集合条目 → fav_items + 挂载镜像(跨集合多挂,批1-6).
 
     条目主键(itemId)随挂载缓存 — removeFromCollection 对账的必需品(批1-4)。
     增量:集合 updatedAt 未变 → 复用 kv 缓存的条目表跳过全量翻页;截断/失败的集合
-    不写缓存、本轮不参与对账。
+    不写缓存、本轮不参与对账。批13:force=True 绕过增量捷径强制全量枚举——
+    getAllUser 的 updatedAt 是滞后信号(分钟级),手动同步必须无视它。
     heartbeat: 可选续锁回调,集合循环每轮调用(N-V1-1:大库首拉整段可能超锁 TTL)。
     返回 {"groups": 组数, "models_down"/"images_down": 首入库条目数,
     "mounts": 新挂载数, "seen": {cid: {"m"/"i": {oid: itemId}}}, "truncated": 枚举不完整}"""
@@ -143,7 +153,7 @@ async def _down_groups(heartbeat=None):
         # 增量判定以缓存自带 u 为准(批A修复):组行 updated_at 在"先落组后拉条目"
         # 的时序里可能被失败轮锚定成新值,拿它比对会让陈旧缓存永远命中(实测
         # pending 混入 2852917/缺 929497、Images 组空的根因);缓存 u 不匹配 → 全量重拉
-        if cached is not None and abs((cached.get("u") or 0) - ts) < 1:
+        if not force and cached is not None and abs((cached.get("u") or 0) - ts) < 1:
             # 集合未变:复用上轮条目表,跳过全量翻页;仍要补挂载(自愈老库迁移造成的
             # 缺失挂载 — 否则未变化的集合永远修不好,E2E 实测 encoder 空组)
             seen[cid] = {"m": cached.get("m") or {}, "i": cached.get("i") or {}}
@@ -241,6 +251,15 @@ def _reconcile_down(seen_by_cid):
             continue  # 待上推的本地挂载:远端看不见属预期
         key = "m" if mem["kind"] == fs.KIND_MODEL else "i"
         if str(mem["oid"]) in (tab.get(key) or {}):
+            continue
+        # 批13:读滞后保护 — 刚推送/镜像的挂载在宽限窗内不参与硬摘(站方枚举可能
+        # 还没看到我们刚 saveItem 的条目,或本轮 seen 来自滞后的缓存捷径),只记日志;
+        # 窗外仍缺席才认定远端已移除。pushed_at 优先(saveItem 成功时刻),旧库无值
+        # 退回 added_at(镜像时刻)。
+        pa = mem.get("pushed_at") or mem.get("added_at")
+        if pa and time.time() - pa < _RECONCILE_GRACE:
+            debug(f"对账跳过(读滞后保护,窗 {int(time.time() - pa)}s < {_RECONCILE_GRACE}s): "
+                  f"{mem['kind']} {mem['oid']} ← 集合 {cid}")
             continue
         if fs.membership_remove(mem["kind"], mem["oid"], mem["gid"], hard=True):
             removed += 1
@@ -423,11 +442,13 @@ async def _upsync_groups(result):
                 result["errors"].append("条目上行: " + str(e)[:120])
 
 
-async def sync_now():
+async def sync_now(force=False):
     """全量同步入口(设置页按钮/自动同步);返回计数供 UI 展示.
 
     下行唯一通道 = collections(tRPC);REST favorites 双通道已退役(参数被站方忽略,
-    拉回的是全站热门图)。Legacy 垃圾组与其未分组残留首次同步一次性清理。"""
+    拉回的是全站热门图)。Legacy 垃圾组与其未分组残留首次同步一次性清理。
+    批13:force=True(手动同步)强制全量枚举——getAllUser 的 updatedAt 是分钟级滞后
+    信号,网页端刚保存的条目靠它判定必漏检(实测见模块头 _RECONCILE_GRACE 注释)。"""
     token = os.urandom(8).hex()
     if not cache_store.kv_putnx(_SYNC_LOCK_KEY, token, ttl=1800):  # 原子占位防 TOCTOU(评审R1 F2)
         return {"status": "busy"}
@@ -439,7 +460,8 @@ async def sync_now():
     _cfg = config.load()
     info(f"同步开始: mirror={_cfg.get('mirror') or '(默认)'}"
          f" proxy={'有' if _cfg.get('proxy') else '无'}"
-         f" key={'有' if (_cfg.get('api_key') or '') else '无'}")
+         f" key={'有' if (_cfg.get('api_key') or '') else '无'}"
+         f" mode={'强制全量' if force else '增量'}")
     hb_stopped = False
 
     def _heartbeat():
@@ -459,7 +481,7 @@ async def sync_now():
     try:
         d = {"seen": {}, "truncated": True}
         try:
-            d = await _down_groups(heartbeat=_heartbeat)
+            d = await _down_groups(heartbeat=_heartbeat, force=force)
             result["groups_down"] = d["groups"]
             result["models_down"] = d["models_down"]
             result["images_down"] = d["images_down"]

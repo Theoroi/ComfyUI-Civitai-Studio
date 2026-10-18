@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS fav_item_groups (
     pushed INTEGER DEFAULT 0,      -- 1=已 saveItem 到远端集合
     deleted INTEGER DEFAULT 0,     -- 软删:本地移出分组,待 removeFromCollection 对账后硬删
     added_at REAL,
+    pushed_at REAL,                -- saveItem 成功时刻(批13:对账读滞后保护的判定窗)
     PRIMARY KEY(kind, oid, gid)
 );
 CREATE INDEX IF NOT EXISTS idx_fig_gid ON fav_item_groups(gid);

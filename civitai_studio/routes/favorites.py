@@ -187,10 +187,19 @@ async def favorites_reset(request):
 
 @_post("/civitai_studio/favorites/sync")
 async def favorites_sync(request):
-    """手动/自动同步入口:能力矩阵见 docs/research/favorites-api-research.md。"""
+    """手动/自动同步入口:能力矩阵见 docs/research/favorites-api-research.md。
+    批13:body {"force": true}=手动同步 → 强制全量枚举(绕过 getAllUser 滞后的
+    增量捷径);自动同步(空 body)保持增量。"""
     if not config.load().get("fav_sync", True):
         return _json_error("收藏同步已在设置(实验)中关闭", 403)  # 批12-g:同步引擎总闸
-    result = await fav_sync.sync_now()
+    force = False
+    try:
+        body = await request.json()
+        if isinstance(body, dict):
+            force = bool(body.get("force"))
+    except Exception:
+        pass  # 空 body(自动同步/旧前端) = 增量
+    result = await fav_sync.sync_now(force=force)
     return web.json_response({"status": result.get("status", "ok"), **result})
 
 

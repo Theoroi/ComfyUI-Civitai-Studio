@@ -4715,7 +4715,9 @@ async function favDoSync(silent) {
     const btn = $("#cs-fav-sync", S.ui.root);
     if (btn) { btn.disabled = true; btn.textContent = t("favSyncing"); }
     try {
-        const r = await apiPost("/civitai_studio/favorites/sync");
+        // 批13:手动同步(非 silent)force 全量枚举——getAllUser 的 updatedAt 分钟级滞后,
+        // 网页端刚保存的条目靠增量捷径必漏检;自动同步(silent)保持增量省请求
+        const r = await apiPost("/civitai_studio/favorites/sync", silent ? undefined : { force: true });
         S.favLastSync = Date.now();
         if (r.status === "busy") {
             setFavSyncLine(t("favSyncBusy"), "warn");
