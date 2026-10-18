@@ -11,7 +11,7 @@ src = src.split("\n").filter((l) => !l.includes("scripts/app.js") && !l.includes
 src += `
 globalThis.__cs_probe = { buildGalleryView, buildBrowseView, S, fmtSelHtml, BROWSE_CARD_SIZES,
   renderGallery, renderResults, fetchGallery, fetchBrowse, t, makeMultiSelect,
-  makeBodyPopup, openMiniMenu, mergePage, buildFavoritesView, guardKeys };
+  makeBodyPopup, openMiniMenu, mergePage, buildFavoritesView, guardKeys, installUndoGuard };
 `;
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { pretendToBeVisual: true, url: "http://localhost/" });
@@ -231,6 +231,25 @@ menuGuard.dispatchEvent(new window.KeyboardEvent("keydown", { key: "v", ctrlKey:
 ck("键盘隔离: body 弹层(makeBodyPopup)内按键不外溢", wk2 === 0, String(wk2));
 window.document.body.dispatchEvent(new window.Event("pointerdown", { bubbles: true }));
 window.removeEventListener("keydown", wkH2);
+
+// ---------- 批14.4 失焦文本 undo 抑制 ----------
+P.installUndoGuard();
+const ugCanvas = window.document.createElement("canvas");
+window.document.body.appendChild(ugCanvas);
+const ugEv = (target, opts) => {
+  const e = new window.KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...opts });
+  target.dispatchEvent(e);
+  return e.defaultPrevented;
+};
+ck("undo 抑制: 画布目标 Ctrl+Z 被 preventDefault", ugEv(ugCanvas, { key: "z", ctrlKey: true }));
+ck("undo 抑制: Ctrl+Shift+Z 同拦(redo 组合)", ugEv(ugCanvas, { key: "z", ctrlKey: true, shiftKey: true }));
+ck("undo 抑制: Ctrl+Y 同拦", ugEv(ugCanvas, { key: "y", ctrlKey: true }));
+ck("undo 抑制: mac Cmd+Z 同拦", ugEv(ugCanvas, { key: "z", metaKey: true }));
+ck("undo 抑制: 普通键不拦", !ugEv(ugCanvas, { key: "a", ctrlKey: true }));
+ck("undo 抑制: 无修饰 z 不拦", !ugEv(ugCanvas, { key: "z" }));
+const ugInp2 = window.document.createElement("input");
+window.document.body.appendChild(ugInp2);
+ck("undo 抑制: 输入框目标放行(文本 undo 合法)", !ugEv(ugInp2, { key: "z", ctrlKey: true }));
 
 console.log(fail ? `\n${fail} 项失败` : "\n全部通过");
 process.exit(fail ? 1 : 0);

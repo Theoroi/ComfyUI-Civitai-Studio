@@ -4,6 +4,17 @@
 
 ## [未发布](批14:B0 前端基建 + B1-1 缺席对账;功能批,发版号待定——建议 0.9.0)
 
+### 批14.4 验收修复(画布快捷键反向串台)
+
+- **失焦文本 undo 抑制**(用户实测:画布上 Ctrl+Z 同时撤销画布操作**和侧边栏输入框文字**)
+  ——机制经浏览器实测+宿主源码双证:画布 undo 走 litegraph 原生 `processKey`,全程**不调
+  preventDefault**(事件探针 `defaultPrevented=false`);Chromium 的文本 undo 默认行为作用于
+  "最后编辑过的输入框"(不要求焦点在内)——正好命中侧边栏搜索框。事件目标是 canvas 不经过
+  侧边栏 DOM,guardKeys 无法覆盖。修法:`installUndoGuard` 在 window **捕获阶段**精准
+  preventDefault——仅 undo/redo 组合键(Ctrl/Cmd+Z/Y,含 Shift 变体)且目标**非**可编辑元素时;
+  焦点在输入框内放行(合法文本 undo);画布撤销由宿主监听器执行,不受 preventDefault 影响。
+  DOM 探针 +7 断言(画布目标拦截/redo 组合/Cmd/普通键放行/无修饰放行/输入框目标放行)
+
 ### 批14.3 验收修复(键盘串台)
 
 - **侧边栏/浮层键盘+剪贴板隔离**(用户实测:插件搜索框 Ctrl+V 会同时粘贴文本 + 画布粘贴

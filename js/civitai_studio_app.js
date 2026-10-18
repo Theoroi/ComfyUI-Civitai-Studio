@@ -1554,6 +1554,25 @@ function guardKeys(el) {
     el.addEventListener("cut", stop);
 }
 
+// 批14.4:失焦文本 undo 抑制 —— 用户实测:画布上 Ctrl+Z 同时撤销画布操作和侧边栏输入。
+// 机制(浏览器实测+源码双证):画布 undo 走 litegraph 原生 processKey,全程不调
+// preventDefault(事件探针 defaultPrevented=false);Chromium 的文本 undo 默认行为
+// 作用于"最后编辑过的输入框"(不要求当前焦点在内)——正好命中侧边栏搜索框。事件
+// 目标是 canvas,不经过侧边栏 DOM,guardKeys 无法覆盖,只能在 window 捕获阶段修正:
+// undo/redo 组合键 + 目标非可编辑元素时 preventDefault(只杀失焦文本 undo 这个
+// quirk;画布撤销由宿主监听器执行,不受 preventDefault 影响)。
+function installUndoGuard() {
+    const isEditTarget = (t) => t instanceof Element
+        && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+    window.addEventListener("keydown", (e) => {
+        if (!(e.ctrlKey || e.metaKey)) return;
+        const k = e.key.toLowerCase();
+        if (k !== "z" && k !== "y") return; // Ctrl+Z / Ctrl+Shift+Z(撤销) / Ctrl+Y(重做)
+        if (isEditTarget(e.target)) return; // 焦点本就在可编辑元素:文本 undo 是合法默认行为,放行
+        e.preventDefault(); // 目标在画布等非编辑区:抑制"作用于失焦输入框"的 Chromium quirk
+    }, true); // 捕获阶段最先执行,防宿主画布快捷键路径 stopImmediatePropagation 后无法生效
+}
+
 // ---------- B0-1a:body 级浮层宿主工厂 ----------
 // 收敛 ×4 同骨架(👁分级选择 openNsfwBlurPicker / mini 菜单 openMiniMenu / 多选下拉
 // makeMultiSelect / 收藏夹选择器 makeGroupPicker):同类唯一实例、固定定位+视口钳制、
@@ -6376,6 +6395,7 @@ app.registerExtension({
             console.warn("[Civitai-Studio] 读取配置失败:", e);
         }
         refreshTagCombos(); // 批5 E2E 10:开面板前预载 tag 映射,首开筛选下拉即刻有候选
+        installUndoGuard(); // 批14.4:失焦文本 undo 抑制(全局一次;见函数头机制注释)
         // 前后端版本自检:服务端代码比前端旧 = 重启前的内存态,直接横幅提示
         try {
             const v = await apiGet("/civitai_studio/version");
