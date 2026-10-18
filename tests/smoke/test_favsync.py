@@ -660,4 +660,37 @@ it890 = fs.get_item(fs.KIND_MODEL, "890")
 assert it890 and not it890["deleted"] and not fs.memberships(fs.KIND_MODEL, "890"), \
     "删组不删条目:回未分组"
 
+# ---- 18) 批14.1:force(手动同步)立即对齐——用户实测"点同步就该删" ----
+# 18a) 挂载宽限:下行镜像挂载(pushed_at NULL)force 轮不保护;刚上推的(pushed_at)仍保护
+base_gid18 = {g["name"]: g for g in fs.groups_list()}["base"]["gid"]
+fs.upsert_remote(fs.KIND_MODEL, "999", name="mirror", remote_updated=1.0)
+fs.membership_add(fs.KIND_MODEL, "999", base_gid18, source="remote", pushed=1)  # 镜像:pushed_at=NULL
+fs.upsert_remote(fs.KIND_MODEL, "997", name="just-pushed", remote_updated=1.0)
+fs.membership_add(fs.KIND_MODEL, "997", base_gid18, source="local", pushed=0)
+fs.mark_membership_pushed(fs.KIND_MODEL, "997", base_gid18, item_id=777001)  # pushed_at=now
+seen18 = {101: {"m": {}, "i": {}}}  # base 完整枚举但两者都缺席
+rc18a = fav_sync._reconcile_down(seen18, force=True)
+assert not fs.memberships(fs.KIND_MODEL, "999"), "镜像挂载 force 轮应立即摘(读滞后保护不覆盖)"
+assert fs.memberships(fs.KIND_MODEL, "997"), "刚上推挂载 force 轮仍受宽限保护"
+_conn2.execute("UPDATE fav_item_groups SET pushed_at = pushed_at - 3600 WHERE oid='997'")
+_conn2.commit()
+rc18a2 = fav_sync._reconcile_down(seen18, force=True)
+assert not fs.memberships(fs.KIND_MODEL, "997"), "上推宽限到期后 force 轮可摘"
+# 清理 999/997,防影响后续
+_conn2.execute("DELETE FROM fav_items WHERE oid IN ('999','997')")
+_conn2.commit()
+
+# 18b) 缺席条目 force 一轮即终局(无需两轮/时间差)
+fs.upsert_remote(fs.KIND_MODEL, "998", name="force-vanish", remote_updated=1.0)  # 零挂载
+cache_store.kv_put(fav_sync._ABSENCE_KEY, {})
+r18b = asyncio.run(fav_sync.sync_now(force=True))
+assert fs.get_item(fs.KIND_MODEL, "998")["deleted"] == 1, "force 轮一轮即墓碑"
+assert r18b["absent_removed"] >= 1, r18b
+
+# 18c) 分组级 force 一轮删组
+g18 = fs.upsert_group("GoneForceCol", civitai_id=55555)
+r18c = asyncio.run(fav_sync.sync_now(force=True))
+assert r18c["groups_absent_removed"] >= 1, r18c
+assert not any(g["name"] == "GoneForceCol" for g in fs.groups_list()), "force 一轮应删组"
+
 print("test_favsync.py OK")

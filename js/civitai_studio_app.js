@@ -211,7 +211,7 @@ const STR = {
         newColPh: "新收藏夹名称", pickerNew: "＋ 新收藏", groupCreated: "收藏夹「{name}」已创建",
         ffoldTitle: "折叠/展开筛选区",
         favGroupAll: "全部分组", favGroupNone: "未分组",
-        favSync: "同步 Civitai", favSyncing: "同步中…",
+        favSync: "同步 Civitai",
         favSyncBtnTip: "手动同步=强制全量枚举:网页端刚保存/取消的收藏立即可见(自动同步走增量,受站方集合列表缓存滞后影响,新建集合可能要几分钟)",
         favSyncDone: "同步完成:新增模型 +{models_down} · 新增图片 +{images_down} · 分组 +{groups_down} · 挂载 +{mounts} · 上推 {items_up} · 远端移除 {items_rm} · ★上推 {upsynced}(失败 {upsync_failed})",
         favSyncTrunc: "(集合较多,本次仅同步前一部分)",
@@ -232,7 +232,9 @@ const STR = {
         logDebugLabel: "调试日志(DEBUG)",
         logDebugTip: "控制台输出全部出站请求与响应、同步逐条决策(等效 ComfyUI --verbose 但只对本插件生效)。保存即时生效,排障后建议关闭。",
         favRemoveTitle: "取消收藏", favSearchPh: "在收藏里搜索…",
-        favAbsentTip: "远端未见:连续 {n} 轮同步未出现在任何集合(再 1 轮且间隔 ≥5 分钟将移除;远端重新出现会自动恢复)",
+        favAbsentTip: "远端未见:连续 {n} 轮同步未出现在任何集合 — 手动「同步」立即核验移除;自动同步需连续 2 轮且间隔 ≥5 分钟(远端重新出现会自动恢复)",
+        favKindTitle: "类别(资产=图片 / 模型)",
+        favResetFiltersTip: "重置筛选:清搜索/分组/排序(类别保留;库数据不动)",
         favSortTitle: "排序", favSortUpdated: "最近更新", favSortAdded: "最近收藏", favSortName: "按名称",
         importAsset: "导入为资产", importAssetDone: "已导入 input/civitai_import/{name}", importAssetExists: "已存在,跳过重复导入: {name}",
         importFailed: "导入失败",
@@ -412,7 +414,7 @@ const STR = {
         newColPh: "New collection name", pickerNew: "+ New collection", groupCreated: "Collection \"{name}\" created",
         ffoldTitle: "Collapse/expand filters",
         favGroupAll: "All groups", favGroupNone: "Ungrouped",
-        favSync: "Sync Civitai", favSyncing: "Syncing…",
+        favSync: "Sync Civitai",
         favSyncBtnTip: "Manual sync = forced full enumeration: items just saved/unsaved on civitai.com appear immediately (auto-sync is incremental and subject to the site's collection-list cache lag; brand-new collections may take a few minutes)",
         favSyncDone: "Synced: new models +{models_down} · new images +{images_down} · groups +{groups_down} · mounts +{mounts} · pushed {items_up} · removed {items_rm} · ★ {upsynced} (failed {upsync_failed})",
         favSyncTrunc: "(many collections, only part synced this round)",
@@ -433,7 +435,9 @@ const STR = {
         logDebugTip: "Log all outbound requests/responses and per-item sync decisions to the console (equivalent to ComfyUI --verbose, scoped to this plugin). Takes effect on save; turn off after troubleshooting.",
         favAutoSyncTip: "Sync on Favorites tab open; conflicts resolved by newest timestamp; model push requires the SocialWrite key scope",
         favRemoveTitle: "Unfavorite", favSearchPh: "Search favorites…",
-        favAbsentTip: "Not seen remotely: absent from all collections for {n} consecutive syncs (removed after one more round ≥5 min apart; reappears automatically if it returns remotely)",
+        favAbsentTip: "Not seen remotely: absent from all collections for {n} consecutive syncs — manual Sync removes it immediately; auto-sync requires 2 rounds ≥5 min apart (reappears automatically if it returns remotely)",
+        favKindTitle: "Kind (assets = images / models)",
+        favResetFiltersTip: "Reset filters: clears search/group/sort (kind kept; library untouched)",
         favSortTitle: "Sort", favSortUpdated: "Recently updated", favSortAdded: "Recently added", favSortName: "By name",
         importAsset: "Import as asset", importAssetDone: "Imported to input/civitai_import/{name}", importAssetExists: "Already imported, skipped: {name}",
         importFailed: "Import failed",
@@ -4735,7 +4739,7 @@ async function favDoSync(silent) {
         return;
     }
     const btn = $("#cs-fav-sync", S.ui.root);
-    if (btn) { btn.disabled = true; btn.textContent = t("favSyncing"); }
+    if (btn) { btn.disabled = true; btn.dataset.orig = btn.textContent; btn.textContent = "…"; }
     try {
         // 批13:手动同步(非 silent)force 全量枚举——getAllUser 的 updatedAt 分钟级滞后,
         // 网页端刚保存的条目靠增量捷径必漏检;自动同步(silent)保持增量省请求
@@ -4757,7 +4761,7 @@ async function favDoSync(silent) {
         setFavSyncLine(t("syncFailShort") + ": " + humanizeErr(e.message), "bad");
         if (!silent) toast("error", t("favFailed"), humanizeErr(e.message));
     } finally {
-        if (btn) { btn.disabled = false; btn.textContent = t("favSync"); }
+        if (btn) { btn.disabled = false; btn.textContent = btn.dataset.orig || "⟳"; }
     }
 }
 
@@ -4776,24 +4780,30 @@ function buildFavoritesView(root) {
     view.dataset.view = "favorites";
     S.favUi = S.favUi || { kind: "asset", group: "all", page: 1 };
     view.innerHTML = `
-        <div class="cs-filters">
-            <select id="cs-fav-kind">
+        <div class="cs-toolbar">
+            <input id="cs-fav-search" type="search" placeholder="${esc(t("favSearchPh"))}" style="flex:1;min-width:90px"/>
+            <select id="cs-fav-kind" title="${esc(t("favKindTitle"))}">
                 <option value="asset">${esc(t("favKindAsset"))}</option>
                 <option value="model">${esc(t("favKindModel"))}</option>
             </select>
-            <select id="cs-fav-group"></select>
-            <select id="cs-fav-sort" title="${esc(t("favSortTitle"))}">
-                <option value="updated">${esc(t("favSortUpdated"))}</option>
-                <option value="added">${esc(t("favSortAdded"))}</option>
-                <option value="name">${esc(t("favSortName"))}</option>
-            </select>
-            <input id="cs-fav-search" type="text" placeholder="${esc(t("favSearchPh"))}" style="flex:1;min-width:90px"/>
-            <button class="cs-btn" id="cs-fav-sync" title="${esc(t("favSyncBtnTip"))}">${esc(t("favSync"))}</button>
-            <button class="cs-btn" id="cs-fav-manage" title="${esc(t("gmTitle"))}">${esc(t("manageBtn"))}</button>
-            <button class="cs-btn" id="cs-fav-reset" title="${esc(t("resetTitle"))}" style="color:#e2543f;">${esc(t("resetBtn"))}</button>
-            <button class="cs-btn" id="cs-fav-import">${esc(t("favImport"))}</button>
-            <button class="cs-btn" id="cs-fav-export">${esc(t("favExport"))}</button>
-            <button class="cs-btn" id="cs-fav-extracts">${esc(t("extractMgr"))}</button>
+            <button class="cs-btn cs-btn-mini" id="cs-fav-sync" title="${esc(t("favSyncBtnTip"))}">⟳</button>
+            <button class="cs-btn cs-btn-mini" id="cs-fav-rstf" title="${esc(t("favResetFiltersTip"))}">⟲</button>
+        </div>
+        <div class="cs-fwrap">
+            <div class="cs-filters cs-filters-gal">
+                <select id="cs-fav-group" class="cs-span-6"></select>
+                <select id="cs-fav-sort" class="cs-span-6" title="${esc(t("favSortTitle"))}">
+                    <option value="updated">${esc(t("favSortUpdated"))}</option>
+                    <option value="added">${esc(t("favSortAdded"))}</option>
+                    <option value="name">${esc(t("favSortName"))}</option>
+                </select>
+                <button class="cs-btn cs-span-4" id="cs-fav-manage" title="${esc(t("gmTitle"))}">${esc(t("manageBtn"))}</button>
+                <button class="cs-btn cs-span-4" id="cs-fav-import">${esc(t("favImport"))}</button>
+                <button class="cs-btn cs-span-4" id="cs-fav-export">${esc(t("favExport"))}</button>
+                <button class="cs-btn cs-span-6" id="cs-fav-extracts" title="${esc(t("extractMgrTitle"))}">${esc(t("extractMgr"))}</button>
+                <button class="cs-btn cs-span-6" id="cs-fav-reset" title="${esc(t("resetTitle"))}" style="color:#e2543f;">${esc(t("resetBtn"))}</button>
+            </div>
+            <button class="cs-ffold" id="cs-fav-ffold" title="${esc(t("ffoldTitle"))}">▾</button>
             <input type="file" id="cs-fav-file" accept=".json,application/json" style="display:none"/>
         </div>
         <div id="cs-fav-syncline" class="cs-fav-syncline" style="display:none"></div>
@@ -4826,6 +4836,25 @@ function buildFavoritesView(root) {
         debSearch = setTimeout(() => { S.favUi.page = 1; renderFavGrid(view); const sc = $(".cs-scroll", view); if (sc) sc.scrollTop = 0; }, 250);
     });
     $("#cs-fav-sync", view).onclick = () => favDoSync(false);
+    // 批14.2:⟲ 重置筛选(轻行为,区别于折叠区里的红色"重置收藏库")——清搜索/分组/排序,
+    // 类别保留(偏好语义,与模型页重置保留排序/NSFW 同口径)
+    $("#cs-fav-rstf", view).onclick = () => {
+        S.favUi.group = "all"; S.favUi.sort = "updated"; S.favUi.page = 1;
+        const si = $("#cs-fav-search", view); if (si) si.value = "";
+        const so = $("#cs-fav-sort", view); if (so) so.value = "updated";
+        refreshFavGroupSel(view);
+        renderFavGrid(view);
+        const sc = $(".cs-scroll", view); if (sc) sc.scrollTop = 0;
+    };
+    // 批14.2:折叠区与模型页/画廊同款(12 格制观感对齐)
+    const fwrap14 = $(".cs-fwrap", view);
+    try { if (localStorage.getItem("cs_fav_fold") === "1") fwrap14.classList.add("folded"); } catch (_) { }
+    syncFoldBtn($("#cs-fav-ffold", view), fwrap14.classList.contains("folded"));
+    $("#cs-fav-ffold", view).onclick = () => {
+        fwrap14.classList.toggle("folded");
+        syncFoldBtn($("#cs-fav-ffold", view), fwrap14.classList.contains("folded"));
+        try { localStorage.setItem("cs_fav_fold", fwrap14.classList.contains("folded") ? "1" : "0"); } catch (_) { }
+    };
     $("#cs-fav-manage", view).onclick = () => openGroupManager().catch((e) => toast("error", t("favFailed"), e.message));
     $("#cs-fav-reset", view).onclick = openFavReset;
     $("#cs-fav-import", view).onclick = () => $("#cs-fav-file", view).click();
@@ -5016,6 +5045,7 @@ function injectStyles() {
 .cs-filters.cs-filters-gal > * { grid-column:span 3; }
 .cs-filters > .cs-span-full { grid-column:1/-1; }
 .cs-filters > .cs-span-4 { grid-column:span 4; }   /* 批11.5:两页末行三等分 */
+.cs-filters > .cs-span-6 { grid-column:span 6; }   /* 批14.2:收藏页两等分 */
 .cs-toolbar select { max-width:132px; font-size:12px; padding:2px; }
 .cs-toolbar .cs-btn-mini { flex:0 0 auto; }
 .cs-presets { display:flex; gap:4px; padding:0 6px 6px; flex-shrink:0; flex-wrap:wrap; }

@@ -11,7 +11,7 @@ src = src.split("\n").filter((l) => !l.includes("scripts/app.js") && !l.includes
 src += `
 globalThis.__cs_probe = { buildGalleryView, buildBrowseView, S, fmtSelHtml, BROWSE_CARD_SIZES,
   renderGallery, renderResults, fetchGallery, fetchBrowse, t, makeMultiSelect,
-  makeBodyPopup, openMiniMenu, mergePage };
+  makeBodyPopup, openMiniMenu, mergePage, buildFavoritesView };
 `;
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { pretendToBeVisual: true, url: "http://localhost/" });
@@ -165,6 +165,32 @@ const mg = P.mergePage([{ id: 1 }, { id: 2 }], [{ id: 2 }, { id: 3 }, { id: 3 }]
 ck("mergePage: 按 id 去重追加且不改入参", mg.length === 3 && mg.map((x) => x.id).join(",") === "1,2,3",
   JSON.stringify(mg));
 ck("mergePage: 空入参安全", P.mergePage([], null).length === 0);
+
+// ---------- 批14.2 收藏页 12 格制同构 ----------
+const fRoot = window.document.createElement("div");
+window.document.body.appendChild(fRoot);
+P.buildFavoritesView(fRoot);
+const fq = (s) => fRoot.querySelector(s);
+ck("收藏 toolbar 四件(搜索/类别/⟳同步/⟲重置)", !!(fq(".cs-toolbar #cs-fav-search") && fq(".cs-toolbar #cs-fav-kind")
+  && fq(".cs-toolbar #cs-fav-sync") && fq(".cs-toolbar #cs-fav-rstf")));
+ck("收藏 12 格制类名", !!fq(".cs-filters.cs-filters-gal"));
+ck("收藏 分组+排序两等分同排", fq("#cs-fav-group").classList.contains("cs-span-6")
+  && fq("#cs-fav-sort").classList.contains("cs-span-6")
+  && fq("#cs-fav-group").parentElement === fq("#cs-fav-sort").parentElement);
+ck("收藏 动作组三等分(管理/导入/导出)", ["cs-fav-manage", "cs-fav-import", "cs-fav-export"].every((id) =>
+  fq("#" + id) && fq("#" + id).classList.contains("cs-span-4")));
+ck("收藏 危险重置库在折叠区且红色", fq("#cs-fav-reset") && !!fq("#cs-fav-reset").closest(".cs-fwrap")
+  && fq("#cs-fav-reset").style.color === "rgb(226, 84, 63)");
+ck("收藏 折叠钮存在", !!fq("#cs-fav-ffold"));
+ck("收藏 状态行在折叠区下方", fq("#cs-fav-syncline") && fq(".cs-fwrap")
+  && !!(fq(".cs-fwrap").compareDocumentPosition(fq("#cs-fav-syncline")) & window.Node.DOCUMENT_POSITION_FOLLOWING));
+P.S.favUi.group = "g_x"; P.S.favUi.sort = "name";
+fq("#cs-fav-rstf").click();
+ck("收藏 ⟲ 清分组与排序", P.S.favUi.group === "all" && P.S.favUi.sort === "updated" && fq("#cs-fav-sort").value === "updated");
+fq("#cs-fav-ffold").click();
+ck("收藏 折叠可切换且持久化", fq(".cs-fwrap").classList.contains("folded") && localStorage.getItem("cs_fav_fold") === "1");
+fq("#cs-fav-ffold").click();
+localStorage.removeItem("cs_fav_fold");
 
 console.log(fail ? `\n${fail} 项失败` : "\n全部通过");
 process.exit(fail ? 1 : 0);

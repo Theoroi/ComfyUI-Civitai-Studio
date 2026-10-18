@@ -64,11 +64,16 @@ _ABSENCE_ROUNDS = 2
 _ABSENCE_MIN_GAP = 300  # 秒;首轮与终局轮的最小时间差
 
 
-def _absence_reconcile(seen_by_cid, cols_ids, result):
-    """条目级+分组级缺席两轮确认(bg 线程执行;seen/cols 来自本轮 _down_groups)。"""
+def _absence_reconcile(seen_by_cid, cols_ids, result, force=False):
+    """条目级+分组级缺席两轮确认(bg 线程执行;seen/cols 来自本轮 _down_groups)。
+    批14.1:force=True(手动同步)立即终局——轮数=1 且跳过时间差(用户实测"点同步就该
+    对齐";force 走全量新鲜枚举,读滞后风险已由挂载级 pushed_at 宽限吸收);
+    自动同步保持两轮+≥5min 防抖。"""
     kv = cache_store.kv_get(_ABSENCE_KEY)
     kv = dict(kv) if isinstance(kv, dict) else {}
     now = time.time()
+    need_rounds = 1 if force else _ABSENCE_ROUNDS
+    need_gap = 0 if force else _ABSENCE_MIN_GAP
     seen_m, seen_i = set(), set()
     for tab in (seen_by_cid or {}).values():
         seen_m.update(str(k) for k in (tab.get("m") or {}))
@@ -89,7 +94,7 @@ def _absence_reconcile(seen_by_cid, cols_ids, result):
             continue
         rec = kv.get(key) or {"first": now, "rounds": 0}
         rec["rounds"] += 1
-        if rec["rounds"] >= _ABSENCE_ROUNDS and now - rec["first"] >= _ABSENCE_MIN_GAP:
+        if rec["rounds"] >= need_rounds and now - rec["first"] >= need_gap:
             fs.mark_remote_tombstone(it["kind"], it["oid"])
             result["absent_removed"] = result.get("absent_removed", 0) + 1
             kv.pop(key, None)
@@ -115,7 +120,7 @@ def _absence_reconcile(seen_by_cid, cols_ids, result):
             continue
         rec = kv.get(key) or {"first": now, "rounds": 0}
         rec["rounds"] += 1
-        if rec["rounds"] >= _ABSENCE_ROUNDS and now - rec["first"] >= _ABSENCE_MIN_GAP:
+        if rec["rounds"] >= need_rounds and now - rec["first"] >= need_gap:
             fs.delete_group(g["gid"])
             result["groups_absent_removed"] = result.get("groups_absent_removed", 0) + 1
             kv.pop(key, None)
@@ -330,7 +335,7 @@ async def _down_groups(heartbeat=None, force=False):
             "seen": seen, "truncated": any_tr, "cols_ids": cols_ids}
 
 
-def _reconcile_down(seen_by_cid):
+def _reconcile_down(seen_by_cid, force=False):
     """远端权威对账(挂载级,批1-4 下行半):本次完整枚举的集合里消失的挂载 → 硬摘;
     因此变孤儿的 remote 条目(曾挂载、现零挂载、无在途软删)落墓碑。
     软删挂载(本地移出待 removeFromCollection)不参与——在途本地改动优先。
@@ -351,9 +356,14 @@ def _reconcile_down(seen_by_cid):
             continue
         # 批13:读滞后保护 — 刚推送/镜像的挂载在宽限窗内不参与硬摘(站方枚举可能
         # 还没看到我们刚 saveItem 的条目,或本轮 seen 来自滞后的缓存捷径),只记日志;
-        # 窗外仍缺席才认定远端已移除。pushed_at 优先(saveItem 成功时刻),旧库无值
-        # 退回 added_at(镜像时刻)。
-        pa = mem.get("pushed_at") or mem.get("added_at")
+        # 窗外仍缺席才认定远端已移除。
+        # 批14.1:force(手动同步)只保护"我们刚上推的"(pushed_at 优先)——下行镜像挂载
+        # (pushed_at 为空)在 force 全量新鲜枚举说缺席时就摘,用户实测"网页移除后点同步
+        # 没删"即此因(镜像挂载 added_at 新被误保护 15 分钟)。
+        if force:
+            pa = mem.get("pushed_at")
+        else:
+            pa = mem.get("pushed_at") or mem.get("added_at")
         if pa and time.time() - pa < _RECONCILE_GRACE:
             debug(f"对账跳过(读滞后保护,窗 {int(time.time() - pa)}s < {_RECONCILE_GRACE}s): "
                   f"{mem['kind']} {mem['oid']} ← 集合 {cid}")
@@ -591,14 +601,15 @@ async def sync_now(force=False):
         if not d["truncated"]:
             # 对账门控:枚举不完整(截断/失败/空列表)绝不执行,防误杀(评审R1 D2-1/O1)
             try:
-                rc = await bg.run_bg(_reconcile_down, d["seen"])
+                rc = await bg.run_bg(_reconcile_down, d["seen"], force)
                 result["removed"] = rc["removed"]
                 result["tombstoned"] = rc["tombstoned"]
             except Exception as e:
                 result["errors"].append("远端对账: " + str(e)[:160])
-            # 批14 B1-1:条目/分组级缺席两轮确认(同一门控:枚举不完整不执行、kv 原样)
+            # 批14 B1-1:条目/分组级缺席两轮确认(同一门控:枚举不完整不执行、kv 原样);
+            # 批14.1:force 轮立即终局(见 _absence_reconcile docstring)
             try:
-                await bg.run_bg(_absence_reconcile, d["seen"], d.get("cols_ids") or set(), result)
+                await bg.run_bg(_absence_reconcile, d["seen"], d.get("cols_ids") or set(), result, force)
             except Exception as e:
                 result["errors"].append("缺席对账: " + str(e)[:160])
         _heartbeat()
