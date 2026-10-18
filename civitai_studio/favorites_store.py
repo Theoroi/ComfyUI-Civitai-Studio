@@ -679,6 +679,7 @@ def reset_all():
         conn.commit()
     cache_store.kv_delete("fav:colitems_v3")  # 当前版本
     cache_store.kv_delete("fav:colitems_v2")  # 历史版本残留(批5 缓存键升级)
+    cache_store.kv_delete("fav:absence_v1")  # 批14 B1-1:缺席嫌疑计数一并清零
     cache_store.kv_delete("fav:fig_migrated_v1")
     cache_store.kv_delete("fav:legacy_ctype_cleared_v1")
     cache_store.kv_delete("legacy_purged_v2")

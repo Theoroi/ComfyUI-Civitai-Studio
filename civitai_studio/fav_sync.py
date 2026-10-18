@@ -49,6 +49,99 @@ _UPSYNC_DELAY = 0.5  # 逐条 POST 限速,防撞 429
 # 再同步两连轮把刚上推的挂载误摘落墓碑)。窗长覆盖实测滞后上限加余量。
 _RECONCILE_GRACE = 900  # 15 分钟
 
+# 批14(B1-1):条目级缺席对账 — 方案 docs/design/absence-reconciliation.md §三。
+# 覆盖挂载级对账的缺口:远端集合被删/条目被站方清空时,本地条目永久滞留。
+# 判定对象:src=remote、dirty=0、deleted=0 且零活动挂载的条目,且不在本轮任何
+# seen 集合表里(捷径轮的 seen=缓存表,即"最近一次完整枚举"——两轮确认天然吸收
+# 批13实测的站方读滞后)。终局条件:连续 ≥2 轮缺席 且 首轮距今 ≥5 分钟(防止
+# 短时间连环手动同步把单次读滞后放大成终局);终局=既有墓碑机制(mark_remote_
+# tombstone:UI 隐藏、远端重新出现可复活),purge 物理清理。
+# 分组级:绑定了 civitai_id 的本地组连续 ≥2 轮不在 getAllUser 列表(Bookmark 系统
+# 集合除外)→ delete_group(条目回未分组,不删条目)。
+# 门控纪律不变:本轮 getAllUser 空/枚举截断 → 整体跳过(kv 原样保留)。
+_ABSENCE_KEY = "fav:absence_v1"  # {"item:<kind>:<oid>"/"grp:<gid>": {first, rounds}}
+_ABSENCE_ROUNDS = 2
+_ABSENCE_MIN_GAP = 300  # 秒;首轮与终局轮的最小时间差
+
+
+def _absence_reconcile(seen_by_cid, cols_ids, result):
+    """条目级+分组级缺席两轮确认(bg 线程执行;seen/cols 来自本轮 _down_groups)。"""
+    kv = cache_store.kv_get(_ABSENCE_KEY)
+    kv = dict(kv) if isinstance(kv, dict) else {}
+    now = time.time()
+    seen_m, seen_i = set(), set()
+    for tab in (seen_by_cid or {}).values():
+        seen_m.update(str(k) for k in (tab.get("m") or {}))
+        seen_i.update(str(k) for k in (tab.get("i") or {}))
+    # --- 条目级:零挂载 + 不在本轮任何集合表 → 计轮;在场则清零 ---
+    live_keys = set()  # 本轮遍历到的存活条目键(墓碑/本地化条目之外的计数一律作废)
+    for it in fs.list_items(include_deleted=False):
+        if it["src"] != "remote" or it["dirty"]:
+            continue
+        key = f"item:{it['kind']}:{it['oid']}"
+        live_keys.add(key)
+        if fs.memberships(it["kind"], it["oid"]):
+            kv.pop(key, None)  # 有挂载(含宽限期保护的)不参与缺席
+            continue
+        seen_ids = seen_i if it["kind"] == fs.KIND_ASSET else seen_m
+        if str(it["oid"]) in seen_ids:
+            kv.pop(key, None)  # 零挂载但仍在集合表(挂载修复前过渡态):不算缺席
+            continue
+        rec = kv.get(key) or {"first": now, "rounds": 0}
+        rec["rounds"] += 1
+        if rec["rounds"] >= _ABSENCE_ROUNDS and now - rec["first"] >= _ABSENCE_MIN_GAP:
+            fs.mark_remote_tombstone(it["kind"], it["oid"])
+            result["absent_removed"] = result.get("absent_removed", 0) + 1
+            kv.pop(key, None)
+            debug(f"缺席终局(连续{rec['rounds']}轮未见): {it['kind']} {it['oid']} 落墓碑"
+                  f"(远端重新出现可复活)")
+        else:
+            kv[key] = rec
+            debug(f"缺席嫌疑(第 {rec['rounds']} 轮): {it['kind']} {it['oid']}"
+                  f" 零挂载且不在本轮任何集合")
+    for key in list(kv):  # 条目已墓碑/删除/本地化:缺席计数随之作废
+        if key.startswith("item:") and key not in live_keys:
+            kv.pop(key, None)
+    # --- 分组级:绑定的远端集合连续 ≥2 轮不在 getAllUser → 删组保条目 ---
+    for g in fs.groups_list():
+        key = "grp:" + g["gid"]
+        if not g.get("civitai_id"):
+            kv.pop(key, None)
+            continue
+        if g.get("ctype") == "Bookmark":
+            continue  # 系统集合:缺席只说明 ❤ 状态,由 toggleFavorite 闭环
+        if int(g["civitai_id"]) in (cols_ids or set()):
+            kv.pop(key, None)
+            continue
+        rec = kv.get(key) or {"first": now, "rounds": 0}
+        rec["rounds"] += 1
+        if rec["rounds"] >= _ABSENCE_ROUNDS and now - rec["first"] >= _ABSENCE_MIN_GAP:
+            fs.delete_group(g["gid"])
+            result["groups_absent_removed"] = result.get("groups_absent_removed", 0) + 1
+            kv.pop(key, None)
+            debug(f"缺席终局(分组): 「{g['name']}」({g['civitai_id']}) 连续{rec['rounds']}轮"
+                  f"不在远端列表,本地组删除(条目回未分组)")
+        else:
+            kv[key] = rec
+            debug(f"缺席嫌疑(分组): 「{g['name']}」({g['civitai_id']}) 第 {rec['rounds']} 轮未见")
+    cache_store.kv_put(_ABSENCE_KEY, kv)
+    return kv
+
+
+def _absence_suspects():
+    """UI 用:当前嫌疑清单 [{"kind","oid","rounds"}](收藏网格 ⚠ 角标)。"""
+    kv = cache_store.kv_get(_ABSENCE_KEY)
+    out = []
+    if isinstance(kv, dict):
+        for key, rec in kv.items():
+            if not str(key).startswith("item:"):
+                continue
+            parts = str(key).split(":", 2)
+            if len(parts) == 3 and isinstance(rec, dict):
+                out.append({"kind": parts[1], "oid": parts[2],
+                            "rounds": int(rec.get("rounds") or 0)})
+    return out
+
 
 def _cover_url(d, video=False):
     uuid = str((d or {}).get("url") or "")
@@ -129,18 +222,22 @@ async def _down_groups(heartbeat=None, force=False):
         # 跳过本轮对账(墓碑终局,误杀不可自愈;窄域复审 O1)
         cache_store.kv_put(_COLITEMS_KEY, {})
         return {"groups": 0, "models_down": 0, "images_down": 0, "mounts": 0,
-                "seen": {}, "truncated": True}
+                "seen": {}, "truncated": True, "cols_ids": set()}
+    cols_ids = set()  # B1-1:getAllUser 全量 id(含 Article/Bookmark——分组级缺席判在场用)
     for c in cols:
         if heartbeat:
             heartbeat()  # N-V1-1:逐集合推进中续锁,防大库首拉整段超过锁 TTL
         cid, name, ctype = c.get("id"), c.get("name"), c.get("type")
         if not cid or not name or ctype == "Article":
+            if cid:
+                cols_ids.add(int(cid))  # Article 集合也"在场"(只是与插件无关)
             continue  # 文章书签集合与插件无关
         if c.get("mode") == "Bookmark":
             # 批4 F1:站方系统集合(Liked Models 等)——成员由 ❤ 状态托管,removeFromCollection
             # 会被站方按 ❤ 拉回。存 ctype="Bookmark" 让 UI 只读(picker/筛选/组管理排除),上行一律跳过
             ctype = "Bookmark"
         cid = int(cid)
+        cols_ids.add(cid)
         ts = _ts(c.get("updatedAt") or c.get("createdAt"))
         # 新集合首次落地 prev 里还没有映射:必须用 upsert 返回的 gid,
         # 否则本轮条目全部挂不上组(集合"看似同步了但空")
@@ -230,7 +327,7 @@ async def _down_groups(heartbeat=None, force=False):
     info(f"集合下行完成: 分组 {g_n} · 新模型 {m_n} · 新图片 {i_n} · 新挂载 {mounts}"
          + (" · 枚举不完整" if any_tr else ""))
     return {"groups": g_n, "models_down": m_n, "images_down": i_n, "mounts": mounts,
-            "seen": seen, "truncated": any_tr}
+            "seen": seen, "truncated": any_tr, "cols_ids": cols_ids}
 
 
 def _reconcile_down(seen_by_cid):
@@ -456,6 +553,7 @@ async def sync_now(force=False):
               "groups_up": 0, "items_up": 0, "items_rm": 0, "items_rm_failed": 0,
               "items_up_failed": 0, "upsynced": 0, "upsync_failed": 0, "scope_hint": "",
               "tombstoned": 0, "removed": 0,
+              "absent_removed": 0, "groups_absent_removed": 0,
               "truncated": False, "errors": [], "at": time.time()}
     _cfg = config.load()
     info(f"同步开始: mirror={_cfg.get('mirror') or '(默认)'}"
@@ -498,6 +596,11 @@ async def sync_now(force=False):
                 result["tombstoned"] = rc["tombstoned"]
             except Exception as e:
                 result["errors"].append("远端对账: " + str(e)[:160])
+            # 批14 B1-1:条目/分组级缺席两轮确认(同一门控:枚举不完整不执行、kv 原样)
+            try:
+                await bg.run_bg(_absence_reconcile, d["seen"], d.get("cols_ids") or set(), result)
+            except Exception as e:
+                result["errors"].append("缺席对账: " + str(e)[:160])
         _heartbeat()
         await _upsync_models(result)
         _heartbeat()
@@ -509,7 +612,8 @@ async def sync_now(force=False):
             f"{k}={result[k]}" for k in
             ("groups_down", "models_down", "images_down", "mounts", "items_up",
              "items_rm", "items_rm_failed", "items_up_failed", "upsynced",
-             "upsync_failed", "removed", "tombstoned", "truncated")))
+             "upsync_failed", "removed", "tombstoned", "absent_removed",
+             "groups_absent_removed", "truncated")))
         for e in result["errors"]:
             error("同步错误项: " + e)
         if result["scope_hint"]:

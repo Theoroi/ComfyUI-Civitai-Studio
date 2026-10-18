@@ -27,17 +27,20 @@ from .common import (  # noqa: F401 — 共享工具与跨区状态
 
 @_get("/civitai_studio/favorites")
 async def favorites_get(request):
-    """兼容轻量版(ids=资产 id 列表,画廊★过滤用)+ 完整 items/groups。"""
+    """兼容轻量版(ids=资产 id 列表,画廊★过滤用)+ 完整 items/groups。
+    suspects:批14 B1-1 缺席嫌疑清单(连续 N 轮同步未见,网格 ⚠ 角标)。"""
     items = await local_index.run_bg(fs.list_items, None, None)
     assets = [it for it in items if it["kind"] == fs.KIND_ASSET]
     models = [it for it in items if it["kind"] == fs.KIND_MODEL]
     groups = await local_index.run_bg(fs.groups_list)
+    suspects = await local_index.run_bg(fav_sync._absence_suspects)
     return web.json_response({
         "status": "ok",
         "ids": [it["oid"] for it in assets],
         "model_ids": [it["oid"] for it in models],
         "items": items,
         "groups": groups,
+        "suspects": suspects,
     })
 
 

@@ -2,6 +2,48 @@
 
 格式参照 Keep a Changelog;项目版本号见 `pyproject.toml` 与 `civitai_studio/version.py`。
 
+## [未发布](批14:B0 前端基建 + B1-1 缺席对账;功能批,发版号待定——建议 0.9.0)
+
+### 新增:B0-2 前端回归网(探针入库 + CI)
+
+- jsdom DOM 探针从本地工具迁入 `tools/probe/`(package.json+lock 独立依赖,仓库根仍无
+  node_modules;`.gitignore` 增 tools/probe/node_modules/);CI 增「DOM probe」步骤
+  (`npm ci --prefix tools/probe` + 运行),红绿可控性已验证(注入函数改名→非零退出)
+- 断言从 31 扩到 **41**:原有控件位置/事件/请求参数 + 弹层宿主工厂(单例/视口钳制/
+  捕获隔离/主动收口/mini 菜单双通道激活)+ mergePage 去重语义
+
+### 重构:B0-1 前端三处重复抽取(行为零变化,探针护栏)
+
+- **B0-1a 弹层宿主工厂 `makeBodyPopup`**:收敛 ×4 同骨架(👁分级选择 openNsfwBlurPicker /
+  mini 菜单 openMiniMenu / 多选下拉 makeMultiSelect / 收藏夹选择器 openGroupPicker)——
+  同类唯一实例、固定定位+视口钳制、window 捕获阶段隔离(内部 stopPropagation 防宿主
+  pointerdown preventDefault 抑制 click)、外部按下即关;批5/批6 验证过的语义逐字保留,
+  外部 remove 过的浮层视同外部按下(收口监听不吞事件)
+- **B0-1b 目标目录级联公共件**:`loadAllDests`(全量目录拉取)/`destScopeOpts`(实例下拉)/
+  `filterDests`(类型+实例双过滤)——下载/移动两对话框各自保留 rebuildRoots 变体
+  (option 值语义真不同:下载 value=root 按路径保选,移动 value=index 且当前目录置顶)
+- **B0-1c `mergePage` 翻页合并去重**:模型页/画廊/节点条三处 `concat+filter(!seen)` 同构
+  收敛;顺带补页内去重(同一上游增删 churn 产物,原三处均只对存量去重)
+
+### 新增:B1-1 缺席对账(方案 docs/design/absence-reconciliation.md §三 落地)
+
+- **条目级**:src=remote、dirty=0、零活动挂载、且不在本轮任何集合表(捷径轮=最近一次
+  完整枚举)→ 计缺席轮;**连续 ≥2 轮 且 首轮距今 ≥5 分钟**才落既有墓碑(时间差防抖:
+  短时连环手动同步不会把单次读滞后放大成终局;两轮确认天然吸收批13 实测的站方读滞后)
+- **分组级**:绑定 civitai_id 的本地组连续 ≥2 轮+时间差不在 getAllUser 列表 → 删组
+  保条目(回未分组);Bookmark 系统集合豁免(❤ 托管,缺席由 toggleFavorite 闭环)
+- **UI 可见性(防"静默消失")**:收藏网格对嫌疑条目加 ⚠ 角标(title 说明轮数与移除
+  条件);`/favorites` 响应带 suspects 清单
+- **门控纪律不变**:本轮 getAllUser 空/枚举截断 → 整体跳过、kv 计数原样;条目已
+  墓碑/删除/本地化 → 计数作废清除;收藏重置(reset_all)一并清零缺席计数
+- 同步结果与结束日志新增 `absent_removed` / `groups_absent_removed` 计数
+
+### 回归
+
+- tests/smoke/test_favsync.py 新增 17 节:截断轮门控/两轮+时间差终局/嫌疑期只计轮/
+  在场清零与陈旧键作废/分组级删组保条目
+- 全套 14 smoke + DOM 探针 41 断言通过;`node --check` 通过
+
 ## [0.8.2] - 2026-10-18（批13:收藏同步"读滞后"加固;patch 线;E2E #23 用户实测通过）
 
 ### 根因实测(2026-10-05,探针 `_tmp/probe_save_lag{,2,3,4}.py`,临时集合实测后即删)

@@ -1,0 +1,10 @@
+{
+  "name": "cs-probe",
+  "private": true,
+  "version": "0.0.0",
+  "description": "jsdom DOM 探针(B0-2):真实构建前端视图,断言控件位置/事件/请求参数(TDZ/引用错/绑定缺失只有真 DOM 能暴露)",
+  "type": "module",
+  "devDependencies": {
+    "jsdom": "^30.1.1"
+  }
+}

@@ -14,3 +14,6 @@ refine/
 user/
 _tmp/
 design-pack/
+
+# B0-2 探针依赖(只在本目录安装,仓库根保持无 node_modules)
+tools/probe/node_modules/

@@ -601,4 +601,63 @@ rc16b = fav_sync._reconcile_down(seen16)
 assert rc16b["removed"] == 1 and rc16b["tombstoned"] == 1, rc16b
 assert not fs.memberships(fs.KIND_MODEL, "2458426"), "出窗后缺席应硬摘"
 
+# ---- 17) 批14 B1-1:条目级+分组级缺席对账(两轮 + ≥5min 时间差才终局) ----
+# 17a) 门控:枚举截断/失败轮 → kv 原样(不计轮不清零)
+import time as _t17
+cache_store.kv_put(fav_sync._ABSENCE_KEY, {"item:model:888": {"first": 1.0, "rounds": 9}})
+
+
+async def trpc_boom17(proc, js):
+    raise CivitaiError("429 burst")
+
+
+fav_sync.civitai_client.trpc_query = trpc_boom17
+asyncio.run(fav_sync.sync_now())
+assert cache_store.kv_get(fav_sync._ABSENCE_KEY) == {"item:model:888": {"first": 1.0, "rounds": 9}}, \
+    "截断轮不得动缺席计数"
+
+# 17b) 条目级:两轮 + 时间差满足 → 墓碑;终局后清计数;远端重现可复活(既有机制)
+_set_trpc({"collection.getAllUser": lambda js: _cols_payload(),
+           "collection.getAllCollectionItems": _items_payload})
+fs.upsert_remote(fs.KIND_MODEL, "888", name="must-vanish", remote_updated=1.0)  # 零挂载(11 节重置后重建)
+cache_store.kv_put(fav_sync._ABSENCE_KEY, {"item:model:888": {"first": _t17.time() - 3600, "rounds": 1}})
+r17b = asyncio.run(fav_sync.sync_now())
+assert fs.get_item(fs.KIND_MODEL, "888")["deleted"] == 1, "两轮+时间差满足应落墓碑"
+assert r17b["absent_removed"] >= 1, r17b
+assert "item:model:888" not in (cache_store.kv_get(fav_sync._ABSENCE_KEY) or {}), "终局后清计数"
+st17 = fs.upsert_remote(fs.KIND_MODEL, "888", name="back-again",
+                        remote_updated=_t17.time() + 99, resurrect=True)
+assert st17 == "blocked" and fs.get_item(fs.KIND_MODEL, "888")["deleted"] == 1, st17
+# 模型墓碑终局(复活门控仅对资产开放,F-S2-1:模型的远端闭环走 ❤ 上推,见 13a 资产复活用例)
+
+# 17c) 嫌疑期(时间差不足)只计轮不删
+fs.upsert_remote(fs.KIND_MODEL, "889", name="suspect", remote_updated=1.0)
+cache_store.kv_put(fav_sync._ABSENCE_KEY, {"item:model:889": {"first": _t17.time(), "rounds": 1}})
+r17c = asyncio.run(fav_sync.sync_now())
+kv17c = cache_store.kv_get(fav_sync._ABSENCE_KEY)
+assert kv17c["item:model:889"]["rounds"] == 2, kv17c
+assert not fs.get_item(fs.KIND_MODEL, "889")["deleted"], "时间差不足不得终局"
+
+# 17d) 在场条目清零:有挂载的条目即便有历史计数也会清;墓碑条目的陈旧键一并作废
+cache_store.kv_put(fav_sync._ABSENCE_KEY, {
+    "item:model:2662833": {"first": 1.0, "rounds": 5},   # 在场(有 pending 挂载)
+    "item:model:2458426": {"first": 1.0, "rounds": 5},   # 已墓碑(16 节)→ 陈旧键
+})
+asyncio.run(fav_sync.sync_now())
+kv17d = cache_store.kv_get(fav_sync._ABSENCE_KEY)
+assert "item:model:2662833" not in kv17d and "item:model:2458426" not in kv17d, kv17d
+
+# 17e) 分组级:绑定远端集合的本地组连续两轮+时间差不在 getAllUser → 删组保条目
+g17 = fs.upsert_group("GoneCol", civitai_id=31337)
+g17gid = g17["gid"]
+fs.upsert_remote(fs.KIND_MODEL, "890", name="in-gone", remote_updated=1.0)
+fs.membership_add(fs.KIND_MODEL, "890", g17gid, source="local", pushed=0)
+cache_store.kv_put(fav_sync._ABSENCE_KEY, {"grp:" + g17gid: {"first": _t17.time() - 3600, "rounds": 1}})
+r17e = asyncio.run(fav_sync.sync_now())
+assert r17e["groups_absent_removed"] >= 1, r17e
+assert not any(g["gid"] == g17gid for g in fs.groups_list()), "缺席组应删除"
+it890 = fs.get_item(fs.KIND_MODEL, "890")
+assert it890 and not it890["deleted"] and not fs.memberships(fs.KIND_MODEL, "890"), \
+    "删组不删条目:回未分组"
+
 print("test_favsync.py OK")

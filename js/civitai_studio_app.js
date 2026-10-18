@@ -232,6 +232,7 @@ const STR = {
         logDebugLabel: "调试日志(DEBUG)",
         logDebugTip: "控制台输出全部出站请求与响应、同步逐条决策(等效 ComfyUI --verbose 但只对本插件生效)。保存即时生效,排障后建议关闭。",
         favRemoveTitle: "取消收藏", favSearchPh: "在收藏里搜索…",
+        favAbsentTip: "远端未见:连续 {n} 轮同步未出现在任何集合(再 1 轮且间隔 ≥5 分钟将移除;远端重新出现会自动恢复)",
         favSortTitle: "排序", favSortUpdated: "最近更新", favSortAdded: "最近收藏", favSortName: "按名称",
         importAsset: "导入为资产", importAssetDone: "已导入 input/civitai_import/{name}", importAssetExists: "已存在,跳过重复导入: {name}",
         importFailed: "导入失败",
@@ -432,6 +433,7 @@ const STR = {
         logDebugTip: "Log all outbound requests/responses and per-item sync decisions to the console (equivalent to ComfyUI --verbose, scoped to this plugin). Takes effect on save; turn off after troubleshooting.",
         favAutoSyncTip: "Sync on Favorites tab open; conflicts resolved by newest timestamp; model push requires the SocialWrite key scope",
         favRemoveTitle: "Unfavorite", favSearchPh: "Search favorites…",
+        favAbsentTip: "Not seen remotely: absent from all collections for {n} consecutive syncs (removed after one more round ≥5 min apart; reappears automatically if it returns remotely)",
         favSortTitle: "Sort", favSortUpdated: "Recently updated", favSortAdded: "Recently added", favSortName: "By name",
         importAsset: "Import as asset", importAssetDone: "Imported to input/civitai_import/{name}", importAssetExists: "Already imported, skipped: {name}",
         importFailed: "Import failed",
@@ -904,6 +906,19 @@ function browseParams(cursor) {
     return p; // 批4 E2E 9:返回对象,OR 合并/AND 首 tag 分支还要 q.set 加工(此前返回串导致 q.set is not a function)
 }
 
+// B0-1c:翻页合并去重 —— 模型页/画廊/节点条三处同构(cursor 翻页期间上游有增删,
+// 同一 id 可能重复出现,按 id 过滤后追加)。返回新数组,不改入参。
+function mergePage(list, incoming) {
+    const seen = new Set(list.map((x) => x.id));
+    const out = list.slice();
+    for (const x of (incoming || [])) {
+        if (seen.has(x.id)) continue; // 存量与页内重复一并去(同一上游增删churn 的产物)
+        seen.add(x.id);
+        out.push(x);
+    }
+    return out;
+}
+
 async function fetchBrowse(reset) {
     const st = S.browse;
     if (st.loading) {
@@ -961,9 +976,7 @@ async function fetchBrowse(reset) {
         if (reset) {
             st.items = data.items || [];
         } else {
-            // cursor 翻页期间上游有增删,同一模型可能重复出现:按 id 去重
-            const seen = new Set(st.items.map((x) => x.id));
-            st.items = st.items.concat((data.items || []).filter((x) => !seen.has(x.id)));
+            st.items = mergePage(st.items, data.items); // B0-1c:按 id 去重追加
         }
         st.nextCursor = data.metadata?.nextCursor || "";
         st.dirty = false;
@@ -1519,14 +1532,50 @@ function nsfwBlurStyle(item) {
     const v = nsfwBlurCss(item);
     return v ? "filter:" + v + ";" : "";
 }
-function openNsfwBlurPicker(ev) {
-    document.querySelectorAll(".cs-mini-menu").forEach((n) => n.remove());
+
+// ---------- B0-1a:body 级浮层宿主工厂 ----------
+// 收敛 ×4 同骨架(👁分级选择 openNsfwBlurPicker / mini 菜单 openMiniMenu / 多选下拉
+// makeMultiSelect / 收藏夹选择器 makeGroupPicker):同类唯一实例、固定定位+视口钳制、
+// window 捕获阶段隔离 —— 内部 stopPropagation 防宿主 pointerdown preventDefault 抑制
+// click(批5"菜单项点了没反应"根因),外部按下即关。语义与手写版逐字对齐,改动需过探针。
+// 内容填充须在 mount() 之前完成(定位要量内容宽高);close() 供外部主动收口。
+function makeBodyPopup({ cls, z = 60002, minW = 150, pad = 6, extra = "", at = null, anchor = null }) {
+    document.querySelectorAll("." + cls).forEach((n) => n.remove());
     const pop = document.createElement("div");
-    pop.className = "cs-mini-menu";
-    pop.style.cssText = "position:fixed;z-index:60002;min-width:200px;"
+    pop.className = cls;
+    pop.style.cssText = "position:fixed;z-index:" + z + ";min-width:" + minW + "px;"
         + "background:var(--comfy-input-bg,var(--bg-color,#2b2b30));color:var(--fg-color,#ddd);"
         + "border:1px solid var(--border-color,#3a3a40);border-radius:8px;"
-        + "box-shadow:0 8px 24px rgba(0,0,0,.5);padding:8px;font-size:12px;cursor:default;";
+        + "box-shadow:0 8px 24px rgba(0,0,0,.5);padding:" + pad + "px;font-size:12px;cursor:default;" + extra;
+    let h = null;
+    const close = () => {
+        if (h) { window.removeEventListener("pointerdown", h, true); h = null; }
+        pop.remove();
+    };
+    const mount = () => {
+        document.body.appendChild(pop);
+        const r = pop.getBoundingClientRect();
+        if (anchor) { // 锚点下方展开(多选下拉)
+            const br = anchor.getBoundingClientRect();
+            pop.style.left = Math.max(4, Math.min(br.left, window.innerWidth - r.width - 8)) + "px";
+            pop.style.top = Math.min(br.bottom + 4, window.innerHeight - r.height - 8) + "px";
+        } else { // 鼠标位置(菜单/选择器)
+            pop.style.left = Math.min((at && at.clientX) ?? 0, window.innerWidth - r.width - 8) + "px";
+            pop.style.top = Math.min((at && at.clientY) ?? 0, window.innerHeight - r.height - 8) + "px";
+        }
+        h = (e2) => {
+            // pop.isConnected:已被外部 remove 的浮层视同外部按下(收口监听,不吞事件)
+            if (pop.isConnected && pop.contains(e2.target)) { e2.stopPropagation(); return; }
+            close();
+        };
+        window.addEventListener("pointerdown", h, true);
+    };
+    return { pop, mount, close };
+}
+
+function openNsfwBlurPicker(ev) {
+    const host = makeBodyPopup({ cls: "cs-mini-menu", minW: 200, pad: 8, at: ev });
+    const pop = host.pop;
     const head = document.createElement("div");
     head.style.cssText = "font-weight:600;margin-bottom:4px;";
     head.textContent = t("blurTitle");
@@ -1555,20 +1604,8 @@ function openNsfwBlurPicker(ev) {
         lb2.appendChild(document.createTextNode(`${lb}`));
         pop.appendChild(lb2);
     }
-    document.body.appendChild(pop);
-    const r = pop.getBoundingClientRect();
     console.log("[Civitai-Studio][menu] blur picker shown");
-    pop.style.left = Math.min(ev.clientX ?? 0, window.innerWidth - r.width - 8) + "px";
-    pop.style.top = Math.min(ev.clientY ?? 0, window.innerHeight - r.height - 8) + "px";
-    // 批5:window 捕获隔离 — 先于宿主 document handler 执行;弹层内部阻断传播
-    // (防宿主对 pointerdown preventDefault 按规范抑制后续 click — "菜单项点了没反应"根因),
-    // 弹层外部按下即关
-    const h = (e2) => {
-        if (pop.contains(e2.target)) { e2.stopPropagation(); return; }
-        window.removeEventListener("pointerdown", h, true);
-        pop.remove();
-    };
-    window.addEventListener("pointerdown", h, true);
+    host.mount();
 }
 function modelBadgesHtml(model) {
     const chips = [];
@@ -2228,17 +2265,15 @@ async function openGroupPicker(ev, kind, selectedGids, onDone) {
     if (!S.favData) {
         try {
             const d = await apiGet("/civitai_studio/favorites");
-            S.favData = { items: d.items || [], groups: d.groups || [] };
+            S.favData = { items: d.items || [], groups: d.groups || [], suspects: d.suspects || [] };
         } catch (e) { /* 拉不到就按空渲染,浮层仍可用(未分组收藏) */ }
     }
     const groups = groupsForKind(S.favData?.groups, kind).filter((g) => g.ctype !== "Legacy");
     const sel = new Set((selectedGids || []).slice());
-    const pop = document.createElement("div");
-    pop.className = "cs-group-picker";
-    pop.style.cssText = "position:fixed;z-index:60001;min-width:190px;max-height:300px;overflow-y:auto;"
-        + "background:var(--comfy-input-bg,var(--bg-color,#2b2b30));color:var(--fg-color,#ddd);"
-        + "border:1px solid var(--border-color,#3a3a40);border-radius:8px;"
-        + "box-shadow:0 8px 24px rgba(0,0,0,.5);padding:8px;font-size:12px;cursor:default;";
+    const host = makeBodyPopup({ cls: "cs-group-picker", z: 60001, minW: 190, pad: 8,
+        extra: "max-height:300px;overflow-y:auto;", at: ev });
+    const pop = host.pop;
+    const close = host.close;
     const head = document.createElement("div");
     head.style.cssText = "font-weight:600;margin-bottom:2px;";
     head.textContent = t("groupPickTitle");
@@ -2310,34 +2345,19 @@ async function openGroupPicker(ev, kind, selectedGids, onDone) {
     };
     newRow.appendChild(addBtn);
     pop.appendChild(newRow);
-    document.body.appendChild(pop);
-    const r = pop.getBoundingClientRect();
-    pop.style.left = Math.min(ev.clientX ?? 0, window.innerWidth - r.width - 8) + "px";
-    pop.style.top = Math.min(ev.clientY ?? 0, window.innerHeight - r.height - 8) + "px";
-    const close = () => { window.removeEventListener("pointerdown", h, true); pop.remove(); };
-    // 批5:同 mini 菜单的 window 捕获隔离(内部阻断宿主 pointer 干预,外部即关)
-    const h = (e2) => {
-        if (pop.contains(e2.target)) { e2.stopPropagation(); return; }
-        close();
-    };
-    window.addEventListener("pointerdown", h, true);
+    host.mount();
 }
 
 // 批C:通用鼠标位置小菜单(标签/底模点击的 复制/搜索 二选一)
 function openMiniMenu(ev, options) {
-    document.querySelectorAll(".cs-mini-menu").forEach((n) => n.remove());
-    const pop = document.createElement("div");
-    pop.className = "cs-mini-menu";
-    pop.style.cssText = "position:fixed;z-index:60002;min-width:140px;"
-        + "background:var(--comfy-input-bg,var(--bg-color,#2b2b30));color:var(--fg-color,#ddd);"
-        + "border:1px solid var(--border-color,#3a3a40);border-radius:8px;"
-        + "box-shadow:0 8px 24px rgba(0,0,0,.5);padding:4px;font-size:12px;cursor:default;";
+    const host = makeBodyPopup({ cls: "cs-mini-menu", minW: 140, pad: 4, at: ev });
+    const pop = host.pop;
     let fired = "";
     const fire = (op) => {
         if (fired) return; // click/pointerup 双通道只执行一次
         fired = op.label;
         console.log("[Civitai-Studio][menu] item:", op.label);
-        close();
+        host.close();
         try { op.cb(); } catch (err) {
             console.error("[Civitai-Studio][menu] cb failed:", err);
             toast("error", t("loadFailedTitle"), String((err && err.message) || err));
@@ -2361,19 +2381,7 @@ function openMiniMenu(ev, options) {
     pop.addEventListener("click", activate);
     pop.addEventListener("pointerup", activate);
     console.log("[Civitai-Studio][menu] open:", options.map((o) => o.label).join("/"));
-    document.body.appendChild(pop);
-    const r = pop.getBoundingClientRect();
-    pop.style.left = Math.min(ev.clientX ?? 0, window.innerWidth - r.width - 8) + "px";
-    pop.style.top = Math.min(ev.clientY ?? 0, window.innerHeight - r.height - 8) + "px";
-    // 批5:window 捕获隔离 — 先于宿主 document handler 执行;弹层内部阻断传播
-    // (防宿主对 pointerdown preventDefault 按规范抑制后续 click — "菜单项点了没反应"根因),
-    // 弹层外部按下即关
-    const h = (e2) => {
-        if (pop.contains(e2.target)) { e2.stopPropagation(); return; }
-        window.removeEventListener("pointerdown", h, true);
-        pop.remove();
-    };
-    window.addEventListener("pointerdown", h, true);
+    host.mount();
 }
 
 // 批C:跳浏览按 tag/底模搜索(加入已选列表,不覆盖)
@@ -2510,20 +2518,13 @@ async function openDownloadDialog({ model, version, fileIndex = null, defaultRoo
     }
     let destinations = [];
     let destError = "";
-    let allDests = [], typeMap = {}, destScopes = [];
+    const { allDests, typeMap, destScopes } = await loadAllDests(); // B0-1b:手动改类型/实例用(失败仅退回原类型)
     try {
         const data = await apiGet(`/civitai_studio/destinations?type=${encodeURIComponent(model.type || "Other")}`);
         destinations = data.destinations || [];
     } catch (e) {
         destError = e.message;
     }
-    // 手动改类型/实例用:全量目录 + 类型→目录映射 + 实例清单(拉取失败仅退回原类型)
-    try {
-        const all = await apiGet("/civitai_studio/destinations?type=all");
-        allDests = all.destinations || [];
-        typeMap = all.type_map || {};
-        destScopes = all.scopes || [];
-    } catch (e) { /* 忽略 */ }
     if (!destinations.length) {
         toast("error", t("openDownloadFailed"), destError ? t("destFetchFailed") + destError : t("noRegFolders"));
         return;
@@ -2536,14 +2537,11 @@ async function openDownloadDialog({ model, version, fileIndex = null, defaultRoo
     const preRoot = matched ? matched.root : destinations[0].root;
     const curType = model.type || "Other";
     const typeKeys = [...new Set([curType, ...Object.keys(typeMap)])];
-    // [实例]下拉:后端按注册根实际归类下发(共享目录/本实例…),末项"所有实例"
-    const scopeOpts = [...destScopes.map((s) => [s.id, s.label]), ["all", t("scopeAll")]];
-    // 过滤:shared=共享目录/install=本实例;all = 全部
+    const scopeOpts = destScopeOpts(destScopes);
     const destsFor = (tp, scope) => {
-        const keys = typeMap[tp];
         let list = tp === curType && destinations.length
             ? destinations
-            : (keys ? allDests.filter((d) => keys.includes(d.key)) : allDests);
+            : filterDests(allDests, typeMap, tp, "all");
         if (scope !== "all") list = list.filter((d) => d.scope === scope);
         return list;
     };
@@ -3310,8 +3308,7 @@ async function fetchGallery(reset, opts = {}) {
         if (reset) {
             st.items = items;
         } else {
-            const seen = new Set(st.items.map((x) => x.id));
-            st.items = st.items.concat(items.filter((x) => !seen.has(x.id)));
+            st.items = mergePage(st.items, items); // B0-1c:按 id 去重追加
         }
         st.next = next || [];
         st.error = "";
@@ -4298,6 +4295,28 @@ function buildBrowseView(root) {
 }
 
 // 子文件夹浏览:列出目标根下已存在的子目录(深度≤3),点选回填输入框(可手输多级叠加)
+// ---------- B0-1b:目标目录级联公共件(下载/移动两对话框同骨架的部分) ----------
+// 下载与移动对话框各自保留 rebuildRoots 变体(option 值语义不同:下载 value=root 按
+// 路径保选;移动 value=index 且当前目录置顶)——真正同构的三件收敛在此,改一处两处同步。
+async function loadAllDests() {
+    // 全量目录 + 类型→目录映射 + 实例清单(拉取失败返回空,调用方自行兜底)
+    try {
+        const all = await apiGet("/civitai_studio/destinations?type=all");
+        return { allDests: all.destinations || [], typeMap: all.type_map || {}, destScopes: all.scopes || [] };
+    } catch (e) { return { allDests: [], typeMap: {}, destScopes: [] }; }
+}
+function destScopeOpts(destScopes) {
+    // [实例]下拉:后端按注册根实际归类下发(共享目录/本实例…),末项"所有实例"
+    return [...destScopes.map((s) => [s.id, s.label]), ["all", t("scopeAll")]];
+}
+function filterDests(allDests, typeMap, tp, scope) {
+    // 类型(经 typeMap)与实例双过滤;scope="all" 跳过实例筛
+    const keys = typeMap[tp];
+    let list = keys ? allDests.filter((d) => keys.includes(d.key)) : allDests;
+    if (scope !== "all") list = list.filter((d) => d.scope === scope);
+    return list;
+}
+
 async function openSubdirPicker(getRoot, onPick) {
     const root = getRoot();
     if (!root) { toast("error", t("browseFailed"), t("noRegFolders")); return; }
@@ -4319,24 +4338,16 @@ async function openSubdirPicker(getRoot, onPick) {
 
 // 移动模型到其它已注册目录:类型/实例/目标目录(根+子文件夹),文件与 .civitai.json 一并迁移
 async function openMoveDialog(m) {
-    let allDests = [], typeMap = {}, destScopes = [];
-    try {
-        const data = await apiGet("/civitai_studio/destinations?type=all");
-        allDests = data.destinations || [];
-        typeMap = data.type_map || {};
-        destScopes = data.scopes || [];
-    } catch (e) { /* 空 → 下方报错返回 */ }
+    const { allDests, typeMap, destScopes } = await loadAllDests(); // B0-1b:公共加载(空 → 下方报错返回)
     if (!allDests.length) { toast("error", t("moveFailed"), t("noRegFolders")); return; }
     // 按文件当前目录反推默认类型(typeMap 中第一个包含该目录 key 的类型)
     const preType = Object.keys(typeMap).find((tp) => typeMap[tp].includes(m.category)) || "";
     const typeKeys = [...new Set([...(preType ? [preType] : []), ...Object.keys(typeMap)])];
-    const scopeOpts = [...destScopes.map((s) => [s.id, s.label]), ["all", t("scopeAll")]];
+    const scopeOpts = destScopeOpts(destScopes);
     const curScope = (allDests.find((d) => d.root === m.root) || {}).scope || (destScopes[0] || {}).id || "all";
     const destsFor = (tp, scope) => {
-        const keys = typeMap[tp];
-        let list = keys ? allDests.filter((d) => keys.includes(d.key)) : allDests;
-        if (scope !== "all") list = list.filter((d) => d.scope === scope);
         // E2E 13:当前注册根不再排除——"移动到同目录子文件夹"需要它;置顶+标记
+        const list = filterDests(allDests, typeMap, tp, scope);
         const cur = list.filter((d) => d.root === m.root)
             .map((d) => ({ ...d, _cur: true, label: (S.lang === "zh" ? "▶ 当前目录 · " : "▶ Current folder · ") + d.label }));
         return [...cur, ...list.filter((d) => d.root !== m.root)];
@@ -4600,6 +4611,15 @@ function renderFavGrid(view) {
         cap.textContent = it.name || it.oid;
         cap.title = it.name || it.oid;
         cell.appendChild(cap);
+        // 批14 B1-1:缺席嫌疑角标(零挂载且连续 N 轮同步未见;终局前用户可见,防"静默消失")
+        const susp = (S.favData?.suspects || []).find((s2) => s2.kind === it.kind && String(s2.oid) === String(it.oid));
+        if (susp) {
+            const warn2 = document.createElement("span");
+            warn2.style.cssText = "position:absolute;top:4px;right:30px;font-size:11px;cursor:help;";
+            warn2.textContent = "⚠";
+            warn2.title = t("favAbsentTip", { n: susp.rounds || 1 });
+            cell.appendChild(warn2);
+        }
         // ★取消收藏
         const rm = document.createElement("button");
         rm.className = "cs-save-btn";
@@ -4670,7 +4690,7 @@ function renderFavGrid(view) {
 async function loadFavView() {
     try {
         const d = await apiGet("/civitai_studio/favorites");
-        S.favData = { items: d.items || [], groups: d.groups || [] };
+        S.favData = { items: d.items || [], groups: d.groups || [], suspects: d.suspects || [] };
         S.favs = new Set(d.ids || []);
         S.favModelIds = new Set(d.model_ids || []);
         refreshFavGroupSel(S.ui.root);
@@ -4743,7 +4763,7 @@ async function favDoSync(silent) {
 
 async function loadFavDataOnly() {
     const d = await apiGet("/civitai_studio/favorites");
-    S.favData = { items: d.items || [], groups: d.groups || [] };
+    S.favData = { items: d.items || [], groups: d.groups || [], suspects: d.suspects || [] };
     S.favs = new Set(d.ids || []);
     S.favModelIds = new Set(d.model_ids || []);
     refreshFavGroupSel(S.ui.root);
@@ -5298,8 +5318,6 @@ function appendPlayBadge(cell) {
 // (宿主对 pointerdown preventDefault 会按规范抑制后续 click——弹层内必须 stopPropagation)
 function makeMultiSelect(el, opts) {
     let sel = new Set(opts.selected || []);
-    let pop = null;
-    const closePop = () => { if (pop) { pop.remove(); pop = null; } };
     const summary = () => {
         const on = (opts.options || []).filter(([v]) => sel.has(v)).map(([, lb]) => lb);
         if (!on.length) return t("msAll");
@@ -5322,14 +5340,8 @@ function makeMultiSelect(el, opts) {
         el.appendChild(btn);
     };
     const openPop = (btn) => {
-        document.querySelectorAll(".cs-mselect-pop").forEach((n) => n.remove());
-        closePop();
-        pop = document.createElement("div");
-        pop.className = "cs-mselect-pop";
-        pop.style.cssText = "position:fixed;z-index:60002;min-width:150px;padding:6px;font-size:12px;"
-            + "background:var(--comfy-input-bg,var(--bg-color,#2b2b30));color:var(--fg-color,#ddd);"
-            + "border:1px solid var(--border-color,#3a3a40);border-radius:8px;"
-            + "box-shadow:0 8px 24px rgba(0,0,0,.5);cursor:default;";
+        const host = makeBodyPopup({ cls: "cs-mselect-pop", minW: 150, pad: 6, anchor: btn });
+        const pop = host.pop;
         for (const [v, lb] of opts.options || []) {
             const row = document.createElement("label");
             row.style.cssText = "display:flex;align-items:center;gap:6px;padding:4px 2px;cursor:pointer;white-space:nowrap;";
@@ -5345,16 +5357,7 @@ function makeMultiSelect(el, opts) {
             row.appendChild(document.createTextNode(lb));
             pop.appendChild(row);
         }
-        document.body.appendChild(pop);
-        const r = pop.getBoundingClientRect(), br = btn.getBoundingClientRect();
-        pop.style.left = Math.max(4, Math.min(br.left, window.innerWidth - r.width - 8)) + "px";
-        pop.style.top = Math.min(br.bottom + 4, window.innerHeight - r.height - 8) + "px";
-        const h = (e2) => {
-            if (pop && pop.contains(e2.target)) { e2.stopPropagation(); return; }
-            closePop();
-            window.removeEventListener("pointerdown", h, true);
-        };
-        window.addEventListener("pointerdown", h, true);
+        host.mount();
     };
     render();
     return { set(names) { sel = new Set(names || []); render(); }, get: () => [...sel] };
@@ -5881,10 +5884,7 @@ function fetchNodeThumbs(node, params, reset) {
         .then((d) => {
             const items = d.items || [];
             if (reset) node.csResults = items;
-            else {
-                const seen = new Set(node.csResults.map((x) => x.id));
-                node.csResults = node.csResults.concat(items.filter((x) => !seen.has(x.id)));
-            }
+            else node.csResults = mergePage(node.csResults, items); // B0-1c:按 id 去重追加
             st.next = d.next_query || [];
             st.loading = false;
             renderNodeThumbs(node);

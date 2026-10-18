@@ -33,3 +33,7 @@ jobs:
           node-version: "20"
       - name: Syntax-check frontend
         run: node --check js/civitai_studio_app.js
+      - name: DOM probe (jsdom)
+        run: |
+          npm ci --prefix tools/probe
+          node tools/probe/probe_dom.mjs
