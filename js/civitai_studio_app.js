@@ -66,7 +66,7 @@ function fmtSelHtml(cur) {
 
 // 模型页卡片尺寸档(批11.5):[卡宽, 封面最长边(=宽130%)];含更小档供密集浏览
 const BROWSE_CARD_SIZES = [[110, 143], [150, 195], [200, 260], [260, 338]];
-const JS_VERSION = "0.8.1";
+const JS_VERSION = "0.8.2";
 
 // ---------- i18n ----------
 const STR = {
@@ -212,6 +212,7 @@ const STR = {
         ffoldTitle: "折叠/展开筛选区",
         favGroupAll: "全部分组", favGroupNone: "未分组",
         favSync: "同步 Civitai", favSyncing: "同步中…",
+        favSyncBtnTip: "手动同步=强制全量枚举:网页端刚保存/取消的收藏立即可见(自动同步走增量,受站方集合列表缓存滞后影响,新建集合可能要几分钟)",
         favSyncDone: "同步完成:新增模型 +{models_down} · 新增图片 +{images_down} · 分组 +{groups_down} · 挂载 +{mounts} · 上推 {items_up} · 远端移除 {items_rm} · ★上推 {upsynced}(失败 {upsync_failed})",
         favSyncTrunc: "(集合较多,本次仅同步前一部分)",
         pushPending: "↑ 待上行", pushDone: "✓ 已上行", pushLocalOnly: "仅本地",
@@ -411,6 +412,7 @@ const STR = {
         ffoldTitle: "Collapse/expand filters",
         favGroupAll: "All groups", favGroupNone: "Ungrouped",
         favSync: "Sync Civitai", favSyncing: "Syncing…",
+        favSyncBtnTip: "Manual sync = forced full enumeration: items just saved/unsaved on civitai.com appear immediately (auto-sync is incremental and subject to the site's collection-list cache lag; brand-new collections may take a few minutes)",
         favSyncDone: "Synced: new models +{models_down} · new images +{images_down} · groups +{groups_down} · mounts +{mounts} · pushed {items_up} · removed {items_rm} · ★ {upsynced} (failed {upsync_failed})",
         favSyncTrunc: "(many collections, only part synced this round)",
         pushPending: "↑ pending", pushDone: "✓ synced", pushLocalOnly: "local only",
@@ -4766,7 +4768,7 @@ function buildFavoritesView(root) {
                 <option value="name">${esc(t("favSortName"))}</option>
             </select>
             <input id="cs-fav-search" type="text" placeholder="${esc(t("favSearchPh"))}" style="flex:1;min-width:90px"/>
-            <button class="cs-btn" id="cs-fav-sync">${esc(t("favSync"))}</button>
+            <button class="cs-btn" id="cs-fav-sync" title="${esc(t("favSyncBtnTip"))}">${esc(t("favSync"))}</button>
             <button class="cs-btn" id="cs-fav-manage" title="${esc(t("gmTitle"))}">${esc(t("manageBtn"))}</button>
             <button class="cs-btn" id="cs-fav-reset" title="${esc(t("resetTitle"))}" style="color:#e2543f;">${esc(t("resetBtn"))}</button>
             <button class="cs-btn" id="cs-fav-import">${esc(t("favImport"))}</button>
