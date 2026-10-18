@@ -850,6 +850,7 @@ function showModal(innerHTML, cls, keepNav) {
     watchSidebarDock();
     dragFloat(panel, panel.querySelector(".cs-float-head"));
     addFloatResize(panel, "modal"); // 批12.1:弹窗类浮层(下载/设置/大图)同样可调宽
+    guardKeys(panel); // 批14.3:弹窗内按键不外溢到画布快捷键
     const close = () => {
         document.removeEventListener("keydown", escHandler);
         panel.remove();
@@ -1395,6 +1396,7 @@ function openFloatDetail(keepNav) {
     if (!keepNav) closeAllFloats(); // 单实例:开新的浮层前关掉旧浮层(导航跳转由 navPush 接管)
     const panel = document.createElement("div");
     panel.className = "cs-float";
+    guardKeys(panel); // 批14.3:详情浮层内按键不外溢到画布快捷键
     panel.innerHTML = `
         <div class="cs-float-head">
             <span class="cs-float-title"></span>
@@ -1537,6 +1539,16 @@ function nsfwBlurStyle(item) {
     return v ? "filter:" + v + ";" : "";
 }
 
+// 批14.3:键盘隔离 —— 侧边栏/浮层内的按键不外溢到宿主全局快捷键(用户实测:插件
+// 搜索框 Ctrl+V 会同时粘贴文本 + 画布粘贴节点——宿主在 window/document 上监听
+// keydown,事件冒泡出去被接住)。stopPropagation 不影响输入默认行为(粘贴照常)。
+// Escape 例外放行:各浮层的 Esc 关闭链(showModal escHandler / navPush)靠冒泡到 document。
+function guardKeys(el) {
+    const stop = (e) => { if (e.key !== "Escape") e.stopPropagation(); };
+    el.addEventListener("keydown", stop);
+    el.addEventListener("keyup", stop);
+}
+
 // ---------- B0-1a:body 级浮层宿主工厂 ----------
 // 收敛 ×4 同骨架(👁分级选择 openNsfwBlurPicker / mini 菜单 openMiniMenu / 多选下拉
 // makeMultiSelect / 收藏夹选择器 makeGroupPicker):同类唯一实例、固定定位+视口钳制、
@@ -1551,6 +1563,7 @@ function makeBodyPopup({ cls, z = 60002, minW = 150, pad = 6, extra = "", at = n
         + "background:var(--comfy-input-bg,var(--bg-color,#2b2b30));color:var(--fg-color,#ddd);"
         + "border:1px solid var(--border-color,#3a3a40);border-radius:8px;"
         + "box-shadow:0 8px 24px rgba(0,0,0,.5);padding:" + pad + "px;font-size:12px;cursor:default;" + extra;
+    guardKeys(pop); // 批14.3:弹层内按键不外溢到画布快捷键
     let h = null;
     const close = () => {
         if (h) { window.removeEventListener("pointerdown", h, true); h = null; }
@@ -4919,6 +4932,7 @@ function buildRoot(el) {
         </div>
         <div class="cs-body"></div>`;
     el.appendChild(root);
+    guardKeys(root); // 批14.3:侧边栏内按键不外溢到画布快捷键(如 Ctrl+V 画布粘贴节点)
     S.ui.root = root;
     buildBrowseView($(".cs-body", root));
     buildLocalView($(".cs-body", root));

@@ -11,7 +11,7 @@ src = src.split("\n").filter((l) => !l.includes("scripts/app.js") && !l.includes
 src += `
 globalThis.__cs_probe = { buildGalleryView, buildBrowseView, S, fmtSelHtml, BROWSE_CARD_SIZES,
   renderGallery, renderResults, fetchGallery, fetchBrowse, t, makeMultiSelect,
-  makeBodyPopup, openMiniMenu, mergePage, buildFavoritesView };
+  makeBodyPopup, openMiniMenu, mergePage, buildFavoritesView, guardKeys };
 `;
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { pretendToBeVisual: true, url: "http://localhost/" });
@@ -191,6 +191,34 @@ fq("#cs-fav-ffold").click();
 ck("收藏 折叠可切换且持久化", fq(".cs-fwrap").classList.contains("folded") && localStorage.getItem("cs_fav_fold") === "1");
 fq("#cs-fav-ffold").click();
 localStorage.removeItem("cs_fav_fold");
+
+// ---------- 批14.3 键盘隔离(宿主全局快捷键不串台) ----------
+let wkHits = 0;
+const wkHandler = () => wkHits++;
+window.addEventListener("keydown", wkHandler);
+const gDiv = window.document.createElement("div");
+const gInp = window.document.createElement("input");
+gDiv.appendChild(gInp);
+window.document.body.appendChild(gDiv);
+gInp.dispatchEvent(new window.KeyboardEvent("keydown", { key: "v", ctrlKey: true, bubbles: true }));
+ck("键盘隔离: 无守卫输入的 keydown 会冒泡到 window", wkHits === 1, String(wkHits));
+P.guardKeys(gDiv);
+gInp.dispatchEvent(new window.KeyboardEvent("keydown", { key: "v", ctrlKey: true, bubbles: true }));
+ck("键盘隔离: 守卫后 Ctrl+V 不外溢", wkHits === 1, String(wkHits));
+gInp.dispatchEvent(new window.KeyboardEvent("keyup", { key: "v", ctrlKey: true, bubbles: true }));
+ck("键盘隔离: keyup 同样被拦", wkHits === 1, String(wkHits));
+gInp.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+ck("键盘隔离: Escape 放行(Esc 关闭链依赖冒泡)", wkHits === 2, String(wkHits));
+window.removeEventListener("keydown", wkHandler);
+let wk2 = 0;
+const wkH2 = () => wk2++;
+window.addEventListener("keydown", wkH2);
+P.openMiniMenu({ clientX: 30, clientY: 30 }, [{ label: "x", cb: () => { } }]);
+const menuGuard = window.document.querySelector(".cs-mini-menu");
+menuGuard.dispatchEvent(new window.KeyboardEvent("keydown", { key: "v", ctrlKey: true, bubbles: true }));
+ck("键盘隔离: body 弹层(makeBodyPopup)内按键不外溢", wk2 === 0, String(wk2));
+window.document.body.dispatchEvent(new window.Event("pointerdown", { bubbles: true }));
+window.removeEventListener("keydown", wkH2);
 
 console.log(fail ? `\n${fail} 项失败` : "\n全部通过");
 process.exit(fail ? 1 : 0);
