@@ -1539,14 +1539,19 @@ function nsfwBlurStyle(item) {
     return v ? "filter:" + v + ";" : "";
 }
 
-// 批14.3:键盘隔离 —— 侧边栏/浮层内的按键不外溢到宿主全局快捷键(用户实测:插件
+// 批14.3:键盘/剪贴板隔离 —— 侧边栏/浮层内的按键不外溢到宿主全局快捷键(用户实测:插件
 // 搜索框 Ctrl+V 会同时粘贴文本 + 画布粘贴节点——宿主在 window/document 上监听
-// keydown,事件冒泡出去被接住)。stopPropagation 不影响输入默认行为(粘贴照常)。
-// Escape 例外放行:各浮层的 Esc 关闭链(showModal escHandler / navPush)靠冒泡到 document。
+// keydown 与 paste/copy,事件冒泡出去被接住)。stopPropagation 不影响默认行为(文本
+// 照常粘贴进输入框)。Escape 例外放行:各浮层的 Esc 关闭链(showModal escHandler /
+// navPush)靠冒泡到 document。批14.3b:Ctrl+V 实测仍串台——粘贴走 ClipboardEvent
+// 而非 keydown,补拦 paste/copy/cut(键盘事件无 key 的走统一拦截分支)。
 function guardKeys(el) {
     const stop = (e) => { if (e.key !== "Escape") e.stopPropagation(); };
     el.addEventListener("keydown", stop);
     el.addEventListener("keyup", stop);
+    el.addEventListener("paste", stop);
+    el.addEventListener("copy", stop);
+    el.addEventListener("cut", stop);
 }
 
 // ---------- B0-1a:body 级浮层宿主工厂 ----------

@@ -209,6 +209,18 @@ gInp.dispatchEvent(new window.KeyboardEvent("keyup", { key: "v", ctrlKey: true, 
 ck("键盘隔离: keyup 同样被拦", wkHits === 1, String(wkHits));
 gInp.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
 ck("键盘隔离: Escape 放行(Esc 关闭链依赖冒泡)", wkHits === 2, String(wkHits));
+// 批14.3b:粘贴走 ClipboardEvent 而非 keydown(实测 Ctrl+V 仍串台的根因)
+let wcp = 0;
+const wcpH = () => wcp++;
+window.addEventListener("paste", wcpH);
+gInp.dispatchEvent(new window.Event("paste", { bubbles: true, composed: true }));
+ck("剪贴板隔离: paste 不外溢", wcp === 0, String(wcp));
+gInp.dispatchEvent(new window.Event("copy", { bubbles: true, composed: true }));
+let wcc = 0;
+window.addEventListener("copy", () => wcc++);
+gInp.dispatchEvent(new window.Event("copy", { bubbles: true, composed: true }));
+ck("剪贴板隔离: copy 不外溢", wcc === 0, String(wcc));
+window.removeEventListener("paste", wcpH);
 window.removeEventListener("keydown", wkHandler);
 let wk2 = 0;
 const wkH2 = () => wk2++;

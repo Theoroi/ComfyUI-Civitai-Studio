@@ -6,12 +6,15 @@
 
 ### 批14.3 验收修复(键盘串台)
 
-- **侧边栏/浮层键盘隔离**(用户实测:插件搜索框 Ctrl+V 会同时粘贴文本 + 画布粘贴
+- **侧边栏/浮层键盘+剪贴板隔离**(用户实测:插件搜索框 Ctrl+V 会同时粘贴文本 + 画布粘贴
   节点)——宿主在 window/document 上有全局快捷键监听,插件内按键冒泡外溢被接住。
   新增 `guardKeys`:侧边栏根/模态弹窗/详情浮层/body 弹层工厂四处接入,拦 keydown/keyup
   外溢;**Escape 例外放行**(各浮层 Esc 关闭链靠冒泡到 document)。stopPropagation 不影响
-  输入默认行为(粘贴照常)。DOM 探针 +5 断言(无守卫冒泡/守卫拦截/keyup/Escape 放行/
-  弹层内不外溢)
+  输入默认行为(粘贴照常)。
+- **批14.3b:Ctrl+V 首修后仍串台**(Delete/Ctrl+Z 已好)——粘贴走 **ClipboardEvent**
+  (paste/copy/cut)而非 keydown,画布监听的是 window 上的 `paste`;guardKeys 补拦
+  paste/copy/cut 冒泡。DOM 探针 +7 断言(无守卫冒泡/守卫拦截/keyup/Escape 放行/
+  paste/copy 不外溢/弹层内不外溢)
 
 ### 批14.2 验收修复(E2E #24/#25 用户实测反馈)
 
